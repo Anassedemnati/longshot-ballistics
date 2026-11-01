@@ -195,3 +195,60 @@ Each stage ends with something playable.
 - Exact mission list content and tuning numbers (sway amounts, alert radius, score values).
 - How the Codex image prompts are written and post-processed.
 - Testing approach beyond the ballistics validation.
+
+---
+
+# Addendum A — Mission setup (stage 1b)
+
+Date: 2026-11-01. Requested by the user after playing stage 1; approved ("go").
+
+## A.1 Intent
+
+Before each mission the player configures it on a **start menu**: theme, range band, number of targets, wind, rifle, and how many buildings and vehicles. Buildings and vehicles are **real cover** (they stop bullets), some soldiers stand partly behind cover, and some targets can be **vehicles** (disabled by hitting the engine). The mission ends when every target is down, with a results screen.
+
+## A.2 Start menu
+
+| Setting | Values | Default |
+|---|---|---|
+| Theme | Desert, Arctic, Green valley | Desert |
+| Range band | min and max, each 100–1500 m (min ≤ max; equal = all at one range) | 600–1000 m |
+| Soldiers | 1–10 | 3 |
+| Vehicle targets | 0–3 | 0 |
+| Wind speed | 0–12 m/s | 4.5 m/s |
+| Wind direction | clock position 1–12 (12 = from downrange/headwind, 3 = from the right, 6 = from behind, 9 = from the left) | 9 |
+| Rifle | .308 Win, .338 Lapua Magnum | .308 |
+| Buildings | none / few / many | few |
+| Scenery vehicles | none / few / many | few |
+| Random mission | one button: randomises every setting | — |
+
+A **Start** button launches the mission. The mission's settings (plus a random seed) are carried in the page URL, so **Restart** reloads the same mission and a mission link can be shared. With no mission in the URL the menu is shown. The old `?range=…` URL still works (single target, used by the smoke check).
+
+## A.3 Themes
+
+Each theme sets the look **and the air** the ballistics uses:
+
+| Theme | Terrain | Air (temperature, pressure) | Look |
+|---|---|---|---|
+| Desert | sand dunes, rock outcrops | 38 °C, 1013.25 hPa | warm late-afternoon light, heat haze |
+| Arctic | snowfields, gentle drifts, dark rocks | −15 °C, 1013.25 hPa | cold blue-white light, thicker haze |
+| Green valley | grass, rolling hills, rock | 18 °C, 900 hPa (altitude) | clear air, green-brown palette |
+
+Terrain textures (snow, grass) are generated with Codex like the sand texture. Each menu theme card shows a Codex-generated preview image.
+
+## A.4 Targets, buildings and vehicles
+
+- Soldiers stand at distances spread across the range band, and within ±10° left/right of straight downrange. Every soldier's head and upper torso are visible from the shooter's position (clear line of sight past terrain and props).
+- When buildings or vehicles exist, about 40 % of soldiers stand partly behind low cover (a wall or a vehicle) so only the upper body shows.
+- Buildings: low-poly houses, compound walls (low, ~1.2 m) and sheds/tents, coloured per theme. Scenery vehicles: low-poly truck and jeep. Counts: none = 0; few ≈ 3–5 buildings / 2–3 vehicles; many ≈ 8–12 buildings / 5–7 vehicles.
+- **Cover**: every building, wall and vehicle body stops bullets. Walls raise dust; vehicles throw sparks. A bullet stopped by cover is a miss.
+- **Vehicle targets**: a vehicle with an engine block hit zone. A hit on the engine disables it (smoke column) and counts as a target down; hits elsewhere on the vehicle are stopped by its metal body.
+- Mission layout (positions of everything) is generated from the seed, so the same seed gives the same mission.
+
+## A.5 In-mission HUD and results
+
+- HUD shows targets remaining, wind (speed + clock direction), magnification, rounds, sound, and a **rangefinder** reading: the distance to whatever is under the crosshair (terrain, prop or target).
+- When all targets are down: results screen with shots fired, hits, accuracy, headshots, longest hit, mission time; buttons **Restart** and **Menu**.
+
+## A.6 Non-goals for this step
+
+Difficulty levels, moving/alerting enemies, high-value-target objectives, mobile controls, more themes.
