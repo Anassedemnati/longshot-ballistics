@@ -1,10 +1,23 @@
 import * as THREE from 'three';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
+import {
+  DUMMY_BOXES,
+  DUMMY_HEAD,
+  DUMMY_KHAKI,
+  LEG_X,
+  LOWER_TORSO_CY,
+  PELVIS,
+  UPPER_TORSO_CY,
+  VEST,
+  arm,
+  boot,
+  leg,
+} from '../mission/dummyDims';
 import { terrainHeight } from './terrainHeight';
 
-const KHAKI = 0x70623f;
-const VEST_COLOR = 0x3f3a26;
-const BOOT_COLOR = 0x2b251a;
+// The pure dummy dimensions live in mission/dummyDims.ts (the mission layout uses them too).
+export { DUMMY_BOXES, DUMMY_HEAD } from '../mission/dummyDims';
+export type { DummyBox } from '../mission/dummyDims';
 
 /** Time to tip over backwards, s. */
 export const FALL_DURATION = 0.4;
@@ -15,80 +28,11 @@ const TIMER_EPSILON = 1e-9;
 /** After falling the body lies on its back; this lifts it so it rests on the sand, m. */
 const LYING_LIFT = 0.1;
 
-// ---------------------------------------------------------------------------------------------
-// Dummy dimensions, m. Origin at the feet, +Z toward the shooter. The visible mesh AND the hit
-// spheres are both built from these numbers, so they cannot drift apart.
-// ---------------------------------------------------------------------------------------------
-
-/** An axis-aligned box of the visible dummy. (cx, cy, cz) is its centre. */
-export interface DummyBox {
-  name: string;
-  cx: number;
-  cy: number;
-  cz: number;
-  w: number;
-  h: number;
-  d: number;
-  color: number;
-}
-
-export const DUMMY_HEAD = { cy: 1.65, radius: 0.12 } as const;
-
-const ARM_X = 0.27;
-const LEG_X = 0.1;
-
-const NECK: DummyBox = { name: 'neck', cx: 0, cy: 1.54, cz: 0, w: 0.08, h: 0.1, d: 0.08, color: KHAKI };
-const VEST: DummyBox = { name: 'vest', cx: 0, cy: 1.35, cz: 0, w: 0.46, h: 0.5, d: 0.22, color: VEST_COLOR };
-const PELVIS: DummyBox = { name: 'pelvis', cx: 0, cy: 0.97, cz: 0, w: 0.34, h: 0.26, d: 0.2, color: KHAKI };
-const arm = (side: -1 | 1): DummyBox => ({
-  name: side < 0 ? 'left arm' : 'right arm',
-  cx: side * ARM_X,
-  cy: 1.26,
-  cz: 0,
-  w: 0.1,
-  h: 0.62,
-  d: 0.12,
-  color: KHAKI,
-});
-const leg = (side: -1 | 1): DummyBox => ({
-  name: side < 0 ? 'left leg' : 'right leg',
-  cx: side * LEG_X,
-  cy: 0.45,
-  cz: 0,
-  w: 0.15,
-  h: 0.78,
-  d: 0.17,
-  color: KHAKI,
-});
-const boot = (side: -1 | 1): DummyBox => ({
-  name: side < 0 ? 'left boot' : 'right boot',
-  cx: side * LEG_X,
-  cy: 0.04,
-  cz: 0.04,
-  w: 0.16,
-  h: 0.08,
-  d: 0.26,
-  color: BOOT_COLOR,
-});
-
-/** Every box of the visible dummy (the head is a sphere of DUMMY_HEAD.radius, not listed here). */
-export const DUMMY_BOXES: readonly DummyBox[] = [
-  NECK,
-  VEST,
-  PELVIS,
-  arm(-1),
-  arm(1),
-  leg(-1),
-  leg(1),
-  boot(-1),
-  boot(1),
-];
-
 /** The four zone spheres from the brief, kept verbatim (radius, height above the feet). */
 const BASE_ZONES: ReadonlyArray<{ name: ZoneName; radius: number; cy: number }> = [
   { name: 'head', radius: DUMMY_HEAD.radius, cy: DUMMY_HEAD.cy },
-  { name: 'upperTorso', radius: 0.22, cy: 1.35 },
-  { name: 'lowerTorso', radius: 0.2, cy: 1.0 },
+  { name: 'upperTorso', radius: 0.22, cy: UPPER_TORSO_CY },
+  { name: 'lowerTorso', radius: 0.2, cy: LOWER_TORSO_CY },
   { name: 'limbs', radius: 0.15, cy: 0.5 },
 ];
 
@@ -224,7 +168,7 @@ export function createTargetDummy(range: number): TargetDummy {
 
   const material = (color: number): THREE.MeshLambertMaterial =>
     new THREE.MeshLambertMaterial({ color, flatShading: true });
-  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1), material(KHAKI));
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1), material(DUMMY_KHAKI));
   head.position.set(0, DUMMY_HEAD.cy, 0);
   group.add(head);
   for (const b of DUMMY_BOXES) {
