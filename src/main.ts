@@ -44,6 +44,8 @@ interface GameDebugHook {
   zoom(notches: number): void;
   fire(): void;
   reload(): void;
+  /** What the first click does: create the audio context (it needs no pointer lock) and start the wind. */
+  unlockAudio(): void;
 }
 
 declare global {
@@ -193,7 +195,7 @@ function start(): void {
 
   // The hook calls the handlers directly: it needs no pointer lock and does not touch InputState.
   if (import.meta.env.DEV || new URLSearchParams(window.location.search).get('debug') === '1') {
-    window.__game = { toggleScope, zoom, fire, reload };
+    window.__game = { toggleScope, zoom, fire, reload, unlockAudio };
   }
 
   window.addEventListener('resize', () => {

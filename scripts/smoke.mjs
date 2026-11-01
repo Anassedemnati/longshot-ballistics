@@ -1,9 +1,10 @@
-// Headless smoke check: serves the production build (`npm run build` first) with `vite preview`,
-// opens it in the locally installed Google Chrome and checks that the game renders, scopes and fires.
-//   npm run build && npm run smoke
-// Screenshots go to test-results/ (git-ignored). Exits 0 on success, 1 on any failed check.
+// Headless smoke check: serves the production build with `vite preview`, opens it in the locally
+// installed Google Chrome and checks that the game renders, scopes, fires and hits.
+//   npm run smoke      (removes dist/, rebuilds, then runs this script, so it always tests fresh code)
+// Running `node scripts/smoke.mjs` alone tests whatever dist/ holds. Screenshots go to test-results/
+// (git-ignored; old ones are deleted first). Exits 0 on success, 1 on any failed check.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,12 @@ const VIEWPORT = { width: 1280, height: 720 };
 const RESULT_TIMEOUT_MS = 90_000;
 /** Chrome flags that give headless Chrome software WebGL when it has no usable GPU. */
 const SOFTWARE_GL_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+/** Lets the audio context start without a real click, so `unlockAudio()` from the page really starts audio. */
+const AUDIO_ARGS = ['--autoplay-policy=no-user-gesture-required'];
+/** The game's own frame-time cap (MAX_FRAME_DT in src/main.ts): game time advances at most this per frame. */
+const MAX_FRAME_DT_S = 0.1;
+/** Dummy fall (0.4 s) plus the 3 s it lies there before standing up again (src/scene/target.ts), with a margin. */
+const DUMMY_RESET_GAME_S = 3.8;
 
 function log(message) {
   console.log(`[smoke] ${message}`);
@@ -92,7 +99,7 @@ async function stopPreview(preview) {
  */
 async function launchChrome() {
   if (process.env.SMOKE_SOFTWARE_GL !== '1') {
-    const browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const browser = await chromium.launch({ channel: 'chrome', headless: true, args: AUDIO_ARGS });
     const page = await browser.newPage();
     const hasWebGL = await page.evaluate(() => Boolean(document.createElement('canvas').getContext('webgl2')));
     await page.close();
@@ -100,7 +107,7 @@ async function launchChrome() {
     log('no WebGL in headless Chrome, retrying with SwiftShader');
     await browser.close();
   }
-  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: SOFTWARE_GL_ARGS });
+  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: [...AUDIO_ARGS, ...SOFTWARE_GL_ARGS] });
   return { browser, renderer: 'SwiftShader software WebGL' };
 }
 
@@ -155,9 +162,58 @@ async function shoot(page, { hideHud, path }) {
   return png;
 }
 
+/** Resolve after `frames` animation frames (or `timeoutMs`), reporting how many ran and how long they took. */
+function animationFrames(page, frames, timeoutMs = 15_000) {
+  return page.evaluate(
+    ([wanted, timeout]) =>
+      new Promise((resolve) => {
+        const start = performance.now();
+        let count = 0;
+        const tick = () => {
+          count++;
+          if (count >= wanted || performance.now() - start > timeout) resolve({ frames: count, ms: performance.now() - start });
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    [frames, timeoutMs],
+  );
+}
+
+/**
+ * Wait until `seconds` of GAME time have passed: it sums the frame times the same way the game loop does
+ * (each frame counts at most MAX_FRAME_DT_S), so it holds on slow software rendering too.
+ */
+function waitGameSeconds(page, seconds) {
+  return page.evaluate(
+    ([wanted, cap]) =>
+      new Promise((resolve) => {
+        let last = null;
+        let total = 0;
+        const tick = (now) => {
+          if (last !== null) total += Math.min((now - last) / 1000, cap);
+          last = now;
+          if (total >= wanted) resolve(total);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    [seconds, MAX_FRAME_DT_S],
+  );
+}
+
+/** Wait for the HUD result line to show a HIT or a MISS and return its text. */
+async function waitForResult(page) {
+  await page.waitForFunction(() => /HIT|MISS/.test(document.querySelector('.hud-result')?.textContent ?? ''), undefined, {
+    timeout: RESULT_TIMEOUT_MS,
+  });
+  return (await page.locator('.hud-result').textContent()) ?? '';
+}
+
 async function run() {
   check(existsSync(join(ROOT, 'dist', 'index.html')), 'dist/index.html exists (run `npm run build` first)');
   mkdirSync(OUT_DIR, { recursive: true });
+  for (const name of readdirSync(OUT_DIR)) if (name.endsWith('.png')) rmSync(join(OUT_DIR, name)); // no stale evidence
 
   let preview = null;
   let browser = null;
@@ -178,40 +234,61 @@ async function run() {
     const launched = await launchChrome();
     browser = launched.browser;
     log(`Chrome ${browser.version()}, ${launched.renderer}`);
-    const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
-
     const problems = [];
-    page.on('console', (message) => {
-      if (message.type() === 'error') problems.push(`console.error: ${message.text()}`);
-    });
-    page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
-    page.on('requestfailed', (request) => problems.push(`request failed: ${request.url()} ${request.failure()?.errorText}`));
-    page.on('response', (response) => {
-      if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
-    });
+    const soundFiles = new Set(); // the recordings fetched successfully, by file name
+    /** A fresh page whose console errors, page errors, failed requests, 4xx/5xx and sound warnings all land in `problems`. */
+    const openPage = async () => {
+      const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+      page.on('console', (message) => {
+        if (message.type() === 'error') problems.push(`console.error: ${message.text()}`);
+        // A recording that failed to fetch or decode logs a warning and the game plays a synth instead.
+        if (message.type() === 'warning' && /unavailable/.test(message.text())) problems.push(`console.warn: ${message.text()}`);
+      });
+      page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+      page.on('requestfailed', (request) => problems.push(`request failed: ${request.url()} ${request.failure()?.errorText}`));
+      page.on('response', (response) => {
+        if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+        else if (/\/sounds\/[^/]+\.mp3$/.test(response.url())) soundFiles.add(response.url().split('/').pop());
+      });
+      return page;
+    };
+    const startGame = async (page, query) => {
+      await page.goto(`${preview.url}?${query}`, { waitUntil: 'load' });
+      try {
+        await page.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
+      } catch {
+        throw new Error(`the game did not start (no window.__game). Problems: ${problems.join(' | ') || 'none logged'}`);
+      }
+    };
 
-    await page.goto(`${preview.url}?range=800&debug=1`, { waitUntil: 'load' });
-    try {
-      await page.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
-    } catch {
-      throw new Error(`the game did not start (no window.__game). Problems: ${problems.join(' | ') || 'none logged'}`);
-    }
+    // 0. Without ?debug=1 the production build must not expose the debug hook. Wait until the game is
+    // really running (HUD built, frames drawn), otherwise "undefined" would only mean "not started yet".
+    const plain = await openPage();
+    await plain.goto(`${preview.url}?range=800`, { waitUntil: 'load' });
+    await plain.waitForSelector('.hud');
+    const plainFrames = await animationFrames(plain, 3);
+    check(plainFrames.frames >= 3, 'the game runs without ?debug=1');
+    check((await plain.evaluate(() => window.__game)) === undefined, 'window.__game is undefined without ?debug=1');
+    await plain.close();
+
+    const page = await openPage();
+    await startGame(page, 'range=800&debug=1');
+    check(
+      (await page.locator('.hud-line', { hasText: 'Sound: click to start' }).count()) === 1,
+      'HUD says "Sound: click to start" before any audio exists',
+    );
+    // What the first click does: creates the audio context, decodes the recordings, starts the wind.
+    // The mp3s were already requested at start-up (prefetch); a 4xx or a decode failure ends up in `problems`.
+    await page.evaluate(() => window.__game.unlockAudio());
     await page.waitForTimeout(3000);
+    await page.waitForFunction(() => /Sound on \(M\)/.test(document.querySelector('.hud-panel')?.textContent ?? ''), undefined, {
+      timeout: 10_000,
+    });
+    check(true, 'after unlockAudio the audio context runs and the HUD says "Sound on (M)"');
+    check(soundFiles.size === 7, `all 7 recordings in public/sounds were served (${[...soundFiles].sort().join(', ')})`);
 
     // Is it actually animating? Wait for a few animation frames (software rendering can take seconds).
-    const { frames, ms } = await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          const start = performance.now();
-          let frames = 0;
-          const tick = () => {
-            frames++;
-            if (frames >= 5 || performance.now() - start > 15_000) resolve({ frames, ms: performance.now() - start });
-            else requestAnimationFrame(tick);
-          };
-          requestAnimationFrame(tick);
-        }),
-    );
+    const { frames, ms } = await animationFrames(page, 5);
     log(`${frames} animation frames in ${Math.round(ms)} ms`);
     check(frames >= 5, 'the game loop is running');
 
@@ -231,24 +308,59 @@ async function run() {
     log(`scope: ${JSON.stringify(scope)}`);
     check(await page.locator('.scope-overlay').isVisible(), 'scope overlay is visible');
     check((await page.locator('.hud-line', { hasText: /Zoom \d/ }).count()) === 1, 'HUD shows the scope magnification');
+    check((await page.locator('.hud-line', { hasText: 'Zoom 8.0' }).count()) === 1, 'the scope opens at 8x');
+    // The click-to-aim hint (visible: the debug hook never grabs the pointer) must sit below the lens.
+    const lensBox = await page.locator('.scope-lens').boundingBox();
+    const hintBox = await page.locator('.hud-hint').boundingBox();
+    check(
+      lensBox !== null && hintBox !== null && hintBox.y >= lensBox.y + lensBox.height,
+      `the hint is below the scope lens (hint top ${hintBox?.y.toFixed(0)}, lens bottom ${lensBox ? (lensBox.y + lensBox.height).toFixed(0) : '?'})`,
+    );
     check(scope.maxCorner < 12, `scope surround is black (corner brightness ${scope.maxCorner.toFixed(1)})`);
     check(scope.distinctMiddle >= 4, `scope lens shows the scene (${scope.distinctMiddle} distinct sampled colours)`);
 
     // 3. Fire straight at the target (no pointer lock needed through the debug hook) and wait for the result.
-    await page.evaluate(() => window.__game.fire());
-    await page.waitForFunction(() => /HIT|MISS/.test(document.querySelector('.hud-result')?.textContent ?? ''), undefined, {
-      timeout: RESULT_TIMEOUT_MS,
+    // The two extra clicks come while the bolt is being worked: they must not fire (still Rounds 4/5).
+    await page.evaluate(() => {
+      window.__game.fire();
+      window.__game.fire();
+      window.__game.fire();
     });
-    const result = (await page.locator('.hud-result').textContent()) ?? '';
+    const result = await waitForResult(page);
     log(`HUD result: "${result}"`);
     check(/HIT|MISS/.test(result), 'HUD shows HIT or MISS after the shot');
-    check((await page.locator('.hud-line', { hasText: 'Rounds 4/5' }).count()) === 1, 'one round was used (Rounds 4/5)');
+    check(
+      (await page.locator('.hud-line', { hasText: 'Rounds 4/5' }).count()) === 1,
+      'three fast clicks used one round only (bolt cycle lockout, Rounds 4/5)',
+    );
     await page.screenshot({ path: join(OUT_DIR, 'result.png') });
+
+    // 4. At 100 m with no wind a shot at the chest must hit; the dummy falls and then stands up again.
+    const near = await openPage();
+    await startGame(near, 'range=100&wind=0&debug=1');
+    await near.evaluate(() => window.__game.unlockAudio());
+    await near.evaluate(() => window.__game.toggleScope()); // 8x: the dummy is big enough to see in the screenshots
+    await animationFrames(near, 5);
+    await near.screenshot({ path: join(OUT_DIR, 'standing-100m.png') });
+    await near.evaluate(() => window.__game.fire());
+    const nearResult = await waitForResult(near);
+    log(`100 m HUD result: "${nearResult}"`);
+    check(/HIT/.test(nearResult), 'a shot straight at the chest at 100 m hits');
+    await near.waitForTimeout(1000);
+    await near.screenshot({ path: join(OUT_DIR, 'hit-100m.png') });
+
+    await waitGameSeconds(near, DUMMY_RESET_GAME_S);
+    await near.screenshot({ path: join(OUT_DIR, 'reset-100m.png') });
+    await near.evaluate(() => window.__game.fire());
+    const againResult = await waitForResult(near);
+    log(`100 m HUD result after the dummy stood up: "${againResult}"`);
+    check(/HIT/.test(againResult), 'the dummy stood up again by itself and the next shot hits it');
+    check((await near.locator('.hud-line', { hasText: 'Rounds 3/5' }).count()) === 1, 'two rounds were used (Rounds 3/5)');
 
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
-    writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result }, null, 2));
-    log('screenshots: test-results/naked.png, test-results/scope.png, test-results/result.png');
+    writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m (.png)');
   } finally {
     await cleanup();
   }
