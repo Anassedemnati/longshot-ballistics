@@ -1,12 +1,15 @@
 import type { Rifle } from '../ballistics/types';
 import { fitRate, jitterRate, shotClipId } from './clips';
+import type { ClipId } from './clips';
 import type { AudioEngine } from './engine';
 import type { Clip } from './samples';
 import { distanceCutoffHz, distanceGain, impactGain } from './timing';
 
 // Every sound plays a recording (public/sounds, CC0, see samples.ts) through its own gain into the
-// master chain. If a recording is missing or failed to decode, the same sound is synthesised instead
-// from noise bursts, sine/triangle sweeps, filters and envelopes (the `synth...` fallbacks below).
+// master chain. If a recording FAILED to load or decode, the same sound is synthesised instead from
+// noise bursts, sine/triangle sweeps, filters and envelopes (the `synth...` fallbacks below). While a
+// recording is merely not decoded yet the sound is skipped: a synth sound that then gives way to the
+// real one would make the first shot sound different from all the others.
 // Everything is scheduled on the audio clock, never with timers. Each public function returns
 // silently when there is no running context (no user gesture yet) or the engine is muted.
 
@@ -63,6 +66,16 @@ function stage(e: AudioEngine, delaySec = 0): Stage | null {
   if (!ctx || !bus || !noise || e.muted || ctx.state !== 'running') return null;
   const delay = Number.isFinite(delaySec) ? Math.max(0, delaySec) : 0;
   return { ctx, out: bus, noise, t: ctx.currentTime + delay };
+}
+
+/**
+ * Play the recording `id` if it is ready, the synth recipe if it failed to load, and nothing at all
+ * while it is still being decoded.
+ */
+function recordingOrSynth(e: AudioEngine, id: ClipId, play: (clip: Clip) => void, synth: () => void): void {
+  const clip = e.clip(id);
+  if (clip) play(clip);
+  else if (e.clipFailed(id)) synth();
 }
 
 interface ClipOptions {
@@ -193,9 +206,12 @@ function synthShot(s: Stage): void {
 export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308'): void {
   const s = stage(e);
   if (!s) return;
-  const clip = e.clip(shotClipId(rifleId));
-  if (clip) playClip(s, clip, { level: LEVELS.shot, rate: jitterRate(SHOT_RATE_SPREAD) });
-  else synthShot(s);
+  recordingOrSynth(
+    e,
+    shotClipId(rifleId),
+    (clip) => playClip(s, clip, { level: LEVELS.shot, rate: jitterRate(SHOT_RATE_SPREAD) }),
+    () => synthShot(s),
+  );
 }
 
 /** Fallback hit: dull thwack of a bullet striking the target, `distanceM` away. */
@@ -220,14 +236,17 @@ function synthImpactHit(s: Stage, distanceM: number): void {
 export function playImpactHit(e: AudioEngine, delaySec: number, distanceM: number): void {
   const s = stage(e, delaySec);
   if (!s) return;
-  const clip = e.clip('impact_hit');
-  if (clip) {
-    playClip(s, clip, {
-      level: LEVELS.impactHit * impactGain(distanceM),
-      rate: jitterRate(IMPACT_RATE_SPREAD),
-      cutoff: distanceCutoffHz(distanceM),
-    });
-  } else synthImpactHit(s, distanceM);
+  recordingOrSynth(
+    e,
+    'impact_hit',
+    (clip) =>
+      playClip(s, clip, {
+        level: LEVELS.impactHit * impactGain(distanceM),
+        rate: jitterRate(IMPACT_RATE_SPREAD),
+        cutoff: distanceCutoffHz(distanceM),
+      }),
+    () => synthImpactHit(s, distanceM),
+  );
 }
 
 /** Fallback dust: soft airy thud of a bullet striking sand, `distanceM` away, no sharp edge. */
@@ -252,14 +271,17 @@ function synthImpactDust(s: Stage, distanceM: number): void {
 export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: number): void {
   const s = stage(e, delaySec);
   if (!s) return;
-  const clip = e.clip('impact_dust');
-  if (clip) {
-    playClip(s, clip, {
-      level: LEVELS.impactDust * impactGain(distanceM),
-      rate: jitterRate(IMPACT_RATE_SPREAD),
-      cutoff: distanceCutoffHz(distanceM),
-    });
-  } else synthImpactDust(s, distanceM);
+  recordingOrSynth(
+    e,
+    'impact_dust',
+    (clip) =>
+      playClip(s, clip, {
+        level: LEVELS.impactDust * impactGain(distanceM),
+        rate: jitterRate(IMPACT_RATE_SPREAD),
+        cutoff: distanceCutoffHz(distanceM),
+      }),
+    () => synthImpactDust(s, distanceM),
+  );
 }
 
 /** A small metallic click: a short burst of bright noise plus a faint resonant ping at `pitch` Hz. */
@@ -301,9 +323,12 @@ export function playBoltCycle(e: AudioEngine, cycleSec = DEFAULT_BOLT_CYCLE_S): 
   if (!s) return;
   const cycle = Number.isFinite(cycleSec) ? cycleSec : DEFAULT_BOLT_CYCLE_S;
   const span = Math.max(0.1, cycle - BOLT_DELAY_S);
-  const clip = e.clip('bolt_cycle');
-  if (clip) playClip(s, clip, { level: LEVELS.bolt, rate: fitRate(clip.length, span), maxSec: span });
-  else synthBoltCycle(s);
+  recordingOrSynth(
+    e,
+    'bolt_cycle',
+    (clip) => playClip(s, clip, { level: LEVELS.bolt, rate: fitRate(clip.length, span), maxSec: span }),
+    () => synthBoltCycle(s),
+  );
 }
 
 /** Fallback reload: magazine out, magazine in, bolt: four clicks spread over `span` s. */
@@ -323,9 +348,12 @@ export function playReload(e: AudioEngine, durationSec = 1.5): void {
   const s = stage(e);
   if (!s) return;
   const span = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 1.5;
-  const clip = e.clip('reload');
-  if (clip) playClip(s, clip, { level: LEVELS.reload, rate: fitRate(clip.length, span), maxSec: span });
-  else synthReload(s, span);
+  recordingOrSynth(
+    e,
+    'reload',
+    (clip) => playClip(s, clip, { level: LEVELS.reload, rate: fitRate(clip.length, span), maxSec: span }),
+    () => synthReload(s, span),
+  );
 }
 
 /** Fallback dry fire: the dull click of pulling the trigger on an empty magazine. */
@@ -348,9 +376,12 @@ function synthDryFire(s: Stage): void {
 export function playDryFire(e: AudioEngine): void {
   const s = stage(e);
   if (!s) return;
-  const clip = e.clip('dry_fire');
-  if (clip) playClip(s, clip, { level: LEVELS.dryFire });
-  else synthDryFire(s);
+  recordingOrSynth(
+    e,
+    'dry_fire',
+    (clip) => playClip(s, clip, { level: LEVELS.dryFire }),
+    () => synthDryFire(s),
+  );
 }
 
 /**

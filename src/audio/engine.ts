@@ -22,7 +22,9 @@ interface AudioGraph {
  * Owns the AudioContext, the master chain (a gentle compressor so a shot never clips, then a master
  * gain that implements mute) and the one shared noise buffer. The context is created on the first
  * `resume()` because browsers only allow audio after a user gesture; until then `ctx` is null and
- * every sound is skipped. The recordings are fetched and decoded as soon as the context exists.
+ * every sound is skipped. The recordings are fetched as soon as the engine is created (no gesture
+ * needed) and decoded as soon as the context exists. While a recording is not decoded yet its sound
+ * is skipped; only a recording that failed to load is replaced by a synthesised sound.
  */
 export class AudioEngine {
   private graph: AudioGraph | null = null;
@@ -48,9 +50,18 @@ export class AudioEngine {
     return this.graph?.noise ?? null;
   }
 
-  /** A decoded recording, or null while it is loading or if it failed to load (use the synth recipe). */
+  constructor() {
+    this.clips.prefetch(import.meta.env.BASE_URL);
+  }
+
+  /** A decoded recording, or null while it is still loading/decoding or if it failed to load. */
   clip(id: ClipId): Clip | null {
     return this.clips.get(id);
+  }
+
+  /** True if the recording could not be fetched or decoded: its sound uses the synth recipe instead. */
+  clipFailed(id: ClipId): boolean {
+    return this.clips.state(id) === 'failed';
   }
 
   get muted(): boolean {
@@ -76,7 +87,7 @@ export class AudioEngine {
     if (!this.graph && !this.unavailable) {
       this.graph = this.createGraph();
       this.unavailable = this.graph === null;
-      if (this.graph) void this.clips.load(this.graph.ctx, import.meta.env.BASE_URL);
+      if (this.graph) void this.clips.decode(this.graph.ctx);
     }
     const ctx = this.graph?.ctx;
     if (ctx && ctx.state !== 'running') ctx.resume().catch(() => undefined);
