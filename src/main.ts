@@ -107,7 +107,11 @@ function start(): void {
 
   function toggleMute(): void {
     audio.toggleMute();
-    hud.setMuted(audio.muted);
+    refreshSound();
+  }
+
+  function refreshSound(): void {
+    hud.setSound(audio.running, audio.muted, audio.available);
   }
 
   function refreshView(): void {
@@ -211,6 +215,7 @@ function start(): void {
     dummy.update(dt);
     dust.update(dt);
 
+    refreshSound(); // the context starts (or is suspended) asynchronously
     if (weapon.update(dt)) {
       hud.setRounds(weapon.ammo, weapon.magazine, false);
       if (hud.resultText === RELOADING_TEXT) hud.setResult(''); // do not leave a stale message

@@ -11,6 +11,16 @@ function el(parent: HTMLElement, tag: string, className: string, text = ''): HTM
 }
 
 /**
+ * Text of the sound indicator. The audio only starts with the first click, so until the context is
+ * running it says how to start it (not "Sound on"); after that it shows on/muted.
+ */
+export function soundLabel(running: boolean, muted: boolean, available = true): string {
+  if (!available) return 'Sound unavailable';
+  if (!running) return 'Sound: click to start';
+  return muted ? 'Muted (M)' : 'Sound on (M)';
+}
+
+/**
  * Easy-style stage-1 HUD: range, wind, magnification, rounds, the sound on/off indicator and the last
  * shot's result, plus a centre dot for the naked eye and the click-to-start hint. All DOM; styled in
  * index.html.
@@ -52,7 +62,7 @@ export class Hud {
       'Click to take aim  ·  Left click fire  ·  Right click scope  ·  Wheel zoom  ·  R reload  ·  M mute  ·  Esc release mouse',
     );
     this.setMagnification(1);
-    this.setMuted(false);
+    this.setSound(false, false);
   }
 
   setMagnification(mag: number): void {
@@ -64,9 +74,10 @@ export class Hud {
     this.rounds.textContent = reloading ? `Rounds ${left}/${max}  reloading…` : `Rounds ${left}/${max}`;
   }
 
-  /** Small sound indicator: the audio itself only starts with the first click. */
-  setMuted(muted: boolean): void {
-    this.sound.textContent = muted ? 'Sound off (M)' : 'Sound on (M)';
+  /** Small sound indicator, see `soundLabel`. Cheap to call every frame: the DOM is only touched on change. */
+  setSound(running: boolean, muted: boolean, available = true): void {
+    const text = soundLabel(running, muted, available);
+    if (this.sound.textContent !== text) this.sound.textContent = text;
   }
 
   setResult(text: string): void {

@@ -64,6 +64,16 @@ export class AudioEngine {
     return this.clips.state(id) === 'failed';
   }
 
+  /** True while the context exists and is running, i.e. sounds are actually audible (if not muted). */
+  get running(): boolean {
+    return this.graph?.ctx.state === 'running';
+  }
+
+  /** False once the browser has shown it cannot give us audio at all (no Web Audio, or it threw). */
+  get available(): boolean {
+    return !this.unavailable;
+  }
+
   get muted(): boolean {
     return this.isMuted;
   }
