@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { ROCK_OUTCROPS, terrainHeight } from './terrainHeight';
+import { createRng } from '../mission/random';
+import type { ThemeId } from '../mission/themes';
+import type { RockOutcrop, TerrainField } from './terrainField';
 
-export { SHOOTER_POS, terrainHeight } from './terrainHeight';
+export { DESERT_FIELD, SHOOTER_POS, terrainHeight } from './terrainHeight';
 
 /** Map extent: 4 km x 4 km, the shooter near the +Z end so the lane runs down the long middle. */
 const X_MIN = -2000;
@@ -9,38 +11,105 @@ const X_MAX = 2000;
 const Z_MIN = -3000;
 const Z_MAX = 1000;
 
-/** Fine mesh covers the lane and the shooter's rise; spacing grows with distance beyond it. */
-const FOCUS_X = 100;
-const FOCUS_Z_MIN = -1600;
+/**
+ * The fine mesh covers the engagement sector (out to 1600 m, +-12 deg) with a margin, plus the
+ * shooter's rise; spacing grows with distance beyond it. Fine spacing is well under the 6 m the
+ * sector needs: the surface and `height()` then agree to a few centimetres at any target spot.
+ */
+const FOCUS_X = 450; // 1650 m * sin(15 deg) = 427 m
+const FOCUS_Z_MIN = -1700;
 const FOCUS_Z_MAX = 120;
-const FINE_STEP_X = 2.5;
-const FINE_STEP_Z = 3;
+const FINE_STEP = 4;
+/** Extra-fine ring around the origin: the prone view sits right over the rise. */
+const NEAR_HALF = 60;
+const NEAR_STEP = 2.5;
 const COARSE_STEP = 70;
 const FALLOFF_DISTANCE = 700;
 
-/** One sand texture tile covers this many metres. */
-const TEXTURE_TILE_M = 4;
-const TEXTURE_PATH = 'textures/sand_albedo.webp';
-/** Flat colour used until (or instead of) the texture, roughly the texture's average. */
-const SAND_COLOR = 0xcfb083;
-
-/** Grid line positions from min to max; step grows from fineStep inside [focusMin, focusMax] to coarseStep. */
-function gridAxis(min: number, max: number, focusMin: number, focusMax: number, fineStep: number): number[] {
+/** Grid line positions from min to max; step grows from FINE_STEP inside [focusMin, focusMax] to COARSE_STEP. */
+function gridAxis(min: number, max: number, focusMin: number, focusMax: number): number[] {
   const lines = [min];
   let p = min;
   while (p < max) {
     const outside = Math.max(focusMin - p, p - focusMax, 0);
     const t = Math.min(1, outside / FALLOFF_DISTANCE);
-    p = Math.min(max, p + fineStep + (COARSE_STEP - fineStep) * t * t);
+    let step = FINE_STEP + (COARSE_STEP - FINE_STEP) * t * t;
+    if (Math.abs(p) < NEAR_HALF) step = Math.min(step, NEAR_STEP);
+    p = Math.min(max, p + step);
     lines.push(p);
   }
   return lines;
 }
 
+/** The x and z grid lines of the terrain mesh (vertex k = j * xs.length + i sits at xs[i], zs[j]). */
+export function terrainGridAxes(): { xs: number[]; zs: number[] } {
+  return {
+    xs: gridAxis(X_MIN, X_MAX, -FOCUS_X, FOCUS_X),
+    zs: gridAxis(Z_MIN, Z_MAX, FOCUS_Z_MIN, FOCUS_Z_MAX),
+  };
+}
+
+interface TerrainLook {
+  texture: string;
+  /** One texture tile covers this many metres. */
+  tileM: number;
+  /** Flat colour used until (or instead of) the texture, roughly the texture's average. */
+  fallbackColor: number;
+  /** Multiplies the texture once loaded; tames the texture's own cast and brightness under the sun. */
+  mapTint: number;
+  /** Colour of the rocky patches around outcrops. */
+  rockPatch: THREE.Color;
+  rockColor: number;
+  /** Neutral vertex tint around 1 at a vertex, from height `y` and a slow patchy variation 0..1. */
+  tint(y: number, patch: number, out: THREE.Color): void;
+}
+
+const LOOKS: Record<ThemeId, TerrainLook> = {
+  desert: {
+    texture: 'textures/sand_albedo.webp',
+    tileM: 4,
+    fallbackColor: 0xcfb083,
+    mapTint: 0xe2e2ec, // the texture carries the sand colour; a cool tint tames its orange
+    rockPatch: new THREE.Color(0.55, 0.5, 0.45),
+    rockColor: 0x7a6a58,
+    // Pale crests, darker hollows.
+    tint: (y, patch, out) => {
+      const shade = 0.88 + 0.1 * Math.max(-1, Math.min(1, y / 5)) + 0.1 * patch;
+      out.setRGB(shade, shade, shade);
+    },
+  },
+  arctic: {
+    texture: 'textures/snow_albedo.webp',
+    tileM: 5,
+    fallbackColor: 0xd3dae3,
+    mapTint: 0xb9bcc6, // snow is near white: pull it down so the sun does not clip it
+    rockPatch: new THREE.Color(0.3, 0.31, 0.34),
+    rockColor: 0x4a4d53,
+    // Bright drift crests, faintly blue hollows.
+    tint: (y, patch, out) => {
+      const shade = 0.9 + 0.06 * Math.max(-1, Math.min(1, y / 4)) + 0.06 * patch;
+      out.setRGB(shade * 0.96, shade * 0.98, shade);
+    },
+  },
+  valley: {
+    texture: 'textures/grass_albedo.webp',
+    tileM: 4,
+    fallbackColor: 0x70793f,
+    mapTint: 0xf2ffe8, // a touch of extra green on the olive meadow texture
+    rockPatch: new THREE.Color(0.48, 0.44, 0.38),
+    rockColor: 0x6a6256,
+    // Lush and darker low down, drier and paler on the hilltops.
+    tint: (y, patch, out) => {
+      const high = Math.max(0, Math.min(1, y / 22));
+      out.setRGB(0.95 + 0.2 * high + 0.12 * patch, 1.04 + 0.1 * high + 0.12 * patch, 0.85 + 0.05 * patch);
+    },
+  },
+};
+
 /** How rocky the ground at (x, z) is, 0..1: 1 at an outcrop's centre, 0 beyond 1.3 of its radii. */
-function rockness(x: number, z: number): number {
+function rockness(outcrops: ReadonlyArray<RockOutcrop>, x: number, z: number): number {
   let best = 0;
-  for (const rock of ROCK_OUTCROPS) {
+  for (const rock of outcrops) {
     const d = Math.hypot(x - rock.x, z - rock.z) / (rock.radius * 1.3);
     best = Math.max(best, 1 - Math.min(1, d));
   }
@@ -48,39 +117,36 @@ function rockness(x: number, z: number): number {
 }
 
 /**
- * The 4 km x 4 km desert floor. Vertex colours carry large-scale variation (pale crests, darker
- * hollows, rocky patches) so the 4 m detail tile does not read as a repeating pattern from afar.
- * `maxAnisotropy` should be `renderer.capabilities.getMaxAnisotropy()`.
+ * The terrain surface of `field` on the shared grid. Vertex colours carry large-scale variation
+ * (crests, hollows, rocky patches) so the detail tile does not read as a repeating pattern from afar.
  */
-export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
-  const xs = gridAxis(X_MIN, X_MAX, -FOCUS_X, FOCUS_X, FINE_STEP_X);
-  const zs = gridAxis(Z_MIN, Z_MAX, FOCUS_Z_MIN, FOCUS_Z_MAX, FINE_STEP_Z);
+export function buildTerrainGeometry(field: TerrainField): THREE.BufferGeometry {
+  const look = LOOKS[field.theme];
+  const { xs, zs } = terrainGridAxes();
   const nx = xs.length;
   const nz = zs.length;
 
   const positions = new Float32Array(nx * nz * 3);
   const uvs = new Float32Array(nx * nz * 2);
   const colors = new Float32Array(nx * nz * 3);
-  const rock = new THREE.Color(0.55, 0.5, 0.45);
   const tint = new THREE.Color();
 
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
       const x = xs[i];
       const z = zs[j];
-      const y = terrainHeight(x, z);
+      const y = field.height(x, z);
       const k = j * nx + i;
       positions[k * 3] = x;
       positions[k * 3 + 1] = y;
       positions[k * 3 + 2] = z;
-      uvs[k * 2] = x / TEXTURE_TILE_M;
-      uvs[k * 2 + 1] = z / TEXTURE_TILE_M;
+      uvs[k * 2] = x / look.tileM;
+      uvs[k * 2 + 1] = z / look.tileM;
 
-      // Neutral tint around 1: brighter on crests, darker in hollows, plus a slow patchy variation.
+      // Neutral tint around 1 plus a slow patchy variation.
       const patch = 0.5 + 0.5 * Math.sin(x * 0.0071 + 1.3) * Math.sin(z * 0.0053 - 0.6);
-      const shade = 0.88 + 0.1 * Math.max(-1, Math.min(1, y / 5)) + 0.1 * patch;
-      tint.setRGB(shade, shade, shade);
-      tint.lerp(rock, rockness(x, z) * 0.7);
+      look.tint(y, patch, tint);
+      tint.lerp(look.rockPatch, rockness(field.outcrops, x, z) * 0.7);
       colors[k * 3] = tint.r;
       colors[k * 3 + 1] = tint.g;
       colors[k * 3 + 2] = tint.b;
@@ -112,11 +178,21 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
+  return geometry;
+}
 
-  // Flat sand colour until the detail map arrives; if it never does, the terrain just stays flat sand.
-  const material = new THREE.MeshLambertMaterial({ color: SAND_COLOR, vertexColors: true });
+/**
+ * The 4 km x 4 km ground of `field`, textured for its theme (sand, snow or grass).
+ * `maxAnisotropy` should be `renderer.capabilities.getMaxAnisotropy()`.
+ */
+export function createTerrainMesh(field: TerrainField, maxAnisotropy = 8): THREE.Mesh {
+  const look = LOOKS[field.theme];
+  const geometry = buildTerrainGeometry(field);
+
+  // Flat theme colour until the detail map arrives; if it never does, the terrain just stays flat.
+  const material = new THREE.MeshLambertMaterial({ color: look.fallbackColor, vertexColors: true });
   new THREE.TextureLoader().load(
-    `${import.meta.env.BASE_URL}${TEXTURE_PATH}`,
+    `${import.meta.env.BASE_URL}${look.texture}`,
     (texture) => {
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.RepeatWrapping;
@@ -126,11 +202,11 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
       texture.magFilter = THREE.LinearFilter;
       texture.anisotropy = maxAnisotropy;
       material.map = texture;
-      material.color.set(0xe2e2ec); // the texture carries the sand colour; a cool tint tames its orange
+      material.color.set(look.mapTint);
       material.needsUpdate = true;
     },
     undefined,
-    () => console.warn(`terrain: could not load ${TEXTURE_PATH}, using flat sand colour`),
+    () => console.warn(`terrain: could not load ${look.texture}, using flat ${field.theme} colour`),
   );
 
   const mesh = new THREE.Mesh(geometry, material);
@@ -139,19 +215,15 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
   return mesh;
 }
 
-/** Low-poly boulders sitting on the outcrop mounds. */
-export function createRocks(): THREE.Group {
+/** Low-poly boulders sitting on the outcrop mounds of `field`. */
+export function createRocks(field: TerrainField): THREE.Group {
   const group = new THREE.Group();
   group.name = 'rocks';
-  const material = new THREE.MeshLambertMaterial({ color: 0x7a6a58, flatShading: true });
+  const material = new THREE.MeshLambertMaterial({ color: LOOKS[field.theme].rockColor, flatShading: true });
   const geometry = new THREE.DodecahedronGeometry(1, 0);
   // Deterministic jitter so the rocks are the same every load.
-  let seed = 7;
-  const rand = (): number => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-  for (const outcrop of ROCK_OUTCROPS) {
+  const rand = createRng(7);
+  for (const outcrop of field.outcrops) {
     const count = 4 + Math.floor(rand() * 3);
     for (let n = 0; n < count; n++) {
       const angle = rand() * Math.PI * 2;
@@ -161,7 +233,7 @@ export function createRocks(): THREE.Group {
       const size = (0.5 + rand() * 0.9) * (outcrop.height / 3);
       const rock = new THREE.Mesh(geometry, material);
       rock.scale.set(size * (1 + rand()), size * (0.6 + rand() * 0.5), size * (1 + rand()));
-      rock.position.set(x, terrainHeight(x, z) + size * 0.1, z);
+      rock.position.set(x, field.height(x, z) + size * 0.1, z);
       rock.rotation.set(rand() * 3, rand() * 6.28, rand() * 3);
       group.add(rock);
     }
