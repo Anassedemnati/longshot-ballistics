@@ -78,7 +78,8 @@ function start(): void {
     atmo,
     wind,
     terrainHeight,
-    // Once it has been knocked over its upright hit spheres no longer match the body.
+    // While it lies on the sand its upright hit spheres no longer match the body; it stands up again
+    // by itself a few seconds after falling, and then it can be hit again.
     targets: () => (dummy.down ? [] : [dummy.hitTarget]),
   });
   const weapon = new Weapon(rifle.magazine);
