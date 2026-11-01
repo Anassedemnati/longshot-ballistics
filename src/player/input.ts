@@ -47,6 +47,10 @@ export interface InputHandlers {
   wheel(notches: number): void;
   /** Look sensitivity right now, rad per px (depends on the zoom). */
   sensitivity(): number;
+  /** Every mouse press and key press: the user gestures browsers require before audio may start. */
+  userGesture?(): void;
+  /** The M key; works whether or not the pointer is locked. */
+  toggleMute?(): void;
 }
 
 /**
@@ -71,6 +75,7 @@ export function bindInput(
   };
 
   on('mousedown', (e) => {
+    handlers.userGesture?.();
     const action = state.onMouseDown(e.button);
     if (action === 'requestLock') {
       // A refused request (Chrome blocks re-locking for ~1 s after Esc) leaves us unlocked; the
@@ -87,7 +92,9 @@ export function bindInput(
     onLockChange?.(locked);
   });
   on('keydown', (e) => {
+    handlers.userGesture?.();
     if (e.code === 'KeyR' && !e.repeat) handlers.reload();
+    else if (e.code === 'KeyM' && !e.repeat) handlers.toggleMute?.();
   });
   // One zoom step per notch. Trackpads fire a stream of tiny wheel events, so steps are rate limited.
   let lastNotchMs = -Infinity;

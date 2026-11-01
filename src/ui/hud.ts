@@ -11,12 +11,14 @@ function el(parent: HTMLElement, tag: string, className: string, text = ''): HTM
 }
 
 /**
- * Easy-style stage-1 HUD: range, wind, magnification, rounds and the last shot's result, plus a
- * centre dot for the naked eye and the click-to-start hint. All DOM; styled in index.html.
+ * Easy-style stage-1 HUD: range, wind, magnification, rounds, the sound on/off indicator and the last
+ * shot's result, plus a centre dot for the naked eye and the click-to-start hint. All DOM; styled in
+ * index.html.
  */
 export class Hud {
   private readonly magnification: HTMLElement;
   private readonly rounds: HTMLElement;
+  private readonly sound: HTMLElement;
   private readonly result: HTMLElement;
   private readonly dot: HTMLElement;
   private readonly hint: HTMLElement;
@@ -40,15 +42,17 @@ export class Hud {
 
     this.magnification = el(panel, 'div', 'hud-line');
     this.rounds = el(panel, 'div', 'hud-line');
+    this.sound = el(panel, 'div', 'hud-line');
     this.result = el(root, 'div', 'hud-result');
     this.dot = el(root, 'div', 'hud-dot');
     this.hint = el(
       root,
       'div',
       'hud-hint',
-      'Click to take aim  ·  Left click fire  ·  Right click scope  ·  Wheel zoom  ·  R reload  ·  Esc release mouse',
+      'Click to take aim  ·  Left click fire  ·  Right click scope  ·  Wheel zoom  ·  R reload  ·  M mute  ·  Esc release mouse',
     );
     this.setMagnification(1);
+    this.setMuted(false);
   }
 
   setMagnification(mag: number): void {
@@ -58,6 +62,11 @@ export class Hud {
 
   setRounds(left: number, max: number, reloading: boolean): void {
     this.rounds.textContent = reloading ? `Rounds ${left}/${max}  reloading…` : `Rounds ${left}/${max}`;
+  }
+
+  /** Small sound indicator: the audio itself only starts with the first click. */
+  setMuted(muted: boolean): void {
+    this.sound.textContent = muted ? 'Sound off (M)' : 'Sound on (M)';
   }
 
   setResult(text: string): void {

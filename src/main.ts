@@ -3,6 +3,17 @@ import { DESERT_ATMO, STANDARD_ATMO } from './ballistics/atmosphere';
 import { RIFLES } from './ballistics/rifles';
 import { findZeroElevation } from './ballistics/trajectory';
 import type { WindField } from './ballistics/types';
+import { AudioEngine } from './audio/engine';
+import {
+  playBoltCycle,
+  playDryFire,
+  playImpactDust,
+  playImpactHit,
+  playReload,
+  playShot,
+  startWindAmbience,
+} from './audio/sounds';
+import { distance, impactSoundDelay, windAmbienceGain } from './audio/timing';
 import { muzzleLaunch } from './game/aim';
 import { BulletSystem } from './game/bullets';
 import type { ImpactEvent } from './game/bullets';
@@ -67,6 +78,20 @@ function start(): void {
   hud.setRounds(ammo, rifle.magazine, false);
   hud.setHintVisible(true);
 
+  // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
+  const audio = new AudioEngine();
+  const windLevel = windAmbienceGain(config.windFromLeftMps);
+
+  function unlockAudio(): void {
+    audio.resume();
+    startWindAmbience(audio, windLevel); // starts the loop once; later calls only set its level
+  }
+
+  function toggleMute(): void {
+    audio.toggleMute();
+    hud.setMuted(audio.muted);
+  }
+
   function refreshView(): void {
     hud.setMagnification(view.magnification);
   }
@@ -84,6 +109,7 @@ function start(): void {
   function fire(): void {
     if (reloadRemaining > 0) return;
     if (ammo <= 0) {
+      playDryFire(audio);
       hud.setResult('Empty – press R to reload');
       return;
     }
@@ -91,6 +117,8 @@ function start(): void {
     hud.setRounds(ammo, rifle.magazine, false);
     const { origin, velocity } = muzzleLaunch(SHOOTER_POS, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
+    playShot(audio);
+    if (ammo > 0) playBoltCycle(audio);
     hud.setResult('Shot away…');
   }
 
@@ -98,14 +126,26 @@ function start(): void {
     if (reloadRemaining > 0 || ammo >= rifle.magazine) return;
     reloadRemaining = RELOAD_TIME;
     hud.setRounds(ammo, rifle.magazine, true);
+    playReload(audio, RELOAD_TIME);
   }
 
   function onImpact(event: ImpactEvent): void {
+    // The event fires when the bullet arrives; the sound still has to travel back to the shooter.
     if (event.kind === 'target') {
       dummy.knockDown();
+      playImpactHit(
+        audio,
+        impactSoundDelay(event.point, SHOOTER_POS, atmo.speedOfSound),
+        distance(event.point, SHOOTER_POS),
+      );
       hud.setResult(`HIT – ${event.zone} – ${event.time.toFixed(2)} s`);
     } else if (event.kind === 'terrain') {
       dust.spawn(event.point);
+      playImpactDust(
+        audio,
+        impactSoundDelay(event.point, SHOOTER_POS, atmo.speedOfSound),
+        distance(event.point, SHOOTER_POS),
+      );
       hud.setResult('MISS');
     } else {
       hud.setResult('MISS');
@@ -115,7 +155,15 @@ function start(): void {
   bindInput(
     renderer.domElement,
     input,
-    { fire, toggleScope, reload, wheel: zoom, sensitivity: () => view.sensitivity },
+    {
+      fire,
+      toggleScope,
+      reload,
+      wheel: zoom,
+      sensitivity: () => view.sensitivity,
+      userGesture: unlockAudio,
+      toggleMute,
+    },
     (locked) => hud.setHintVisible(!locked),
   );
 
