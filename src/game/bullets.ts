@@ -1,10 +1,11 @@
 import { DEFAULT_DT, step } from '../ballistics/integrator';
 import type { Atmosphere, BulletState, Vec3, WindField } from '../ballistics/types';
-import { segmentSphere } from './hit';
-import type { HitTarget, TerrainHeight, ZoneName } from './hit';
+import { obstacleBoundingRadius, segmentBox, segmentSphere } from './hit';
+import type { HitTarget, Material, Obstacle, TerrainHeight, ZoneName } from './hit';
 
 export type ImpactEvent =
   | { bulletId: number; kind: 'target'; targetId: string; zone: ZoneName; point: Vec3; time: number }
+  | { bulletId: number; kind: 'obstacle'; obstacleId: string; material: Material; point: Vec3; time: number }
   | { bulletId: number; kind: 'terrain'; point: Vec3; time: number }
   | { bulletId: number; kind: 'expired'; time: number };
 
@@ -14,6 +15,11 @@ export interface BulletSystemOptions {
   terrainHeight: TerrainHeight;
   /** Current hit targets; read once per update() call. */
   targets: () => HitTarget[];
+  /**
+   * Solid cover (buildings, walls, vehicles); read once per update() call and may return the same
+   * array every time. Default: none.
+   */
+  obstacles?: () => Obstacle[];
   /** Fixed substep, s. Default 0.001. */
   dt?: number;
   /** A bullet expires when its flight time reaches this, s. Default 6. */
@@ -33,6 +39,7 @@ const EPS = 1e-9;
 /** Terrain crossing is located to within this distance along the path, m. */
 const TERRAIN_TOLERANCE = 0.01;
 const MAX_BISECTIONS = 32;
+const NO_OBSTACLES: Obstacle[] = [];
 
 function lerp(a: number, b: number, u: number): number {
   return a + (b - a) * u;
@@ -40,18 +47,23 @@ function lerp(a: number, b: number, u: number): number {
 
 /**
  * Point-mass bullets flown with the shared RK4 `step` at a fixed substep. Every substep sweeps the
- * segment prev->next against every target zone and the terrain, so fast bullets never tunnel
- * through targets and long frames never skip hits.
+ * segment prev->next against every target zone, every obstacle box and the terrain, and the earliest
+ * contact wins (on an exact tie: target, then obstacle, then terrain). Fast bullets never tunnel
+ * through targets or thin walls and long frames never skip hits. Targets with `bounds` and all
+ * obstacles are rejected with one cheap segment-sphere test before their narrow tests run.
  */
 export class BulletSystem {
   private readonly atmo: Atmosphere;
   private readonly wind: WindField;
   private readonly terrainHeight: TerrainHeight;
   private readonly targets: () => HitTarget[];
+  private readonly obstacles: () => Obstacle[];
   private readonly dt: number;
   private readonly maxFlightTime: number;
   private readonly maxFrameDt: number;
   private readonly bullets: Bullet[] = [];
+  /** Bounding-sphere radius of each obstacle in the current update(); reused, never reallocated per frame. */
+  private readonly obstacleRadii: number[] = [];
   private nextId = 1;
   /** Frame time not yet consumed by whole substeps, s. */
   private accumulator = 0;
@@ -61,6 +73,7 @@ export class BulletSystem {
     this.wind = opts.wind;
     this.terrainHeight = opts.terrainHeight;
     this.targets = opts.targets;
+    this.obstacles = opts.obstacles ?? (() => NO_OBSTACLES);
     this.dt = opts.dt ?? DEFAULT_DT;
     if (!Number.isFinite(this.dt) || this.dt <= 0) {
       throw new Error(`BulletSystem: dt must be a positive finite number, got ${this.dt}`);
@@ -104,12 +117,17 @@ export class BulletSystem {
     if (steps === 0 || this.bullets.length === 0) return events;
 
     const targets = this.targets();
+    const obstacles = this.obstacles();
+    // Cached per Obstacle object, so this is a lookup per obstacle per frame, not per substep.
+    const radii = this.obstacleRadii;
+    radii.length = obstacles.length;
+    for (let i = 0; i < obstacles.length; i++) radii[i] = obstacleBoundingRadius(obstacles[i]);
     let kept = 0;
     for (let i = 0; i < this.bullets.length; i++) {
       const bullet = this.bullets[i];
       let event: ImpactEvent | null = null;
       for (let n = 0; n < steps && event === null; n++) {
-        event = this.advance(bullet, targets);
+        event = this.advance(bullet, targets, obstacles, radii);
       }
       if (event === null) {
         this.bullets[kept++] = bullet;
@@ -122,7 +140,12 @@ export class BulletSystem {
   }
 
   /** One substep for one bullet. Returns its impact event, or null if it is still flying. */
-  private advance(bullet: Bullet, targets: HitTarget[]): ImpactEvent | null {
+  private advance(
+    bullet: Bullet,
+    targets: HitTarget[],
+    obstacles: Obstacle[],
+    radii: number[],
+  ): ImpactEvent | null {
     const prev = bullet.state;
     const next = step(prev, this.dt, bullet.bcG7, this.atmo, this.wind);
     bullet.state = next;
@@ -132,6 +155,10 @@ export class BulletSystem {
     let hitTarget: HitTarget | null = null;
     let hitZone: ZoneName = 'limbs';
     for (const target of targets) {
+      const bounds = target.bounds;
+      if (bounds !== undefined && segmentSphere(prev.pos, next.pos, bounds.center, bounds.radius) === null) {
+        continue;
+      }
       for (const zone of target.zones) {
         const u = segmentSphere(prev.pos, next.pos, zone.center, zone.radius);
         if (u !== null && u < uTarget) {
@@ -142,13 +169,26 @@ export class BulletSystem {
       }
     }
 
+    // Earliest obstacle contact along prev -> next.
+    let uObstacle = Infinity;
+    let hitObstacle: Obstacle | null = null;
+    for (let i = 0; i < obstacles.length; i++) {
+      const obstacle = obstacles[i];
+      if (segmentSphere(prev.pos, next.pos, obstacle.box.center, radii[i]) === null) continue;
+      const u = segmentBox(prev.pos, next.pos, obstacle.box);
+      if (u !== null && u < uObstacle) {
+        uObstacle = u;
+        hitObstacle = obstacle;
+      }
+    }
+
     // Terrain crossing, only looked for when the segment end is underground.
     let uTerrain = Infinity;
     if (next.pos.y < this.terrainHeight(next.pos.x, next.pos.z)) {
       uTerrain = this.terrainCrossing(prev.pos, next.pos);
     }
 
-    if (hitTarget !== null && uTarget <= uTerrain) {
+    if (hitTarget !== null && uTarget <= uObstacle && uTarget <= uTerrain) {
       return {
         bulletId: bullet.id,
         kind: 'target',
@@ -156,6 +196,16 @@ export class BulletSystem {
         zone: hitZone,
         point: this.pointAt(prev.pos, next.pos, uTarget),
         time: prev.t + uTarget * this.dt,
+      };
+    }
+    if (hitObstacle !== null && uObstacle <= uTerrain) {
+      return {
+        bulletId: bullet.id,
+        kind: 'obstacle',
+        obstacleId: hitObstacle.id,
+        material: hitObstacle.material,
+        point: this.pointAt(prev.pos, next.pos, uObstacle),
+        time: prev.t + uObstacle * this.dt,
       };
     }
     if (uTerrain !== Infinity) {
