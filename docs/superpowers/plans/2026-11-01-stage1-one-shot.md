@@ -266,9 +266,45 @@
 
 ---
 
+---
+
+### Task 9: Sound (procedural Web Audio, distance-correct timing)
+
+Added at the user's request (spec §7.6, pulled forward from stage 5). No audio files: every sound is synthesised with the Web Audio API (noise bursts, filters, envelopes), so there are no licensing or download concerns.
+
+**Files:**
+- Create: `src/audio/timing.ts` (pure), `src/audio/engine.ts` (AudioContext, master gain, mute), `src/audio/sounds.ts` (synth recipes)
+- Modify: `src/main.ts` (wire events), `src/ui/hud.ts` (mute indicator)
+- Test: `tests/audio/timing.test.ts`
+
+**Interfaces:**
+- Consumes: `ImpactEvent` (time, point), `SHOOTER_POS`, `Atmosphere.speedOfSound`.
+- Produces:
+  ```ts
+  // timing.ts (pure, no DOM)
+  export function soundTravelTime(from: Vec3, to: Vec3, speedOfSound: number): number;      // |to-from| / c
+  export function impactSoundDelay(impactPoint: Vec3, listener: Vec3, speedOfSound: number): number; // delay AFTER the impact event fires
+  export function windAmbienceGain(windSpeedMps: number): number;   // 0 at 0 m/s, rises smoothly, clamped to 1 at >= 12 m/s
+  // engine.ts
+  export class AudioEngine { resume(): void; readonly ctx: AudioContext | null; muted: boolean; toggleMute(): void; }
+  // sounds.ts — each schedules on the engine at ctx.currentTime + delaySec
+  export function playShot(e: AudioEngine): void;            // sharp muzzle blast + short desert echo tail (~1.2 s)
+  export function playImpactHit(e: AudioEngine, delaySec: number, distanceM: number): void;   // dull "thwack", quieter & duller (low-pass) with distance
+  export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: number): void;  // soft thud, quieter than hit
+  export function playBoltCycle(e: AudioEngine): void;       // two metallic clicks ~0.25 s apart
+  export function playReload(e: AudioEngine): void;          // magazine out/in clicks over the 1.5 s reload
+  export function playDryFire(e: AudioEngine): void;         // single click (empty magazine)
+  export function startWindAmbience(e: AudioEngine, gain: number): void; // looping filtered noise
+  ```
+- Behaviour: the AudioContext is created/resumed on the first pointer-lock click (browser autoplay policy). `M` toggles mute (HUD shows it). Impact sounds are scheduled so the player hears them `event.time`-aligned impact + travel time back: i.e. when an ImpactEvent fires (already at the bullet's arrival), schedule with `impactSoundDelay(point, SHOOTER_POS, atmo.speedOfSound)`. Expired bullets make no impact sound. Bolt cycle plays ~0.6 s after each shot that leaves rounds; dry-fire when firing with 0 rounds.
+
+- [ ] **Step 1:** Tests: `soundTravelTime((0,0,0),(0,0,-800), 353.6)` ≈ 2.2624 (±1e-3); `impactSoundDelay` equals `soundTravelTime` for the same points; `windAmbienceGain(0) === 0`, monotonic increasing over 0..12, `windAmbienceGain(20) === 1`.
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement timing, engine, sounds; wire into main.ts. **Step 4:** Tests PASS, `npm run build` OK, dev server loads without console errors.
+- [ ] **Step 5:** Commit `feat(audio): procedural shot, impact, bolt and wind sounds with sound-travel delay`.
+
 ## Later stages (outline only — each gets its own plan)
 
 2. **The real map**: 3 km authored desert (wadi, compound, road, vehicles), terrain LOD, mirage shader, wind indicators (flags, dust).
 3. **Living targets**: animated low-poly enemies (CC0 Quaternius/Kenney), patrol paths, hit-zone mapping to skeleton, alert behaviour; seeded determinism.
 4. **Game structure**: missions (patrol + HVT), progression 400→1200 m+, scoring/stars, menus, difficulty levels (§5.3), settings, saving.
-5. **Polish**: bullet cam (pre-simulation via the same `step`), audio with sound-delay, sway + breath, turrets in 0.1 mil, `.338` unlock, Codex art pass.
+5. **Polish**: bullet cam (pre-simulation via the same `step`), breath/heartbeat audio, sway + breath, turrets in 0.1 mil, `.338` unlock, Codex art pass.
