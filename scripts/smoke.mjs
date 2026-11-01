@@ -357,6 +357,17 @@ async function run() {
     check(/HIT/.test(againResult), 'the dummy stood up again by itself and the next shot hits it');
     check((await near.locator('.hud-line', { hasText: 'Rounds 3/5' }).count()) === 1, 'two rounds were used (Rounds 3/5)');
 
+    // 5. Reload: pulling the trigger meanwhile says so, and the magazine is full again after 1.5 s of game time.
+    await near.evaluate(() => {
+      window.__game.reload();
+      window.__game.fire();
+    });
+    check(((await near.locator('.hud-result').textContent()) ?? '') === 'Reloading…', 'firing during a reload shows "Reloading…"');
+    check((await near.locator('.hud-line', { hasText: 'reloading…' }).count()) === 1, 'the rounds line says reloading');
+    await waitGameSeconds(near, 1.7);
+    check((await near.locator('.hud-line', { hasText: 'Rounds 5/5' }).count()) === 1, 'the reload refilled the magazine (Rounds 5/5)');
+    check(((await near.locator('.hud-result').textContent()) ?? '') === '', 'the "Reloading…" message is gone once the reload is done');
+
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
