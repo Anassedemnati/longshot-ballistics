@@ -5,6 +5,8 @@ import { drawReticle } from './reticle';
 
 export const MAG_MIN = 4;
 export const MAG_MAX = 20;
+/** The scope opens at this magnification: at 4x the mil ladder is too small to read. */
+export const MAG_DEFAULT = 8;
 /** Zoom factor per wheel notch. */
 export const MAG_STEP = 1.25;
 /** Look sensitivity at 1x, rad per mouse px; divided by the magnification while scoped. */
@@ -51,13 +53,13 @@ class ScopeOverlay {
 
 /**
  * The shooter's eye: a camera pinned to one spot that looks around, with a toggleable scope
- * (4x-20x). Look angles come from the InputState; this owns the field of view and the overlay.
+ * (4x-20x, opening at 8x). Look angles come from the InputState; this owns the field of view and the overlay.
  */
 export class PlayerView {
   readonly camera: THREE.PerspectiveCamera;
   private readonly overlay: ScopeOverlay;
   private scoped = false;
-  private mag = MAG_MIN;
+  private mag = MAG_DEFAULT;
   private width: number;
   private height: number;
 
