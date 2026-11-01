@@ -267,6 +267,24 @@ describe('BulletSystem', () => {
     expect(Math.abs(events[0].time - events[1].time)).toBeLessThanOrEqual(DEFAULT_DT);
   });
 
+  it('treats NaN, negative and non-finite frame times as 0 and is not poisoned afterwards', () => {
+    const sys = makeSystem();
+    sys.fire(MUZZLE, zeroVelocity(), BC);
+    for (const bad of [Number.NaN, -1, -0.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(sys.update(bad)).toEqual([]);
+      expect(sys.active[0].state.t).toBe(0);
+    }
+    sys.update(0.01); // a good frame still advances exactly 10 substeps
+    expect(sys.active[0].state.t).toBeCloseTo(0.01, 9);
+  });
+
+  it('constructor rejects a substep that is zero, negative or not finite', () => {
+    for (const dt of [0, -0.001, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => makeSystem({ dt })).toThrow();
+    }
+    expect(() => makeSystem({ dt: 0.002 })).not.toThrow();
+  });
+
   it('removes a bullet on its first event and emits nothing afterwards', () => {
     const sys = makeSystem({ targets: () => [ball('t1', { x: 0, y: 0, z: -100 }, 0.1)] });
     sys.fire(MUZZLE, zeroVelocity(), BC);

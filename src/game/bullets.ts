@@ -62,6 +62,9 @@ export class BulletSystem {
     this.terrainHeight = opts.terrainHeight;
     this.targets = opts.targets;
     this.dt = opts.dt ?? DEFAULT_DT;
+    if (!Number.isFinite(this.dt) || this.dt <= 0) {
+      throw new Error(`BulletSystem: dt must be a positive finite number, got ${this.dt}`);
+    }
     this.maxFlightTime = opts.maxFlightTime ?? 6;
     this.maxFrameDt = opts.maxFrameDt ?? 0.1;
   }
@@ -87,13 +90,14 @@ export class BulletSystem {
   }
 
   /**
-   * Advance all bullets by frameDt (clamped to maxFrameDt) in whole fixed substeps; the remainder
-   * carries to the next call. Returns the impacts that happened (grouped by bullet, oldest first).
-   * A bullet is removed on its first event.
+   * Advance all bullets by frameDt (clamped to maxFrameDt; NaN, negative or non-finite counts as 0)
+   * in whole fixed substeps; the remainder carries to the next call. Returns the impacts that
+   * happened (grouped by bullet, oldest first). A bullet is removed on its first event.
    */
   update(frameDt: number): ImpactEvent[] {
     const events: ImpactEvent[] = [];
-    const frame = Math.min(Math.max(frameDt, 0), this.maxFrameDt);
+    // NaN, negative and infinite frame times count as 0: one NaN would poison the accumulator.
+    const frame = Number.isFinite(frameDt) && frameDt > 0 ? Math.min(frameDt, this.maxFrameDt) : 0;
     this.accumulator += frame;
     const steps = Math.floor(this.accumulator / this.dt + EPS);
     this.accumulator = Math.max(0, this.accumulator - steps * this.dt);
