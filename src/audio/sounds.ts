@@ -31,8 +31,10 @@ const CUT_FADE_S = 0.06;
 
 /** Envelope floor: an exponential ramp cannot reach 0, and -80 dB is inaudible. */
 const SILENCE = 1e-4;
-/** Seconds after a shot before the bolt is worked. */
-const BOLT_DELAY_S = 0.6;
+/** Seconds after a shot before the bolt is worked: the muzzle blast has passed. */
+const BOLT_DELAY_S = 0.25;
+/** Bolt cycle length when the caller does not give one, s (see `BOLT_TIME_S` in game/weapon.ts). */
+const DEFAULT_BOLT_CYCLE_S = 1.2;
 /** Gap between the two bolt clicks, s. */
 const BOLT_CLICK_GAP_S = 0.25;
 /** Level of a synthesised impact heard from right next to it (distanceGain = 1); real impacts are quieter. */
@@ -289,12 +291,18 @@ function synthBoltCycle(s: Stage): void {
   knock(s, s.t + BOLT_CLICK_GAP_S, 0.1);
 }
 
-/** Working the bolt (real bolt-action clicks), starting 0.6 s after the call, i.e. just after the shot. */
-export function playBoltCycle(e: AudioEngine): void {
+/**
+ * Working the bolt (real bolt-action clicks), starting 0.25 s after the call, i.e. just after the shot's
+ * blast. `cycleSec` is how long after the call the rifle is ready again (the bolt lockout): the
+ * ~1.7 s recording is sped up (at most 1.25x) and faded out so it ends then, never over the next shot.
+ */
+export function playBoltCycle(e: AudioEngine, cycleSec = DEFAULT_BOLT_CYCLE_S): void {
   const s = stage(e, BOLT_DELAY_S);
   if (!s) return;
+  const cycle = Number.isFinite(cycleSec) ? cycleSec : DEFAULT_BOLT_CYCLE_S;
+  const span = Math.max(0.1, cycle - BOLT_DELAY_S);
   const clip = e.clip('bolt_cycle');
-  if (clip) playClip(s, clip, { level: LEVELS.bolt });
+  if (clip) playClip(s, clip, { level: LEVELS.bolt, rate: fitRate(clip.length, span), maxSec: span });
   else synthBoltCycle(s);
 }
 

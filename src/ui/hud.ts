@@ -73,6 +73,11 @@ export class Hud {
     this.result.textContent = text;
   }
 
+  /** The text of the last-shot result line right now. */
+  get resultText(): string {
+    return this.result.textContent ?? '';
+  }
+
   /** Show the "click to take aim" hint while the mouse is not captured. */
   setHintVisible(visible: boolean): void {
     this.hint.hidden = !visible;
