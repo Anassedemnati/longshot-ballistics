@@ -1,3 +1,7 @@
+import type { ClipId } from './clips';
+import { ClipBank } from './samples';
+import type { Clip } from './samples';
+
 /** Length of the shared white-noise buffer, s. Every noisy sound plays a random slice of it. */
 const NOISE_SECONDS = 3;
 /** Master level after the compressor. */
@@ -18,11 +22,12 @@ interface AudioGraph {
  * Owns the AudioContext, the master chain (a gentle compressor so a shot never clips, then a master
  * gain that implements mute) and the one shared noise buffer. The context is created on the first
  * `resume()` because browsers only allow audio after a user gesture; until then `ctx` is null and
- * every sound is skipped.
+ * every sound is skipped. The recordings are fetched and decoded as soon as the context exists.
  */
 export class AudioEngine {
   private graph: AudioGraph | null = null;
   private isMuted = false;
+  private readonly clips = new ClipBank();
   /** True once creating the context failed: do not retry on every click. */
   private unavailable = false;
   /** The wind loop's level node once it is running (see `startWindAmbience`). */
@@ -41,6 +46,11 @@ export class AudioEngine {
   /** The shared white-noise buffer, or null while there is no context. */
   get noise(): AudioBuffer | null {
     return this.graph?.noise ?? null;
+  }
+
+  /** A decoded recording, or null while it is loading or if it failed to load (use the synth recipe). */
+  clip(id: ClipId): Clip | null {
+    return this.clips.get(id);
   }
 
   get muted(): boolean {
@@ -66,6 +76,7 @@ export class AudioEngine {
     if (!this.graph && !this.unavailable) {
       this.graph = this.createGraph();
       this.unavailable = this.graph === null;
+      if (this.graph) void this.clips.load(this.graph.ctx, import.meta.env.BASE_URL);
     }
     const ctx = this.graph?.ctx;
     if (ctx && ctx.state !== 'running') ctx.resume().catch(() => undefined);

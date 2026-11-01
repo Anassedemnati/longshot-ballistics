@@ -3,6 +3,7 @@ import {
   distance,
   distanceCutoffHz,
   distanceGain,
+  impactGain,
   impactSoundDelay,
   soundTravelTime,
   windAmbienceGain,
@@ -100,5 +101,20 @@ describe('distanceCutoffHz', () => {
     expect(distanceCutoffHz(0)).toBeCloseTo(4000, 6);
     expect(distanceCutoffHz(5000)).toBeCloseTo(800, 6);
     expect(distanceCutoffHz(NaN)).toBeCloseTo(4000, 6);
+  });
+});
+
+describe('impactGain', () => {
+  it('is 1 up to 100 m and then follows the distance falloff relative to 100 m', () => {
+    expect(impactGain(0)).toBe(1);
+    expect(impactGain(100)).toBe(1);
+    expect(impactGain(800)).toBeCloseTo(distanceGain(800) / distanceGain(100), 12);
+    expect(impactGain(800)).toBeCloseTo(0.3636, 3);
+    expect(impactGain(1500)).toBeCloseTo(0.2222, 3);
+  });
+
+  it('decreases with range and tolerates garbage', () => {
+    expect(impactGain(400)).toBeGreaterThan(impactGain(900));
+    expect(impactGain(NaN)).toBe(1);
   });
 });

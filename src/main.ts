@@ -117,7 +117,7 @@ function start(): void {
     hud.setRounds(ammo, rifle.magazine, false);
     const { origin, velocity } = muzzleLaunch(SHOOTER_POS, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
-    playShot(audio);
+    playShot(audio, config.rifle);
     if (ammo > 0) playBoltCycle(audio);
     hud.setResult('Shot away…');
   }

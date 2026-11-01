@@ -48,6 +48,14 @@ export function distanceGain(distanceM: number): number {
   return 1 / (1 + d / HALF_LEVEL_M);
 }
 
+/**
+ * Loudness factor of a recorded impact heard from `distanceM`, 0..1: full strength up to 100 m, then
+ * the `distanceGain` falloff relative to 100 m (about 0.36 at 800 m and 0.22 at 1500 m).
+ */
+export function impactGain(distanceM: number): number {
+  return Math.min(1, distanceGain(distanceM) / distanceGain(NEAR_RANGE_M));
+}
+
 /** Low-pass cutoff for an impact heard from `distanceM`, Hz: 4 kHz at 100 m falling to 800 Hz at 1500 m. */
 export function distanceCutoffHz(distanceM: number): number {
   const d = Number.isFinite(distanceM) ? distanceM : 0;

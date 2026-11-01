@@ -1,9 +1,33 @@
+import type { Rifle } from '../ballistics/types';
+import { fitRate, jitterRate, shotClipId } from './clips';
 import type { AudioEngine } from './engine';
-import { distanceCutoffHz, distanceGain } from './timing';
+import type { Clip } from './samples';
+import { distanceCutoffHz, distanceGain, impactGain } from './timing';
 
-// Synthesis recipes. Every sound is noise bursts, sine/triangle sweeps, filters and envelopes
-// scheduled on the audio clock, never with timers. Each public function returns silently when there
-// is no running context (no user gesture yet) or the engine is muted.
+// Every sound plays a recording (public/sounds, CC0, see samples.ts) through its own gain into the
+// master chain. If a recording is missing or failed to decode, the same sound is synthesised instead
+// from noise bursts, sine/triangle sweeps, filters and envelopes (the `synth...` fallbacks below).
+// Everything is scheduled on the audio clock, never with timers. Each public function returns
+// silently when there is no running context (no user gesture yet) or the engine is muted.
+
+/**
+ * Relative loudness of the recordings (all are loudness-normalised, so these set the mix). The shot
+ * is the loudest sound. `impactHit` is the level at 100 m, `impactGain` lowers it further out. Tune
+ * by ear. The wind has its own `WIND_MAKEUP`.
+ */
+const LEVELS = {
+  shot: 1.0,
+  bolt: 0.5,
+  reload: 0.5,
+  dryFire: 0.6,
+  impactHit: 0.8,
+  impactDust: 0.6,
+};
+/** Random playback-rate spread of a shot (+-3 %) and of an impact (+-5 %), so repeats differ. */
+const SHOT_RATE_SPREAD = 0.03;
+const IMPACT_RATE_SPREAD = 0.05;
+/** Fade at the end of a clip that has to be cut short, s. */
+const CUT_FADE_S = 0.06;
 
 /** Envelope floor: an exponential ramp cannot reach 0, and -80 dB is inaudible. */
 const SILENCE = 1e-4;
@@ -11,7 +35,7 @@ const SILENCE = 1e-4;
 const BOLT_DELAY_S = 0.6;
 /** Gap between the two bolt clicks, s. */
 const BOLT_CLICK_GAP_S = 0.25;
-/** Level of an impact heard from right next to it (distanceGain = 1); real impacts are quieter. */
+/** Level of a synthesised impact heard from right next to it (distanceGain = 1); real impacts are quieter. */
 const IMPACT_LEVEL = 2;
 /** Wind loop makeup: bandpassed noise is quiet, and the wind must stay under the effects. */
 const WIND_MAKEUP = 0.3;
@@ -37,6 +61,44 @@ function stage(e: AudioEngine, delaySec = 0): Stage | null {
   if (!ctx || !bus || !noise || e.muted || ctx.state !== 'running') return null;
   const delay = Number.isFinite(delaySec) ? Math.max(0, delaySec) : 0;
   return { ctx, out: bus, noise, t: ctx.currentTime + delay };
+}
+
+interface ClipOptions {
+  /** Gain, see LEVELS. */
+  level: number;
+  /** Playback rate, default 1. */
+  rate?: number;
+  /** Low-pass cutoff, Hz: duller sound for distant impacts. */
+  cutoff?: number;
+  /** Cut the clip off after this many seconds (with a short fade). */
+  maxSec?: number;
+}
+
+/** Play a recording from its first audible sample at `s.t`: [low-pass] -> gain -> master chain. */
+function playClip(s: Stage, clip: Clip, options: ClipOptions): void {
+  const { level, rate = 1, cutoff, maxSec } = options;
+  const source = s.ctx.createBufferSource();
+  source.buffer = clip.buffer;
+  source.playbackRate.value = rate;
+  let tail: AudioNode = source;
+  if (cutoff !== undefined) {
+    const lowpass = s.ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = cutoff;
+    lowpass.Q.value = 0.5; // no resonant bump
+    tail.connect(lowpass);
+    tail = lowpass;
+  }
+  const gain = s.ctx.createGain();
+  gain.gain.value = level;
+  if (maxSec !== undefined) {
+    gain.gain.setValueAtTime(level, s.t + Math.max(0, maxSec - CUT_FADE_S));
+    gain.gain.linearRampToValueAtTime(0, s.t + maxSec);
+  }
+  tail.connect(gain);
+  gain.connect(s.out);
+  source.start(s.t, clip.start);
+  if (maxSec !== undefined) source.stop(s.t + maxSec); // after start(): stop() before start() throws
 }
 
 /** Fast attack to `peak`, then an exponential fall to silence over `decay` s. */
@@ -105,10 +167,8 @@ function echo(s: Stage, t: number, level: number, cutoff: number): void {
   tone(s, 'sine', t, 80, 45, 0.3, level * 0.8, 0.03, 0.3);
 }
 
-/** Sharp muzzle blast (crack, noisy body with a boosted low end, low boom) and a ~1.2 s echo tail. */
-export function playShot(e: AudioEngine): void {
-  const s = stage(e);
-  if (!s) return;
+/** Fallback shot: sharp muzzle blast (crack, noisy body with a boosted low end, low boom) and a ~1.2 s echo tail. */
+function synthShot(s: Stage): void {
   const t = s.t;
   noiseBurst(s, t, [{ type: 'highpass', freq: 1800 }], 0.6, 0.002, 0.035); // crack
   noiseBurst(
@@ -127,10 +187,17 @@ export function playShot(e: AudioEngine): void {
   for (const reflection of SHOT_ECHOES) echo(s, t + reflection.delay, reflection.level, reflection.cutoff);
 }
 
-/** Dull thwack of a bullet striking the target, `distanceM` away: quieter and duller with range. */
-export function playImpactHit(e: AudioEngine, delaySec: number, distanceM: number): void {
-  const s = stage(e, delaySec);
+/** The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time. */
+export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308'): void {
+  const s = stage(e);
   if (!s) return;
+  const clip = e.clip(shotClipId(rifleId));
+  if (clip) playClip(s, clip, { level: LEVELS.shot, rate: jitterRate(SHOT_RATE_SPREAD) });
+  else synthShot(s);
+}
+
+/** Fallback hit: dull thwack of a bullet striking the target, `distanceM` away. */
+function synthImpactHit(s: Stage, distanceM: number): void {
   const level = IMPACT_LEVEL * distanceGain(distanceM);
   const cutoff = distanceCutoffHz(distanceM);
   noiseBurst(
@@ -147,10 +214,22 @@ export function playImpactHit(e: AudioEngine, delaySec: number, distanceM: numbe
   tone(s, 'sine', s.t, 150, 65, 0.14, level * 0.25, 0.002, 0.18);
 }
 
-/** Soft airy thud of a bullet striking sand, `distanceM` away: quieter than a hit, no sharp edge. */
-export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: number): void {
+/** Bullet striking the target `distanceM` away, heard `delaySec` later: quieter and duller with range. */
+export function playImpactHit(e: AudioEngine, delaySec: number, distanceM: number): void {
   const s = stage(e, delaySec);
   if (!s) return;
+  const clip = e.clip('impact_hit');
+  if (clip) {
+    playClip(s, clip, {
+      level: LEVELS.impactHit * impactGain(distanceM),
+      rate: jitterRate(IMPACT_RATE_SPREAD),
+      cutoff: distanceCutoffHz(distanceM),
+    });
+  } else synthImpactHit(s, distanceM);
+}
+
+/** Fallback dust: soft airy thud of a bullet striking sand, `distanceM` away, no sharp edge. */
+function synthImpactDust(s: Stage, distanceM: number): void {
   const level = IMPACT_LEVEL * distanceGain(distanceM) * 0.5;
   const cutoff = Math.min(1600, distanceCutoffHz(distanceM));
   noiseBurst(
@@ -165,6 +244,20 @@ export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: numb
     0.3,
   );
   tone(s, 'sine', s.t, 90, 50, 0.2, level * 0.12, 0.01, 0.22);
+}
+
+/** Bullet striking the ground `distanceM` away, heard `delaySec` later: softer than a hit, same distance treatment. */
+export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: number): void {
+  const s = stage(e, delaySec);
+  if (!s) return;
+  const clip = e.clip('impact_dust');
+  if (clip) {
+    playClip(s, clip, {
+      level: LEVELS.impactDust * impactGain(distanceM),
+      rate: jitterRate(IMPACT_RATE_SPREAD),
+      cutoff: distanceCutoffHz(distanceM),
+    });
+  } else synthImpactDust(s, distanceM);
 }
 
 /** A small metallic click: a short burst of bright noise plus a faint resonant ping at `pitch` Hz. */
@@ -189,20 +282,24 @@ function knock(s: Stage, t: number, level: number): void {
   tone(s, 'sine', t, 220, 110, 0.05, level * 0.6, 0.001, 0.06);
 }
 
-/** Working the bolt: lift-and-pull click, then a slightly lower push-and-close click 0.25 s later. */
-export function playBoltCycle(e: AudioEngine): void {
-  const s = stage(e, BOLT_DELAY_S);
-  if (!s) return;
+/** Fallback bolt: lift-and-pull click, then a slightly lower push-and-close click 0.25 s later. */
+function synthBoltCycle(s: Stage): void {
   metalClick(s, s.t, 2600, 0.16);
   metalClick(s, s.t + BOLT_CLICK_GAP_S, 1900, 0.22);
   knock(s, s.t + BOLT_CLICK_GAP_S, 0.1);
 }
 
-/** Magazine out, magazine in, bolt: four clicks spread over the reload (`durationSec`, default 1.5 s). */
-export function playReload(e: AudioEngine, durationSec = 1.5): void {
-  const s = stage(e);
+/** Working the bolt (real bolt-action clicks), starting 0.6 s after the call, i.e. just after the shot. */
+export function playBoltCycle(e: AudioEngine): void {
+  const s = stage(e, BOLT_DELAY_S);
   if (!s) return;
-  const span = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 1.5;
+  const clip = e.clip('bolt_cycle');
+  if (clip) playClip(s, clip, { level: LEVELS.bolt });
+  else synthBoltCycle(s);
+}
+
+/** Fallback reload: magazine out, magazine in, bolt: four clicks spread over `span` s. */
+function synthReload(s: Stage, span: number): void {
   metalClick(s, s.t + 0.03 * span, 1500, 0.18); // release catch
   knock(s, s.t + 0.25 * span, 0.09); // magazine drops out
   knock(s, s.t + 0.62 * span, 0.14); // new magazine seats
@@ -210,10 +307,21 @@ export function playReload(e: AudioEngine, durationSec = 1.5): void {
   metalClick(s, s.t + 0.88 * span, 2400, 0.18); // bolt closes
 }
 
-/** The dull click of pulling the trigger on an empty magazine. */
-export function playDryFire(e: AudioEngine): void {
+/**
+ * Magazine out, magazine in, bolt, fitted to the reload (`durationSec`, default 1.5 s): the recording
+ * is sped up or slowed down a little to last that long, and cut off with a short fade if still longer.
+ */
+export function playReload(e: AudioEngine, durationSec = 1.5): void {
   const s = stage(e);
   if (!s) return;
+  const span = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 1.5;
+  const clip = e.clip('reload');
+  if (clip) playClip(s, clip, { level: LEVELS.reload, rate: fitRate(clip.length, span), maxSec: span });
+  else synthReload(s, span);
+}
+
+/** Fallback dry fire: the dull click of pulling the trigger on an empty magazine. */
+function synthDryFire(s: Stage): void {
   noiseBurst(
     s,
     s.t,
@@ -226,6 +334,15 @@ export function playDryFire(e: AudioEngine): void {
     0.02,
   );
   tone(s, 'sine', s.t, 200, 120, 0.03, 0.15, 0.001, 0.04);
+}
+
+/** The click of pulling the trigger on an empty magazine. */
+export function playDryFire(e: AudioEngine): void {
+  const s = stage(e);
+  if (!s) return;
+  const clip = e.clip('dry_fire');
+  if (clip) playClip(s, clip, { level: LEVELS.dryFire });
+  else synthDryFire(s);
 }
 
 /**
