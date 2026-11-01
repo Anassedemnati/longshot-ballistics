@@ -18,6 +18,7 @@ import { muzzleLaunch } from './game/aim';
 import { BulletSystem } from './game/bullets';
 import type { ImpactEvent } from './game/bullets';
 import { parseConfig } from './game/config';
+import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from './game/weapon';
 import { DustSystem } from './fx/dust';
 import { InputState, bindInput } from './player/input';
 import { PlayerView } from './player/view';
@@ -27,12 +28,12 @@ import { createTargetDummy } from './scene/target';
 import { DESERT_FIELD, SHOOTER_POS, createRocks, createTerrainMesh, terrainHeight } from './scene/terrain';
 import { Hud } from './ui/hud';
 
-/** Seconds to swap a magazine. */
-const RELOAD_TIME = 1.5;
 /** Frame time cap, s: a long stall (hidden tab) must not fast-forward bullets, dust or reloads. */
 const MAX_FRAME_DT = 0.1;
 /** Height of the aim point on the dummy (chest), m above its feet. */
 const CHEST_HEIGHT = 1.35;
+/** HUD result shown when the trigger is pulled during a reload. */
+const RELOADING_TEXT = 'Reloading…';
 
 /**
  * Debug/automation hook, `window.__game`: the same functions the mouse and keys call. Only exposed
@@ -43,6 +44,8 @@ interface GameDebugHook {
   zoom(notches: number): void;
   fire(): void;
   reload(): void;
+  /** What the first click does: create the audio context (it needs no pointer lock) and start the wind. */
+  unlockAudio(): void;
 }
 
 declare global {
@@ -77,11 +80,11 @@ function start(): void {
     atmo,
     wind,
     terrainHeight,
-    // Once it has been knocked over its upright hit spheres no longer match the body.
+    // While it lies on the sand its upright hit spheres no longer match the body; it stands up again
+    // by itself a few seconds after falling, and then it can be hit again.
     targets: () => (dummy.down ? [] : [dummy.hitTarget]),
   });
-  let ammo = rifle.magazine;
-  let reloadRemaining = 0;
+  const weapon = new Weapon(rifle.magazine);
 
   // Player
   const view = new PlayerView(document.body, SHOOTER_POS, window.innerWidth, window.innerHeight);
@@ -92,7 +95,7 @@ function start(): void {
   view.look(input.yaw, input.pitch);
 
   const hud = new Hud(document.body, config);
-  hud.setRounds(ammo, rifle.magazine, false);
+  hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
 
   // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
@@ -106,7 +109,11 @@ function start(): void {
 
   function toggleMute(): void {
     audio.toggleMute();
-    hud.setMuted(audio.muted);
+    refreshSound();
+  }
+
+  function refreshSound(): void {
+    hud.setSound(audio.running, audio.muted, audio.available);
   }
 
   function refreshView(): void {
@@ -124,26 +131,28 @@ function start(): void {
   }
 
   function fire(): void {
-    if (reloadRemaining > 0) return;
-    if (ammo <= 0) {
-      playDryFire(audio);
-      hud.setResult('Empty – press R to reload');
+    const shot = weapon.fire();
+    if (!shot.fired) {
+      // A click during the bolt cycle is ignored silently, so the last HIT/MISS stays on screen.
+      if (shot.reason === 'reloading') hud.setResult(RELOADING_TEXT);
+      else if (shot.reason === 'empty') {
+        playDryFire(audio);
+        hud.setResult('Empty – press R to reload');
+      }
       return;
     }
-    ammo -= 1;
-    hud.setRounds(ammo, rifle.magazine, false);
+    hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(SHOOTER_POS, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
     playShot(audio, config.rifle);
-    if (ammo > 0) playBoltCycle(audio);
+    if (shot.boltCycle) playBoltCycle(audio, BOLT_TIME_S);
     hud.setResult('Shot away…');
   }
 
   function reload(): void {
-    if (reloadRemaining > 0 || ammo >= rifle.magazine) return;
-    reloadRemaining = RELOAD_TIME;
-    hud.setRounds(ammo, rifle.magazine, true);
-    playReload(audio, RELOAD_TIME);
+    if (!weapon.reload()) return;
+    hud.setRounds(weapon.ammo, weapon.magazine, true);
+    playReload(audio, RELOAD_TIME_S);
   }
 
   function onImpact(event: ImpactEvent): void {
@@ -186,7 +195,7 @@ function start(): void {
 
   // The hook calls the handlers directly: it needs no pointer lock and does not touch InputState.
   if (import.meta.env.DEV || new URLSearchParams(window.location.search).get('debug') === '1') {
-    window.__game = { toggleScope, zoom, fire, reload };
+    window.__game = { toggleScope, zoom, fire, reload, unlockAudio };
   }
 
   window.addEventListener('resize', () => {
@@ -208,13 +217,10 @@ function start(): void {
     dummy.update(dt);
     dust.update(dt);
 
-    if (reloadRemaining > 0) {
-      reloadRemaining -= dt;
-      if (reloadRemaining <= 0) {
-        reloadRemaining = 0;
-        ammo = rifle.magazine;
-        hud.setRounds(ammo, rifle.magazine, false);
-      }
+    refreshSound(); // the context starts (or is suspended) asynchronously
+    if (weapon.update(dt)) {
+      hud.setRounds(weapon.ammo, weapon.magazine, false);
+      if (hud.resultText === RELOADING_TEXT) hud.setResult(''); // do not leave a stale message
     }
 
     renderer.render(scene, view.camera);

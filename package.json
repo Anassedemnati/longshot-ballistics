@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "gen:reference": "node scripts/gen-reference.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "smoke": "npm run clean && npm run build && node scripts/smoke.mjs"
   },
   "dependencies": {
     "three": "0.187.0"

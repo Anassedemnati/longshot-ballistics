@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   DUMMY_BOXES,
   DUMMY_HEAD,
+  FALL_DURATION,
   MAX_OVERHANG,
+  RESET_DELAY,
   createTargetDummy,
   dummyHitSpheres,
 } from '../../src/scene/target';
+import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
 
 const RANGE = 800;
@@ -119,5 +122,133 @@ describe('dummy hit zones match the visible dummy', () => {
       }
     }
     expect(worst).toEqual([]);
+  });
+});
+
+describe('dummy fall and reset', () => {
+  const groundY = terrainHeight(0, -RANGE);
+
+  function standing() {
+    const dummy = createTargetDummy(RANGE);
+    expect(dummy.down).toBe(false);
+    return dummy;
+  }
+
+  it('stands upright until it is knocked down', () => {
+    const dummy = standing();
+    dummy.update(10);
+    expect(dummy.down).toBe(false);
+    expect(dummy.group.rotation.x).toBe(0);
+    expect(dummy.group.position.y).toBe(groundY);
+  });
+
+  it('tips over backwards and lies on the sand once the fall is over', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    expect(dummy.down).toBe(true);
+    dummy.update(FALL_DURATION);
+    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    expect(dummy.group.position.y).toBeGreaterThan(groundY);
+    expect(dummy.down).toBe(true);
+  });
+
+  it('stays down for 3 s after it has finished falling, then stands up again by itself', () => {
+    expect(RESET_DELAY).toBe(3);
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION);
+    dummy.update(RESET_DELAY - 0.1);
+    expect(dummy.down).toBe(true);
+    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    dummy.update(0.1);
+    expect(dummy.down).toBe(false);
+    expect(dummy.group.rotation.x).toBe(0);
+    expect(dummy.group.position.y).toBe(groundY);
+  });
+
+  it('counts the 3 s from the end of the fall, not from the knock-down', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION / 2);
+    dummy.update(RESET_DELAY); // only half the fall + 3 s since the knock-down
+    expect(dummy.down).toBe(true);
+    dummy.update(FALL_DURATION / 2 + 0.01);
+    expect(dummy.down).toBe(false);
+  });
+
+  it('works with small frame steps', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    let t = 0;
+    while (dummy.down && t < 10) {
+      dummy.update(1 / 60);
+      t += 1 / 60;
+    }
+    expect(dummy.down).toBe(false);
+    expect(t).toBeCloseTo(FALL_DURATION + RESET_DELAY, 1);
+  });
+
+  it('reset() stands it up at once, mid-fall or lying', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION / 2);
+    dummy.reset();
+    expect(dummy.down).toBe(false);
+    expect(dummy.group.rotation.x).toBe(0);
+    expect(dummy.group.position.y).toBe(groundY);
+
+    dummy.knockDown();
+    dummy.update(FALL_DURATION + 1);
+    dummy.reset();
+    expect(dummy.down).toBe(false);
+    expect(dummy.group.rotation.x).toBe(0);
+    expect(dummy.group.position.y).toBe(groundY);
+  });
+
+  it('can be knocked down again after a reset and falls and resets again', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION + RESET_DELAY);
+    expect(dummy.down).toBe(false);
+
+    dummy.knockDown();
+    expect(dummy.down).toBe(true);
+    dummy.update(FALL_DURATION / 2);
+    expect(dummy.group.rotation.x).toBeLessThan(0);
+    expect(dummy.group.rotation.x).toBeGreaterThan(-Math.PI / 2);
+    dummy.update(FALL_DURATION / 2);
+    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    dummy.update(RESET_DELAY);
+    expect(dummy.down).toBe(false);
+  });
+
+  it('a second knock-down while it is already down does not restart the timers', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION + RESET_DELAY - 0.5);
+    dummy.knockDown();
+    dummy.update(0.5);
+    expect(dummy.down).toBe(false);
+  });
+
+  it('ignores zero, negative and non-finite frame times', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    for (const dt of [0, -1, NaN, Infinity]) dummy.update(dt);
+    expect(dummy.group.rotation.x).toBe(0); // the fall has not started
+    expect(dummy.down).toBe(true);
+    dummy.update(FALL_DURATION);
+    for (const dt of [-5, NaN, Infinity]) dummy.update(dt);
+    expect(dummy.down).toBe(true);
+  });
+
+  it('shots hit it again once it has stood back up', () => {
+    // The game offers the hit spheres to the bullets only while `down` is false.
+    const dummy = standing();
+    dummy.knockDown();
+    dummy.update(FALL_DURATION + RESET_DELAY);
+    const targets = dummy.down ? [] : [dummy.hitTarget];
+    expect(targets).toHaveLength(1);
+    expect(targets[0].zones[0].center.y).toBeCloseTo(groundY + DUMMY_HEAD.cy, 9);
   });
 });

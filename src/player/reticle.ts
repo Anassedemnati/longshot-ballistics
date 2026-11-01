@@ -15,6 +15,14 @@ const NUMBERED_MILS = [2, 4, 6, 8, 10];
 const TICK_HALF_MIL = 0.25;
 const TICK_HALF_NUMBERED = 0.4;
 const TICK_HALF_HALF_MIL = 0.12;
+/**
+ * Shortest half-length of each kind of tick, CSS px. At low zoom a mil is only ~5 px, so the true
+ * lengths (0.1-0.4 mil) would be 1-2 px and vanish; bigger marks keep a longer floor so the half-mil,
+ * full-mil and numbered ticks stay distinguishable.
+ */
+const TICK_MIN_HALF_MIL_PX = 3;
+const TICK_MIN_FULL_MIL_PX = 4;
+const TICK_MIN_NUMBERED_PX = 5;
 
 /** Stroke widths, CSS px, scaled from mils but never thinner than the minimum so lines stay visible. */
 const THIN_MIL = 0.04;
@@ -24,6 +32,7 @@ const POST_MIN_PX = 2;
 const LABEL_MIL = 0.6;
 const LABEL_MIN_PX = 9;
 const LABEL_GAP_MIL = 0.15;
+const LABEL_MIN_GAP_PX = 2;
 
 const INK = '#000';
 
@@ -52,6 +61,11 @@ export function drawReticle(
   const cy = cssHeight / 2;
   const px = (mils: number): number => milToPixels(mils, vfovRad, cssHeight);
 
+  const tickHalf = {
+    halfMil: Math.max(TICK_MIN_HALF_MIL_PX, px(TICK_HALF_HALF_MIL)),
+    fullMil: Math.max(TICK_MIN_FULL_MIL_PX, px(TICK_HALF_MIL)),
+    numbered: Math.max(TICK_MIN_NUMBERED_PX, px(TICK_HALF_NUMBERED)),
+  };
   const thin = Math.max(THIN_MIN_PX, px(THIN_MIL));
   const post = Math.max(POST_MIN_PX, px(POST_MIL));
   const reach = px(HASH_MAX_MIL);
@@ -73,8 +87,10 @@ export function drawReticle(
     const isFullMil = half % 2 === 0;
     if (!isFullMil && mil > HALF_MIL_MAX) continue;
     const halfLength = isFullMil
-      ? px(NUMBERED_MILS.includes(mil) ? TICK_HALF_NUMBERED : TICK_HALF_MIL)
-      : px(TICK_HALF_HALF_MIL);
+      ? NUMBERED_MILS.includes(mil)
+        ? tickHalf.numbered
+        : tickHalf.fullMil
+      : tickHalf.halfMil;
     const d = px(mil);
     for (const sign of [-1, 1]) {
       // Ticks across the vertical stem (horizontal dashes) ...
@@ -100,7 +116,7 @@ export function drawReticle(
   ctx.font = `${labelPx}px sans-serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const labelX = cx + px(TICK_HALF_NUMBERED + LABEL_GAP_MIL);
+  const labelX = cx + tickHalf.numbered + Math.max(LABEL_MIN_GAP_PX, px(LABEL_GAP_MIL));
   // At low zoom the numbers are closer together than their own height and would overprint.
   if (px(NUMBERED_MILS[0]) >= labelPx) {
     for (const mil of NUMBERED_MILS) {

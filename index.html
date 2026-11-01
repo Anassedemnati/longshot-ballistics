@@ -16,7 +16,10 @@
       .hud-wind-arrow { display: inline-block; }
       .hud-result { position: absolute; left: 0; right: 0; bottom: 12%; text-align: center; font-size: 28px; letter-spacing: 0.04em; }
       .hud-dot { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); box-shadow: 0 0 2px #000; }
-      .hud-hint { position: absolute; left: 0; right: 0; top: 22%; text-align: center; font-size: 16px; }
+      /* At the very bottom, below the lens (the lens leaves >= 4% of the height there), so it never covers the reticle. */
+      .hud-hint { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); max-width: 98vw; padding: 1px 12px;
+        white-space: nowrap; text-align: center; font-size: clamp(10px, 1.3vw, 14px); line-height: 1.3;
+        background: rgba(0, 0, 0, 0.35); border-radius: 6px; }
       [hidden] { display: none !important; }
 
       /* Scope: black everywhere except a round lens; the reticle canvas is clipped to the lens. */

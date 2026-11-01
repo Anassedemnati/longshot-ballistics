@@ -7,7 +7,11 @@ const VEST_COLOR = 0x3f3a26;
 const BOOT_COLOR = 0x2b251a;
 
 /** Time to tip over backwards, s. */
-const FALL_DURATION = 0.4;
+export const FALL_DURATION = 0.4;
+/** How long the body lies on the sand after the fall before the dummy stands up again, s. */
+export const RESET_DELAY = 3;
+/** Summed frame times can fall a hair short of a whole number of seconds. */
+const TIMER_EPSILON = 1e-9;
 /** After falling the body lies on its back; this lifts it so it rests on the sand, m. */
 const LYING_LIFT = 0.1;
 
@@ -198,11 +202,16 @@ export interface TargetDummy {
   group: THREE.Group;
   /** World-space hit spheres; read by the BulletSystem. */
   hitTarget: HitTarget;
-  /** True once knockDown() has been called; the zones no longer describe where the body is. */
+  /**
+   * True from knockDown() until the dummy stands up again; the zones do not describe where the body
+   * is meanwhile, so the game offers no hit target while it is down.
+   */
   readonly down: boolean;
-  /** Start tipping over backwards (away from the shooter) over 0.4 s. */
+  /** Start tipping over backwards (away from the shooter) over 0.4 s. Does nothing while already down. */
   knockDown(): void;
-  /** Advance the fall animation by frameDt seconds. */
+  /** Stand it up again at once (upright, down = false), whatever state it is in. */
+  reset(): void;
+  /** Advance the fall animation by frameDt seconds; it resets itself RESET_DELAY s after the fall ended. */
   update(frameDt: number): void;
 }
 
@@ -235,11 +244,20 @@ export function createTargetDummy(range: number): TargetDummy {
 
   let down = false;
   let fallTime = 0;
+  /** Seconds the body has been lying still since the fall finished. */
+  let lyingTime = 0;
 
   const apply = (t: number): void => {
     const eased = t * t; // starts slow, accelerates like a falling body
-    group.rotation.x = -eased * (Math.PI / 2); // top swings toward -Z, away from the shooter
+    group.rotation.x = 0 - eased * (Math.PI / 2); // top swings toward -Z, away from the shooter
     group.position.y = groundY + eased * LYING_LIFT;
+  };
+
+  const reset = (): void => {
+    down = false;
+    fallTime = 0;
+    lyingTime = 0;
+    apply(0);
   };
 
   return {
@@ -251,10 +269,21 @@ export function createTargetDummy(range: number): TargetDummy {
     knockDown() {
       down = true;
     },
+    reset,
     update(frameDt: number) {
-      if (!down || fallTime >= FALL_DURATION) return;
-      if (Number.isFinite(frameDt) && frameDt > 0) fallTime = Math.min(FALL_DURATION, fallTime + frameDt);
-      apply(fallTime / FALL_DURATION);
+      if (!down) return;
+      let dt = Number.isFinite(frameDt) && frameDt > 0 ? frameDt : 0;
+      if (fallTime < FALL_DURATION) {
+        const remaining = FALL_DURATION - fallTime;
+        const step = Math.min(dt, remaining);
+        fallTime = step >= remaining ? FALL_DURATION : fallTime + step;
+        dt -= step; // what is left of this frame counts as lying time
+        apply(fallTime / FALL_DURATION);
+      }
+      if (fallTime >= FALL_DURATION) {
+        lyingTime += dt;
+        if (lyingTime >= RESET_DELAY - TIMER_EPSILON) reset();
+      }
     },
   };
 }
