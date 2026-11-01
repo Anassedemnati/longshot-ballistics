@@ -34,6 +34,23 @@ const MAX_FRAME_DT = 0.1;
 /** Height of the aim point on the dummy (chest), m above its feet. */
 const CHEST_HEIGHT = 1.35;
 
+/**
+ * Debug/automation hook, `window.__game`: the same functions the mouse and keys call. Only exposed
+ * in dev builds or with `?debug=1` in the URL (the headless smoke check uses it).
+ */
+interface GameDebugHook {
+  toggleScope(): void;
+  zoom(notches: number): void;
+  fire(): void;
+  reload(): void;
+}
+
+declare global {
+  interface Window {
+    __game?: GameDebugHook;
+  }
+}
+
 function start(): void {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
@@ -166,6 +183,11 @@ function start(): void {
     },
     (locked) => hud.setHintVisible(!locked),
   );
+
+  // The hook calls the handlers directly: it needs no pointer lock and does not touch InputState.
+  if (import.meta.env.DEV || new URLSearchParams(window.location.search).get('debug') === '1') {
+    window.__game = { toggleScope, zoom, fire, reload };
+  }
 
   window.addEventListener('resize', () => {
     resizeRenderer(renderer, window.innerWidth, window.innerHeight);
