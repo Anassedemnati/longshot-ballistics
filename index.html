@@ -6,6 +6,24 @@
     <title>Desert Sniper</title>
     <style>
       html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #app { position: fixed; inset: 0; color: #fff; font: 16px sans-serif; }
+
+      /* HUD: never intercepts the mouse (clicks go to the canvas). */
+      .hud, .scope-overlay { position: fixed; inset: 0; pointer-events: none; user-select: none; }
+      .hud { font: 600 14px/1.4 system-ui, sans-serif; color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
+      .hud-panel { position: absolute; top: 14px; left: 16px; padding: 8px 12px; background: rgba(0, 0, 0, 0.35); border-radius: 6px; }
+      .hud-wind-arrow { display: inline-block; }
+      .hud-result { position: absolute; left: 0; right: 0; bottom: 12%; text-align: center; font-size: 28px; letter-spacing: 0.04em; }
+      .hud-dot { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); box-shadow: 0 0 2px #000; }
+      .hud-hint { position: absolute; left: 0; right: 0; top: 22%; text-align: center; font-size: 16px; }
+      [hidden] { display: none !important; }
+
+      /* Scope: black everywhere except a round lens; the reticle canvas is clipped to the lens. */
+      .scope-overlay { z-index: 5; }
+      .scope-lens { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%;
+        box-shadow: 0 0 0 100vmax #000, inset 0 0 36px 8px rgba(0, 0, 0, 0.55); }
+      .scope-reticle { position: absolute; left: 0; top: 0; }
+      .hud { z-index: 10; }
     </style>
   </head>
   <body>

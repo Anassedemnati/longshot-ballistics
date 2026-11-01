@@ -101,7 +101,10 @@ export function drawReticle(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   const labelX = cx + px(TICK_HALF_NUMBERED + LABEL_GAP_MIL);
-  for (const mil of NUMBERED_MILS) {
-    ctx.fillText(String(mil), labelX, cy + px(mil));
+  // At low zoom the numbers are closer together than their own height and would overprint.
+  if (px(NUMBERED_MILS[0]) >= labelPx) {
+    for (const mil of NUMBERED_MILS) {
+      ctx.fillText(String(mil), labelX, cy + px(mil));
+    }
   }
 }
