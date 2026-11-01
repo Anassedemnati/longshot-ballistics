@@ -1,51 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DESERT_ATMO } from '../../src/ballistics/atmosphere';
-import { RIFLES } from '../../src/ballistics/rifles';
-import { findZeroElevation, simulateToRanges } from '../../src/ballistics/trajectory';
-import type { WindField } from '../../src/ballistics/types';
-import { muzzleLaunch } from '../../src/game/aim';
-import { BulletSystem } from '../../src/game/bullets';
-import type { ImpactEvent } from '../../src/game/bullets';
 import { createTargetDummy } from '../../src/scene/target';
-import { SHOOTER_POS, terrainHeight } from '../../src/scene/terrainHeight';
+import { terrainHeight } from '../../src/scene/terrainHeight';
+import { shootAtDummy } from '../helpers/shoot';
 
-const NO_WIND: WindField = () => ({ x: 0, y: 0, z: 0 });
-const RIFLE = RIFLES['308'];
-const ZERO = findZeroElevation(RIFLE, DESERT_ATMO);
-
-/** Absolute barrel elevation (rad) that puts the bullet at `dy` metres above the eye at `range`. */
-function elevationFor(range: number, dy: number): number {
-  let lo = -0.3; // at 100 m the target is 6 degrees below the horizon
-  let hi = 0.06;
-  for (let i = 0; i < 60; i++) {
-    const mid = 0.5 * (lo + hi);
-    const [sample] = simulateToRanges(RIFLE, DESERT_ATMO, NO_WIND, mid, [range]);
-    if (sample.height < dy) lo = mid;
-    else hi = mid;
-  }
-  return 0.5 * (lo + hi);
-}
-
-function shoot(range: number, chestOffset = 0): ImpactEvent[] {
-  const dummy = createTargetDummy(range);
-  const bullets = new BulletSystem({
-    atmo: DESERT_ATMO,
-    wind: NO_WIND,
-    terrainHeight,
-    targets: () => (dummy.down ? [] : [dummy.hitTarget]),
-  });
-  const chestY = terrainHeight(0, -range) + 1.35 + chestOffset;
-  const elevation = elevationFor(range, chestY - SHOOTER_POS.y);
-  // Look straight down the lane, pitched so the bore (not the sight line) has `elevation`.
-  const pitch = elevation - ZERO;
-  const forward = { x: 0, y: Math.sin(pitch), z: -Math.cos(pitch) };
-  const up = { x: 0, y: Math.cos(pitch), z: Math.sin(pitch) };
-  const { origin, velocity } = muzzleLaunch(SHOOTER_POS, forward, up, RIFLE, ZERO);
-  bullets.fire(origin, velocity, RIFLE.bcG7);
-  const events: ImpactEvent[] = [];
-  for (let i = 0; i < 400 && events.length === 0; i++) events.push(...bullets.update(0.016));
-  return events;
-}
+/** Fire at the chest (1.35 m up) plus an offset. */
+const shoot = (range: number, chestOffset = 0) => shootAtDummy(range, 0, 1.35 + chestOffset);
 
 describe('range lane end to end', () => {
   for (const range of [100, 450, 800, 1200, 1500]) {
@@ -81,7 +40,10 @@ describe('range lane end to end', () => {
     const ground = terrainHeight(0, -650);
     expect(dummy.group.position.z).toBe(-650);
     expect(dummy.group.position.y).toBe(ground);
-    const zones = Object.fromEntries(dummy.hitTarget.zones.map((z) => [z.name, z]));
+    // The first sphere of each zone name is the one from the brief (more spheres follow it).
+    const zones = Object.fromEntries(
+      [...dummy.hitTarget.zones].reverse().map((z) => [z.name, z]),
+    );
     expect(zones.head.radius).toBe(0.12);
     expect(zones.head.center.y).toBeCloseTo(ground + 1.65, 9);
     expect(zones.upperTorso.radius).toBe(0.22);
