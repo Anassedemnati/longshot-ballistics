@@ -2,6 +2,9 @@
 // mission layout (aim points, upright bounds) are all built from these numbers, so they cannot drift apart.
 
 export const DUMMY_KHAKI = 0x70623f;
+
+/** Hit spheres may stick out past the visible silhouette by at most this, m (the soldier's and the sniper's alike). */
+export const MAX_OVERHANG = 0.03;
 const VEST_COLOR = 0x3f3a26;
 const BOOT_COLOR = 0x2b251a;
 

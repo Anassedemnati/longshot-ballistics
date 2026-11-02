@@ -7,6 +7,7 @@ import {
   DUMMY_HEAD,
   DUMMY_KHAKI,
   LEG_X,
+  MAX_OVERHANG,
   LOWER_TORSO_CY,
   PELVIS,
   UPPER_TORSO_CY,
@@ -18,7 +19,7 @@ import {
 import { terrainHeight } from './terrainHeight';
 
 // The pure dummy dimensions live in mission/dummyDims.ts (the mission layout uses them too).
-export { DUMMY_BOXES, DUMMY_HEAD } from '../mission/dummyDims';
+export { DUMMY_BOXES, DUMMY_HEAD, MAX_OVERHANG } from '../mission/dummyDims';
 export type { DummyBox } from '../mission/dummyDims';
 
 /** Time to tip over backwards, s. */
@@ -38,8 +39,6 @@ const BASE_ZONES: ReadonlyArray<{ name: ZoneName; radius: number; cy: number }> 
   { name: 'limbs', radius: 0.15, cy: 0.5 },
 ];
 
-/** Hit spheres may stick out past the visible silhouette by at most this, m. */
-export const MAX_OVERHANG = 0.03;
 /** Coverage margin: every point of a covered face is at least this far inside some sphere, m. */
 const COVER_MARGIN = 0.002;
 const MAX_SPHERES_PER_AXIS = 16;

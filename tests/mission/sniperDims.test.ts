@@ -11,6 +11,8 @@ import {
 } from '../../src/mission/sniperDims';
 import { segmentBox } from '../../src/game/hit';
 import { createRng } from '../../src/mission/random';
+import { MAX_OVERHANG } from '../../src/mission/dummyDims';
+import { SNIPER_SPHERES_FOR } from '../../src/mission/sniperSpheres';
 
 describe('sniper hit spheres', () => {
   it('cover every point of every body part', () => {
@@ -43,25 +45,110 @@ describe('sniper hit spheres', () => {
     expect(sniperHitSpheres()[0].name).toBe('head');
   });
 
-  it('overhang the visible body only slightly', () => {
-    const rho = (zone: string): number => Math.max(...SNIPER_PARTS.filter((p) => p.zone === zone).map((p) => Math.max(p.rx, p.ry)));
-    for (const s of sniperHitSpheres()) expect(s.radius).toBeLessThanOrEqual(rho(s.name) * 1.15 + 1e-9);
+  it('are few enough for a cheap bullet test', () => {
+    expect(sniperHitSpheres().length).toBeLessThan(80);
   });
 
-  it('are few enough for a cheap bullet test', () => {
-    expect(sniperHitSpheres().length).toBeLessThan(40);
+  it('come from a table made for the current part dimensions', () => {
+    expect(SNIPER_SPHERES_FOR).toHaveLength(SNIPER_PARTS.length);
+    SNIPER_PARTS.forEach((p, i) => {
+      expect(SNIPER_SPHERES_FOR[i], `part ${i}`).toEqual([p.cx, p.cy, p.cz, p.rx, p.ry, p.rz, MAX_OVERHANG]);
+    });
   });
 
   it('lie inside the body bounds, give or take the overhang', () => {
     const b = SNIPER_BOUNDS;
     for (const s of sniperHitSpheres()) {
-      expect(s.x - s.radius).toBeGreaterThanOrEqual(b.cx - b.hx - 0.06);
-      expect(s.x + s.radius).toBeLessThanOrEqual(b.cx + b.hx + 0.06);
-      expect(s.y + s.radius).toBeLessThanOrEqual(b.cy + b.hy + 0.06);
-      expect(s.z - s.radius).toBeGreaterThanOrEqual(b.cz - b.hz - 0.06);
-      expect(s.z + s.radius).toBeLessThanOrEqual(b.cz + b.hz + 0.06);
+      expect(s.x - s.radius).toBeGreaterThanOrEqual(b.cx - b.hx - MAX_OVERHANG - 1e-9);
+      expect(s.x + s.radius).toBeLessThanOrEqual(b.cx + b.hx + MAX_OVERHANG + 1e-9);
+      expect(s.y + s.radius).toBeLessThanOrEqual(b.cy + b.hy + MAX_OVERHANG + 1e-9);
+      expect(s.z - s.radius).toBeGreaterThanOrEqual(b.cz - b.hz - MAX_OVERHANG - 1e-9);
+      expect(s.z + s.radius).toBeLessThanOrEqual(b.cz + b.hz + MAX_OVERHANG + 1e-9);
     }
   });
+});
+
+/**
+ * The body seen from the front (a bullet from the shooter: x, y) and from above (a shooter on a hill: x, z): the
+ * union of the parts' ellipse outlines on a fine grid, to compare with the discs the hit spheres cast.
+ */
+describe('sniper hit spheres against the drawn silhouettes', () => {
+  const GRID = 0.0025;
+  /** The grid's own error: a distance to the nearest silhouette cell can be this much more than to the true outline. */
+  const GRID_SLACK = GRID * Math.SQRT1_2 + 1e-9;
+  const views = [
+    { name: 'front', axis: (p: { rz: number; ry: number }) => p.ry, third: 'y' as const },
+    { name: 'top', axis: (p: { rz: number; ry: number }) => p.rz, third: 'z' as const },
+  ];
+
+  for (const view of views) {
+    describe(view.name, () => {
+      // Which cells (u, v) = (x, y) or (x, z) of the grid lie inside some part's ellipse.
+      const centre = (p: (typeof SNIPER_PARTS)[number]): [number, number] => [p.cx, view.third === 'y' ? p.cy : p.cz];
+      const lo = [-0.5, view.third === 'y' ? 0 : -1.7];
+      const hi = [0.5, view.third === 'y' ? 0.6 : 0.3];
+      const nu = Math.round((hi[0] - lo[0]) / GRID);
+      const nv = Math.round((hi[1] - lo[1]) / GRID);
+      const inside = new Uint8Array(nu * nv);
+      for (let i = 0; i < nu; i++) {
+        for (let j = 0; j < nv; j++) {
+          const u = lo[0] + (i + 0.5) * GRID;
+          const v = lo[1] + (j + 0.5) * GRID;
+          inside[i * nv + j] = SNIPER_PARTS.some((p) => {
+            const [cu, cv] = centre(p);
+            return ((u - cu) / p.rx) ** 2 + ((v - cv) / view.axis(p)) ** 2 <= 1;
+          })
+            ? 1
+            : 0;
+        }
+      }
+      const project = (s: { x: number; y: number; z: number }): [number, number] => [s.x, view.third === 'y' ? s.y : s.z];
+
+      it('every point of the silhouette (a 2.5 mm grid) is inside the disc of some sphere', () => {
+        const discs = sniperHitSpheres().map((s) => ({ c: project(s), r: s.radius }));
+        let cells = 0;
+        const missed: string[] = [];
+        for (let i = 0; i < nu; i++) {
+          for (let j = 0; j < nv; j++) {
+            if (!inside[i * nv + j]) continue;
+            cells++;
+            const u = lo[0] + (i + 0.5) * GRID;
+            const v = lo[1] + (j + 0.5) * GRID;
+            if (!discs.some((d) => Math.hypot(u - d.c[0], v - d.c[1]) <= d.r)) missed.push(`(${u.toFixed(3)}, ${v.toFixed(3)})`);
+          }
+        }
+        expect(cells).toBeGreaterThan(20000);
+        expect(missed.slice(0, 5)).toEqual([]);
+      });
+
+      it(`no sphere's disc reaches more than ${MAX_OVERHANG * 100} cm past the silhouette`, () => {
+        const reach = Math.ceil((MAX_OVERHANG + GRID_SLACK) / GRID) + 1;
+        /** True when some silhouette cell centre lies within `d` of (u, v). */
+        const within = (u: number, v: number, d: number): boolean => {
+          const ci = Math.floor((u - lo[0]) / GRID);
+          const cj = Math.floor((v - lo[1]) / GRID);
+          for (let i = Math.max(0, ci - reach); i <= Math.min(nu - 1, ci + reach); i++) {
+            for (let j = Math.max(0, cj - reach); j <= Math.min(nv - 1, cj + reach); j++) {
+              if (inside[i * nv + j] && Math.hypot(u - (lo[0] + (i + 0.5) * GRID), v - (lo[1] + (j + 0.5) * GRID)) <= d) return true;
+            }
+          }
+          return false;
+        };
+        const over: string[] = [];
+        for (const s of sniperHitSpheres()) {
+          const [cu, cv] = project(s);
+          for (let k = 0; k < 120; k++) {
+            const a = (k / 120) * 2 * Math.PI;
+            const u = cu + Math.cos(a) * s.radius;
+            const v = cv + Math.sin(a) * s.radius;
+            if (view.third === 'y' && v < 0) continue; // below the ground: nobody sees it
+            if (!within(u, v, MAX_OVERHANG + GRID_SLACK)) over.push(`${s.name} sphere (${s.x}, ${s.y}, ${s.z}) r${s.radius} at (${u.toFixed(3)}, ${v.toFixed(3)})`);
+          }
+        }
+        expect(over.slice(0, 5)).toEqual([]);
+      });
+    });
+  }
 });
 
 describe('sniper bounds', () => {
