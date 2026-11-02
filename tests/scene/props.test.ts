@@ -10,7 +10,7 @@ import { createRng } from '../../src/mission/random';
 import type { ThemeId } from '../../src/mission/themes';
 import { SmokeColumn } from '../../src/fx/smoke';
 import { SPARK_LIFETIME, SparkSystem } from '../../src/fx/sparks';
-import { createPropMesh } from '../../src/scene/props';
+import { createPropMesh, propParts } from '../../src/scene/props';
 import { createSky } from '../../src/scene/sky';
 import { FALL_DURATION, createTargetDummy, dummyHitSpheres } from '../../src/scene/target';
 import { terrainHeight } from '../../src/scene/terrainHeight';
@@ -38,22 +38,6 @@ function boxCorners(b: ReturnType<typeof toWorldBox>): Vec3[] {
   return out;
 }
 
-/** The 8 world-space corners of a mesh's geometry bounding box. */
-function meshCorners(mesh: THREE.Mesh): Vec3[] {
-  mesh.geometry.computeBoundingBox();
-  const bb = mesh.geometry.boundingBox as THREE.Box3;
-  const out: Vec3[] = [];
-  for (const x of [bb.min.x, bb.max.x]) {
-    for (const y of [bb.min.y, bb.max.y]) {
-      for (const z of [bb.min.z, bb.max.z]) {
-        const v = new THREE.Vector3(x, y, z).applyMatrix4(mesh.matrixWorld);
-        out.push({ x: v.x, y: v.y, z: v.z });
-      }
-    }
-  }
-  return out;
-}
-
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 function meshesOf(group: THREE.Group): THREE.Mesh[] {
@@ -64,56 +48,105 @@ function meshesOf(group: THREE.Group): THREE.Mesh[] {
   return out;
 }
 
+/** World positions of every vertex of a mesh. */
+function meshVertices(mesh: THREE.Mesh): Vec3[] {
+  const pos = mesh.geometry.getAttribute('position');
+  const out: Vec3[] = [];
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+    out.push({ x: v.x, y: v.y, z: v.z });
+  }
+  return out;
+}
+
+/** True when the local-frame point lies in one of the boxes grown by `margin` m. */
+function insideAnyBox(p: Vec3, boxes: ReadonlyArray<{ center: Vec3; halfSize: Vec3 }>, margin: number): boolean {
+  return boxes.some(
+    (b) =>
+      Math.abs(p.x - b.center.x) <= b.halfSize.x + margin + 1e-6 &&
+      Math.abs(p.y - b.center.y) <= b.halfSize.y + margin + 1e-6 &&
+      Math.abs(p.z - b.center.z) <= b.halfSize.z + margin + 1e-6,
+  );
+}
+
 describe('prop meshes are built from the collider boxes', () => {
   for (const theme of THEMES) {
     for (const kind of KINDS) {
-      it(`${kind} (${theme}): every collider box has a mesh with the same corners (1 mm); decorations stay inside the colliders or under the ground`, () => {
+      it(`${kind} (${theme}): every collider box is in exactly one mesh with its corners (1 mm); every other vertex stays within 3 cm of a collider or under the ground`, () => {
         const p: PropPlacement = { id: `p-${kind}`, kind, x: 37, z: -612, yaw: 0.7 };
         const groundY = 3.2;
         const group = createPropMesh(p, groundY, theme);
         group.updateMatrixWorld(true);
         const meshes = meshesOf(group);
         const boxes = propBoxes(kind);
-
-        const tagged = meshes.filter((m) => m.userData.boxIndex !== undefined);
-        expect(tagged).toHaveLength(boxes.length);
         const expectedBoxes = boxes.map((b) => toWorldBox(b, p.x, p.z, p.yaw, groundY));
-        boxes.forEach((b, i) => {
-          const mesh = tagged.find((m) => m.userData.boxIndex === i);
-          expect(mesh, `${kind} box ${i}`).toBeDefined();
-          expect(mesh?.userData.part).toBe(b.part);
-          const have = meshCorners(mesh as THREE.Mesh);
+
+        boxes.forEach((_b, i) => {
+          const holders = meshes.filter((m) => (m.userData.boxes as number[]).includes(i));
+          expect(holders, `${kind} box ${i}`).toHaveLength(1);
+          const have = meshVertices(holders[0]);
           for (const corner of boxCorners(expectedBoxes[i])) {
             expect(Math.min(...have.map((h) => dist(h, corner))), `${kind} box ${i} corner`).toBeLessThan(0.001);
           }
         });
 
-        // Anything else is a decoration: a thin skin flush with a collider (<= 3 cm proud) or below the ground.
-        const decor = meshes.filter((m) => m.userData.boxIndex === undefined);
-        for (const m of decor) {
-          const corners = meshCorners(m);
-          const underground = corners.every((c) => c.y <= groundY + 1e-6);
-          if (underground) continue;
-          for (const c of corners) {
-            const inside = expectedBoxes.some((b) => {
-              const cs = Math.cos(b.yaw);
-              const sn = Math.sin(b.yaw);
-              const dx = c.x - b.center.x;
-              const dz = c.z - b.center.z;
-              const lx = cs * dx - sn * dz;
-              const lz = sn * dx + cs * dz;
-              return (
-                Math.abs(lx) <= b.halfSize.x + 0.03 + 1e-6 &&
-                Math.abs(c.y - b.center.y) <= b.halfSize.y + 0.03 + 1e-6 &&
-                Math.abs(lz) <= b.halfSize.z + 0.03 + 1e-6
-              );
-            });
-            expect(inside, `${kind} decoration "${m.name}" sticks out of the colliders`).toBe(true);
+        // Every vertex of every mesh (collider boxes and decorations alike): within 3 cm of a collider, or below the ground.
+        const local = new THREE.Vector3();
+        for (const m of meshes) {
+          const pos = m.geometry.getAttribute('position');
+          for (let i = 0; i < pos.count; i++) {
+            local.fromBufferAttribute(pos, i); // the meshes sit at the group's origin: geometry coordinates are the prop frame
+            const ok = local.y <= 1e-6 || insideAnyBox({ x: local.x, y: local.y, z: local.z }, boxes, 0.03);
+            expect(ok, `${kind} mesh "${m.name}" vertex ${i} (${local.x.toFixed(3)}, ${local.y.toFixed(3)}, ${local.z.toFixed(3)}) sticks out of the colliders`).toBe(true);
           }
+        }
+      });
+
+      it(`${kind} (${theme}): every decoration part lies within one collider box (+3 cm) or entirely below the ground; the collider parts are the boxes`, () => {
+        const boxes = propBoxes(kind);
+        const parts = propParts(kind, theme);
+        expect(parts.filter((q) => q.box !== undefined).map((q) => q.box)).toEqual(boxes.map((_b, i) => i));
+        for (const q of parts) {
+          if (q.box !== undefined) {
+            expect(q.center).toEqual(boxes[q.box].center);
+            expect(q.half).toEqual(boxes[q.box].halfSize);
+            continue;
+          }
+          const lo = { x: q.center.x - q.half.x, y: q.center.y - q.half.y, z: q.center.z - q.half.z };
+          const hi = { x: q.center.x + q.half.x, y: q.center.y + q.half.y, z: q.center.z + q.half.z };
+          if (hi.y <= 1e-9) continue; // the foundation skirt: entirely under the ground
+          const fits = boxes.some((b) => insideAnyBox(lo, [b], 0.03) && insideAnyBox(hi, [b], 0.03));
+          expect(fits, `${kind} (${theme}) decoration "${q.name}" is not inside a single collider box + 3 cm`).toBe(true);
+          expect(q.half.x > 0 && q.half.y > 0 && q.half.z > 0, `${q.name} is flat`).toBe(true);
         }
       });
     }
   }
+
+  // A prop costs one draw call per mesh plus one more per shadow caster. Before the realism pass a prop was a mesh per
+  // box and per decoration (house 10, wall 3, shed 6, truck 16, jeep 14, shadows included); with far more detail it is now:
+  const BUDGET: Record<PropKind, number> = { house: 7, wall: 2, shed: 7, truck: 7, jeep: 6 };
+  for (const kind of KINDS) {
+    it(`${kind}: at most ${BUDGET[kind]} draw calls (meshes + shadow casters)`, () => {
+      for (const theme of THEMES) {
+        const g = createPropMesh({ id: `d-${kind}`, kind, x: 0, z: -300, yaw: 0 }, 0, theme);
+        const meshes = meshesOf(g);
+        const calls = meshes.length + meshes.filter((m) => m.castShadow).length;
+        expect(calls, `${kind} (${theme})`).toBeLessThanOrEqual(BUDGET[kind]);
+        expect(meshes.length, `${kind} (${theme}) meshes`).toBeLessThanOrEqual(6);
+      }
+    });
+  }
+
+  it('the largest mission (12 buildings: all houses at worst, 7 trucks, 3 vehicle targets) stays far inside the 400 draw call budget', () => {
+    const calls = (kind: PropKind): number => {
+      const meshes = meshesOf(createPropMesh({ id: `l-${kind}`, kind, x: 0, z: -300, yaw: 0 }, 0, 'valley'));
+      return meshes.length + meshes.filter((m) => m.castShadow).length;
+    };
+    const worst = 12 * Math.max(calls('house'), calls('shed'), calls('wall')) + 10 * Math.max(calls('truck'), calls('jeep'));
+    expect(worst).toBeLessThan(200);
+  });
 
   it('sits at the placement (position and yaw) and shares geometry and materials between instances', () => {
     const a = createPropMesh({ id: 'a', kind: 'house', x: 10, z: -300, yaw: 0.4 }, 1, 'desert');
@@ -122,20 +155,24 @@ describe('prop meshes are built from the collider boxes', () => {
     expect(a.position.y).toBe(1);
     expect(a.position.z).toBe(-300);
     expect(a.rotation.y).toBeCloseTo(0.4, 12);
-    const geometries = new Set([...meshesOf(a), ...meshesOf(b)].map((m) => m.geometry));
-    expect(geometries.size).toBeLessThanOrEqual(2);
-    const materials = new Set([...meshesOf(a), ...meshesOf(b)].map((m) => m.material));
-    expect(materials.size).toBeLessThanOrEqual(meshesOf(a).length); // a handful, not one per mesh and instance
+    // Many houses: one geometry per class and lightness shade (3 shades), one material per class.
+    const many = Array.from({ length: 12 }, (_, i) => createPropMesh({ id: `h${i}`, kind: 'house', x: i, z: -300, yaw: 0 }, 0, 'desert'));
+    const all = [a, b, ...many].flatMap(meshesOf);
+    expect(new Set(all.map((m) => m.geometry)).size).toBeLessThanOrEqual(5 * 3);
+    expect(new Set(all.map((m) => m.material)).size).toBeLessThanOrEqual(5);
     const again = createPropMesh({ id: 'a', kind: 'house', x: 0, z: -300, yaw: 0 }, 0, 'desert');
-    const mats = new Set(meshesOf(a).map((m) => m.material));
-    for (const m of meshesOf(again)) expect(mats.has(m.material)).toBe(true);
+    for (const m of meshesOf(again)) {
+      const twin = meshesOf(a).find((x) => x.userData.part === m.userData.part) as THREE.Mesh;
+      expect(m.geometry).toBe(twin.geometry);
+      expect(m.material).toBe(twin.material);
+    }
   });
 
   it('palettes differ per theme: house walls and roofs are coloured by theme', () => {
     const colour = (theme: ThemeId, part: string): number => {
       const g = createPropMesh({ id: 'h', kind: 'house', x: 0, z: -300, yaw: 0 }, 0, theme);
       const m = meshesOf(g).find((x) => x.userData.part === part) as THREE.Mesh;
-      return (m.material as THREE.MeshLambertMaterial).color.getHex();
+      return (m.material as THREE.MeshStandardMaterial).color.getHex();
     };
     for (const part of ['wall', 'roof']) {
       expect(new Set(THEMES.map((t) => colour(t, part))).size).toBe(3);
@@ -145,6 +182,48 @@ describe('prop meshes are built from the collider boxes', () => {
     expect(arctic.r).toBeGreaterThan(0.5);
     const valley = new THREE.Color(colour('valley', 'roof'));
     expect(valley.r).toBeGreaterThan(valley.g * 1.8);
+  });
+
+  it('every geometry has the attributes the materials need: positions, normals, UVs and vertex colours (a missing colour attribute draws black)', () => {
+    for (const theme of THEMES) {
+      for (const kind of KINDS) {
+        const g = createPropMesh({ id: `a-${kind}`, kind, x: 0, z: -300, yaw: 0 }, 0, theme);
+        for (const m of meshesOf(g)) {
+          for (const name of ['position', 'normal', 'uv', 'color']) expect(m.geometry.getAttribute(name), `${kind} ${m.name} ${name}`).toBeDefined();
+          const count = m.geometry.getAttribute('position').count;
+          expect(m.geometry.getAttribute('color').count).toBe(count);
+          const n = m.geometry.getAttribute('normal');
+          for (let i = 0; i < count; i++) expect(Math.hypot(n.getX(i), n.getY(i), n.getZ(i))).toBeCloseTo(1, 5);
+        }
+      }
+    }
+  });
+
+  it('triangles face outwards (counter-clockwise from outside): the geometric normal agrees with the stored normal', () => {
+    for (const kind of KINDS) {
+      const g = createPropMesh({ id: `w-${kind}`, kind, x: 0, z: -300, yaw: 0 }, 0, 'desert');
+      for (const m of meshesOf(g)) {
+        const pos = m.geometry.getAttribute('position');
+        const nor = m.geometry.getAttribute('normal');
+        const idx = m.geometry.getIndex();
+        expect(idx).not.toBeNull();
+        const a = new THREE.Vector3();
+        const b = new THREE.Vector3();
+        const c = new THREE.Vector3();
+        let bad = 0;
+        const index = idx as THREE.BufferAttribute;
+        for (let t = 0; t < index.count; t += 3) {
+          a.fromBufferAttribute(pos, index.getX(t));
+          b.fromBufferAttribute(pos, index.getX(t + 1));
+          c.fromBufferAttribute(pos, index.getX(t + 2));
+          const geo = b.clone().sub(a).cross(c.clone().sub(a));
+          if (geo.lengthSq() < 1e-14) continue; // a degenerate sliver
+          const n = new THREE.Vector3().fromBufferAttribute(nor, index.getX(t)).add(new THREE.Vector3().fromBufferAttribute(nor, index.getX(t + 1))).add(new THREE.Vector3().fromBufferAttribute(nor, index.getX(t + 2)));
+          if (geo.dot(n) <= 0) bad++;
+        }
+        expect(bad, `${kind} ${m.name}: triangles facing inwards`).toBe(0);
+      }
+    }
   });
 });
 

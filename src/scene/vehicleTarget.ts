@@ -6,6 +6,7 @@ import type { VehicleTargetPlacement } from '../mission/layout';
 import { toWorldBox, vehicleTargetBoxes, vehicleTargetColliders } from '../mission/props';
 import type { LocalBox } from '../mission/props';
 import type { ThemeId } from '../mission/themes';
+import { burntMaterial } from './materials';
 import { createPropMesh } from './props';
 
 // A vehicle the player must disable by hitting its engine. The mesh is the prop mesh; the body boxes
@@ -151,13 +152,6 @@ export interface VehicleTarget {
    * removes `group` from its scene.
    */
   dispose(): void;
-}
-
-/** Shared charred bonnet. */
-let burnt: THREE.MeshLambertMaterial | null = null;
-function burntMaterial(): THREE.MeshLambertMaterial {
-  burnt ??= new THREE.MeshLambertMaterial({ color: 0x1d1a17, flatShading: true });
-  return burnt;
 }
 
 export function createVehicleTarget(

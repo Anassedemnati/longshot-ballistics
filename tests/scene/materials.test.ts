@@ -183,7 +183,7 @@ describe('prop materials', () => {
         expect(shader.fragmentShader).toContain('uDirtColor');
         expect(shader.fragmentShader).not.toContain('#include <map_fragment>');
         expect(shader.vertexShader).toContain('vPropY = position.y');
-        for (const u of ['uMapMean', 'uContrast', 'uHueKeep', 'uDirtColor', 'uDirtAmount', 'uDirtHeight']) expect(shader.uniforms[u], u).toBeDefined();
+        for (const u of ['uMapMean', 'uContrast', 'uHueKeep', 'uDirtColor', 'uDirtAmount', 'uDirtHeight', 'uMacro']) expect(shader.uniforms[u], u).toBeDefined();
       }
     }
   });
