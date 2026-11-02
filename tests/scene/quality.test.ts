@@ -79,8 +79,23 @@ describe('FrameGovernor', () => {
     expect(actions[0].kind).toBe('scale');
     expect(actions.slice(0, 3).map((a) => (a.kind === 'scale' ? a.index : -1))).toEqual([1, 2, 3]); // one step each
     expect(g.scale).toBe(SCALE_STEPS[SCALE_STEPS.length - 1]); // and no further than the last step
-    expect(actions[0].t).toBeGreaterThan(40 * 0.03); // after the warm-up frames
+    expect(actions[0].t).toBeGreaterThan(4); // after the start-up seconds, however many frames they held
     for (let i = 1; i < actions.length; i++) expect(actions[i].t - actions[i - 1].t).toBeGreaterThanOrEqual(1.49); // hysteresis: a hold between steps
+  });
+
+  it('the first seconds never count, even at a high frame rate; a few hitches in a fast run do not step it down', () => {
+    const g = new FrameGovernor(false);
+    const clock = { t: 0 };
+    // 3.5 s of hitching frames (loading): nothing happens
+    expect(run(g, 90, 3.5, clock)).toEqual([]);
+    // then fast frames with an occasional 150 ms hitch (a texture upload): still nothing
+    const actions: GovernorAction[] = [];
+    for (let i = 0; i < 400; i++) {
+      const a = g.frame(i % 40 === 0 ? 150 : 12);
+      if (a) actions.push(a);
+    }
+    expect(actions).toEqual([]);
+    expect(g.scale).toBe(1);
   });
 
   it('ignores stalls (a hidden tab, a long compile)', () => {
@@ -93,7 +108,7 @@ describe('FrameGovernor', () => {
   });
 
   it('probes a step up after a while, keeps it when it holds, and takes it back (and asks later) when it does not', () => {
-    const g = new FrameGovernor(false, { probeAfterS: 10 });
+    const g = new FrameGovernor(false, { probeAfterS: 10, warmupS: 0 });
     const clock = { t: 0 };
     const down = run(g, 30, 5, clock); // slow: down
     expect(down.length).toBeGreaterThan(0);
@@ -104,7 +119,7 @@ describe('FrameGovernor', () => {
     // it holds (frames stay fast): no step back down
     expect(probe.filter((a) => a.kind === 'scale' && a.index > level - 1)).toEqual([]);
     // a failing probe: slow again at the higher scale -> back down, and the next probe waits longer
-    const g2 = new FrameGovernor(false, { probeAfterS: 10 });
+    const g2 = new FrameGovernor(false, { probeAfterS: 10, warmupS: 0 });
     const clock2 = { t: 0 };
     run(g2, 30, 5, clock2);
     const idx = g2.scaleIndex;

@@ -78,6 +78,8 @@ export interface GovernorOptions {
   slowMs?: number;
   /** Frames ignored at the start (shader compiles, texture uploads), and per scale change (the targets are reallocated). */
   warmupFrames?: number;
+  /** ... and at least this many seconds at the start, whatever the frame count (the textures, the glTF models and the shader recompiles arrive in the first seconds). */
+  warmupS?: number;
   /** Time between two changes, s, and before the first probe upward. */
   holdS?: number;
   probeAfterS?: number;
@@ -96,6 +98,7 @@ export class FrameGovernor {
   static readonly STALL_MS = 250;
   private readonly slowMs: number;
   private readonly warmupFrames: number;
+  private startupS: number;
   private readonly holdS: number;
   private readonly hopelessMs: number;
   private probeIntervalS: number;
@@ -115,6 +118,7 @@ export class FrameGovernor {
   ) {
     this.slowMs = options.slowMs ?? 18.5;
     this.warmupFrames = options.warmupFrames ?? 40;
+    this.startupS = options.warmupS ?? 4;
     this.holdS = options.holdS ?? 1.5;
     this.probeBaseS = options.probeAfterS ?? 10;
     this.probeIntervalS = this.probeBaseS;
@@ -140,14 +144,17 @@ export class FrameGovernor {
   frame(dtMs: number): GovernorAction | null {
     if (!(dtMs > 0) || dtMs > FrameGovernor.STALL_MS) return null;
     this.sinceChange += dtMs / 1000;
-    if (this.warm > 0) {
-      this.warm--;
+    this.startupS -= dtMs / 1000;
+    if (this.warm > 0 || this.startupS > 0) {
+      this.warm = Math.max(0, this.warm - 1);
       this.smoothed = 0;
       this.seen = 0;
       return null;
     }
     this.seen++;
-    this.smoothed = this.seen === 1 ? dtMs : this.smoothed + (dtMs - this.smoothed) * 0.08;
+    // One long frame (a compile, a texture upload) must not decide: a sample counts for at most twice the slow threshold.
+    const sample = Math.min(dtMs, this.slowMs * 2);
+    this.smoothed = this.seen === 1 ? sample : this.smoothed + (sample - this.smoothed) * 0.08;
     if (this.seen < 20) return null; // the average needs a few frames behind it
 
     // The first measured frames in `auto`: hopelessly slow at full resolution means the low level, once (before any step down).
