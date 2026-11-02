@@ -56,8 +56,9 @@ export interface SniperSphere {
 /**
  * The hit spheres of a part. A flat ellipsoid cannot be covered by a few round spheres without them sticking out
  * of the drawn body, so each part has its own table (`sniperSpheres.ts`, made by `scripts/gen-sniper-spheres.mjs`):
- * together the spheres hold the whole ellipsoid (a bullet from any direction that crosses it meets one), and
- * the disc each casts seen from the front or from above stays within MAX_OVERHANG of the part's silhouette.
+ * together the spheres hold the whole ellipsoid (a bullet from any direction that crosses it meets one), and the
+ * disc each casts stays within MAX_OVERHANG of the part's silhouette seen from the front, from above, from a hill
+ * (looking down 10-75 degrees), from a valley (up 10 and 20) and with the sniper turned 10 degrees either way.
  * The table records the dimensions it was made for; when they change it is stale, and this throws instead of
  * letting the zones drift away from the mesh.
  */

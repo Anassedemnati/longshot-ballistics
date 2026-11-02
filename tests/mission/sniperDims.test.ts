@@ -46,7 +46,7 @@ describe('sniper hit spheres', () => {
   });
 
   it('are few enough for a cheap bullet test', () => {
-    expect(sniperHitSpheres().length).toBeLessThan(80);
+    expect(sniperHitSpheres().length).toBeLessThan(100);
   });
 
   it('come from a table made for the current part dimensions', () => {
@@ -69,43 +69,72 @@ describe('sniper hit spheres', () => {
 });
 
 /**
- * The body seen from the front (a bullet from the shooter: x, y) and from above (a shooter on a hill: x, z): the
- * union of the parts' ellipse outlines on a fine grid, to compare with the discs the hit spheres cast.
+ * The body seen by a shooter and the discs the hit spheres cast there: from the front and from above (the two the spheres are
+ * made for), and in between, from a hill looking down by 10 to 75 degrees or up from a valley by 10 and 20, and with the sniper turned
+ * 10 degrees either way. The silhouette is the union of the parts' ellipse outlines on a fine grid.
  */
 describe('sniper hit spheres against the drawn silhouettes', () => {
   const GRID = 0.0025;
   /** The grid's own error: a distance to the nearest silhouette cell can be this much more than to the true outline. */
   const GRID_SLACK = GRID * Math.SQRT1_2 + 1e-9;
-  const views = [
-    { name: 'front', axis: (p: { rz: number; ry: number }) => p.ry, third: 'y' as const },
-    { name: 'top', axis: (p: { rz: number; ry: number }) => p.rz, third: 'z' as const },
+  type Part = (typeof SNIPER_PARTS)[number];
+  interface View {
+    name: string;
+    /** A point of the body frame in the image plane. */
+    project(q: { x: number; y: number; z: number }): [number, number];
+    /** The outline of a part in that plane: an axis-aligned ellipse. */
+    ellipse(p: Part): { uc: number; vc: number; a: number; b: number };
+  }
+  /** The shooter looks along the body's axis, down by `deg` (90 is straight down, negative looks up). */
+  const pitched = (deg: number, name: string): View => {
+    const c = Math.cos((deg * Math.PI) / 180);
+    const s = Math.sin((deg * Math.PI) / 180);
+    return {
+      name,
+      project: (q) => [q.x, q.y * c - q.z * s],
+      ellipse: (p) => ({ uc: p.cx, vc: p.cy * c - p.cz * s, a: p.rx, b: Math.hypot(p.ry * c, p.rz * s) }),
+    };
+  };
+  /** The shooter is level, the sniper turned by `deg`. */
+  const turned = (deg: number): View => {
+    const c = Math.cos((deg * Math.PI) / 180);
+    const s = Math.sin((deg * Math.PI) / 180);
+    return {
+      name: `turned ${deg} degrees`,
+      project: (q) => [q.x * c + q.z * s, q.y],
+      ellipse: (p) => ({ uc: p.cx * c + p.cz * s, vc: p.cy, a: Math.hypot(p.rx * c, p.rz * s), b: p.ry }),
+    };
+  };
+  const views: View[] = [
+    pitched(0, 'front'),
+    pitched(90, 'top'),
+    ...[10, 20, 30, 45, 60, 75].map((deg) => pitched(deg, `looking down ${deg} degrees`)),
+    pitched(-10, 'looking up 10 degrees'),
+    pitched(-20, 'looking up 20 degrees'),
+    turned(10),
+    turned(-10),
   ];
 
   for (const view of views) {
     describe(view.name, () => {
-      // Which cells (u, v) = (x, y) or (x, z) of the grid lie inside some part's ellipse.
-      const centre = (p: (typeof SNIPER_PARTS)[number]): [number, number] => [p.cx, view.third === 'y' ? p.cy : p.cz];
-      const lo = [-0.5, view.third === 'y' ? 0 : -1.7];
-      const hi = [0.5, view.third === 'y' ? 0.6 : 0.3];
-      const nu = Math.round((hi[0] - lo[0]) / GRID);
-      const nv = Math.round((hi[1] - lo[1]) / GRID);
+      // Which cells (u, v) of the grid lie inside some part's ellipse.
+      const ellipses = SNIPER_PARTS.map((p) => view.ellipse(p));
+      const margin = 0.06;
+      const lo = [Math.min(...ellipses.map((e) => e.uc - e.a)) - margin, Math.min(...ellipses.map((e) => e.vc - e.b)) - margin];
+      const hi = [Math.max(...ellipses.map((e) => e.uc + e.a)) + margin, Math.max(...ellipses.map((e) => e.vc + e.b)) + margin];
+      const nu = Math.ceil((hi[0] - lo[0]) / GRID);
+      const nv = Math.ceil((hi[1] - lo[1]) / GRID);
       const inside = new Uint8Array(nu * nv);
       for (let i = 0; i < nu; i++) {
         for (let j = 0; j < nv; j++) {
           const u = lo[0] + (i + 0.5) * GRID;
           const v = lo[1] + (j + 0.5) * GRID;
-          inside[i * nv + j] = SNIPER_PARTS.some((p) => {
-            const [cu, cv] = centre(p);
-            return ((u - cu) / p.rx) ** 2 + ((v - cv) / view.axis(p)) ** 2 <= 1;
-          })
-            ? 1
-            : 0;
+          inside[i * nv + j] = ellipses.some((e) => ((u - e.uc) / e.a) ** 2 + ((v - e.vc) / e.b) ** 2 <= 1) ? 1 : 0;
         }
       }
-      const project = (s: { x: number; y: number; z: number }): [number, number] => [s.x, view.third === 'y' ? s.y : s.z];
 
       it('every point of the silhouette (a 2.5 mm grid) is inside the disc of some sphere', () => {
-        const discs = sniperHitSpheres().map((s) => ({ c: project(s), r: s.radius }));
+        const discs = sniperHitSpheres().map((s) => ({ c: view.project(s), r: s.radius }));
         let cells = 0;
         const missed: string[] = [];
         for (let i = 0; i < nu; i++) {
@@ -136,12 +165,11 @@ describe('sniper hit spheres against the drawn silhouettes', () => {
         };
         const over: string[] = [];
         for (const s of sniperHitSpheres()) {
-          const [cu, cv] = project(s);
+          const [cu, cv] = view.project(s);
           for (let k = 0; k < 120; k++) {
             const a = (k / 120) * 2 * Math.PI;
             const u = cu + Math.cos(a) * s.radius;
             const v = cv + Math.sin(a) * s.radius;
-            if (view.third === 'y' && v < 0) continue; // below the ground: nobody sees it
             if (!within(u, v, MAX_OVERHANG + GRID_SLACK)) over.push(`${s.name} sphere (${s.x}, ${s.y}, ${s.z}) r${s.radius} at (${u.toFixed(3)}, ${v.toFixed(3)})`);
           }
         }
