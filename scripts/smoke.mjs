@@ -44,6 +44,7 @@ const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, c
 const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier, no cover (placed like any mission: within 10 degrees of straight ahead)
 const MISSION_MENU_LINK = 'v1.d.300.300.2.0.20.6.308.n.n.7'; // 2 soldiers at 300 m, 2 m/s from behind: settings that differ from the defaults
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
+const MISSION_ASSISTS = 'v2.d.300.300.1.0.45.9.308.n.n.1.r.0.0.1'; // one soldier at 300 m, 4.5 m/s from 9 o'clock, no enemy snipers, aim assists ON
 /** What the game writes for a v1 mission: the same fields, in v2 form, with the new options off. */
 const V1_TAIL = '.r.0.0.0';
 const asV2 = (v1Code) => v1Code.replace(/^v1\./, 'v2.') + V1_TAIL;
@@ -195,6 +196,28 @@ function analyzePng(page, png) {
       groundLuma: luma(width * 0.5, height * 0.95),
     };
   }, png.toString('base64'));
+}
+
+/** How many pixels differ clearly (more than 30 in some channel) between two PNGs of the same size. */
+function pngDiff(page, a, b) {
+  return page.evaluate(
+    async ([base64A, base64B]) => {
+      const read = async (base64) => {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d');
+        ctx.drawImage(bitmap, 0, 0);
+        return ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      };
+      const [da, db] = [await read(base64A), await read(base64B)];
+      let count = 0;
+      for (let i = 0; i < da.length; i += 4) {
+        if (Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2])) > 30) count++;
+      }
+      return count;
+    },
+    [a.toString('base64'), b.toString('base64')],
+  );
 }
 
 /** Screenshot the page, optionally with the HUD hidden so only the 3D canvas (and scope) is measured. */
@@ -512,6 +535,16 @@ async function run() {
     let st = await gameState(mission);
     check(st.targetsLeft === 3 && st.soldiers.length === 3, 'a non-legacy mission starts with 3 targets standing');
     check(st.stats.startMs === null, 'the mission clock is stopped before the first pointer lock or shot');
+    check(
+      (await mission.locator('.assist-panel').count()) === 0 && (await mission.locator('.aim-marker').count()) === 0,
+      'assists disabled (the default): no assist panel and no aim marker',
+    );
+    for (const key of ['KeyT', 'KeyA', 'KeyP']) await mission.keyboard.press(key);
+    await animationFrames(mission, 3);
+    check(
+      (await mission.locator('.assist-panel').count()) === 0 && (await mission.locator('.aim-marker').count()) === 0 && !(await gameState(mission)).stats.assistsUsed,
+      'assists disabled: the keys T, A and P do nothing',
+    );
     check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
     check((await mission.locator('.hud-line', { hasText: "Wind calm" }).count()) === 1, 'HUD says "Wind calm" at 0 m/s');
     await animationFrames(mission, 5);
@@ -552,6 +585,7 @@ async function run() {
     const rows = await resultsRows(mission);
     log(`results: ${JSON.stringify(rows)}`);
     check(rows['Shots fired'] === '3' && rows['Hits'] === '3' && rows['Accuracy'] === '100 %', 'results: 3 shots, 3 hits, 100 % accuracy');
+    check(!('Assists used' in rows), 'results: no "Assists used" line when no assist was on');
     check(/^(29\d|30\d) m$/.test(rows['Longest hit'] ?? ''), `results: longest hit about 300 m (${rows['Longest hit']})`);
     check(/^\d\d:\d\d$/.test(rows['Mission time'] ?? ''), `results: mission time as mm:ss (${rows['Mission time']})`);
     check((await mission.locator('.results-button').count()) === 2, 'results: Restart and Menu buttons');
@@ -584,6 +618,154 @@ async function run() {
     check(restartedFrames.frames >= 3, 'the mission started from the menu runs');
     check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'menu start: HUD says "Targets 3/3"');
     await mission.close();
+
+    // 6b. Aim assists: a mission that enables them gets the panel; T / A / P toggle the trajectory line, the aim marker and the spotter.
+    const assisted = await openPage();
+    await startGame(assisted, `m=${MISSION_ASSISTS}&debug=1`);
+    await assisted.evaluate(() => window.__game.toggleScope()); // the scope opens at 8x
+    await animationFrames(assisted, 3);
+    st = await gameState(assisted);
+    const modeButton = (mode) => assisted.locator(`.assist-button[data-mode=${mode}]`);
+    const pressed = async (mode) => (await modeButton(mode).getAttribute('aria-pressed')) === 'true';
+    check((await assisted.locator('.assist-panel').count()) === 1, 'assists enabled: the assist panel is there');
+    check((await assisted.locator('.assist-button').count()) === 3, 'the panel has three toggles (T, A, P)');
+    check(
+      /^T · Trajectory OFF$/.test((await modeButton('trajectory').textContent()) ?? '') &&
+        /^A · Aim marker OFF$/.test((await modeButton('aim').textContent()) ?? '') &&
+        /^P · Spotter OFF$/.test((await modeButton('spotter').textContent()) ?? ''),
+      'the toggles read T / A / P and start OFF',
+    );
+    check(!(await assisted.locator('.aim-marker').isVisible()) && !(await assisted.locator('.assist-spotter').isVisible()), 'with every assist off there is no marker and no spotter text');
+    check(!st.stats.assistsUsed, 'no assist used yet');
+    // The panel stays clear of the scope lens.
+    const lens = await assisted.locator('.scope-lens').boundingBox();
+    const panelBox = await assisted.locator('.assist-panel').boundingBox();
+    const lensX = lens.x + lens.width / 2;
+    const lensY = lens.y + lens.height / 2;
+    const nearX = Math.min(Math.max(lensX, panelBox.x), panelBox.x + panelBox.width);
+    const nearY = Math.min(Math.max(lensY, panelBox.y), panelBox.y + panelBox.height);
+    check(Math.hypot(nearX - lensX, nearY - lensY) > lens.width / 2, 'the assist panel does not cover the scope lens');
+    // Typing in a text field does not toggle anything.
+    await assisted.evaluate(() => {
+      const input = document.createElement('input');
+      input.id = 'smoke-typing';
+      document.body.appendChild(input);
+      input.focus();
+    });
+    await assisted.keyboard.press('KeyT');
+    await assisted.keyboard.press('KeyA');
+    await assisted.keyboard.press('KeyP');
+    check(!(await pressed('trajectory')) && !(await pressed('aim')) && !(await pressed('spotter')), 'T, A and P typed into an input field toggle nothing');
+    await assisted.evaluate(() => document.getElementById('smoke-typing')?.remove());
+
+    const chest = st.soldiers[0].upperTorso;
+    // T: the line is drawn into the 3D scene. Aimed along the horizon the shot falls a long way below the view axis (it only meets the
+    // ground some 800 m out), so the line is long. (Aimed at a target 300 m away it is a few pixels: it ends just behind the target.)
+    await assisted.evaluate(() => window.__game.aimAt(0, 13, -3000));
+    await waitGameSeconds(assisted, 0.5);
+    // Measured on the middle of the scope with the HUD and the panel hidden (their ON/OFF text would change it too).
+    const middle = { x: 440, y: 160, width: 400, height: 400 };
+    const hideOverlays = (hidden) =>
+      assisted.evaluate((h) => document.querySelectorAll('.hud, .assist-panel').forEach((n) => n.style.setProperty('visibility', h ? 'hidden' : 'visible')), hidden);
+    await hideOverlays(true);
+    const lineOff = await assisted.screenshot({ clip: middle });
+    await waitGameSeconds(assisted, 0.4);
+    const lineOffAgain = await assisted.screenshot({ clip: middle });
+    await hideOverlays(false);
+    check((await pngDiff(assisted, lineOff, lineOffAgain)) < 20, 'the scope picture is steady while the trajectory is off (nothing else moves)');
+    await assisted.keyboard.press('KeyT');
+    check(await pressed('trajectory'), 'key T switches the trajectory preview ON');
+    await waitGameSeconds(assisted, 0.4);
+    await hideOverlays(true);
+    const lineOn = await assisted.screenshot({ clip: middle });
+    await hideOverlays(false);
+    const lineDiff = await pngDiff(assisted, lineOff, lineOn);
+    check(lineDiff > 40, `T draws the trajectory line into the scene (${lineDiff} pixels changed)`);
+    await assisted.screenshot({ path: join(OUT_DIR, 'assists-trajectory.png') });
+    check((await gameState(assisted)).stats.assistsUsed, 'switching an assist on marks the mission "assists used"');
+    await assisted.keyboard.press('KeyT');
+    check(!(await pressed('trajectory')), 'T again switches it OFF');
+    await waitGameSeconds(assisted, 0.4);
+    await hideOverlays(true);
+    const lineGone = await assisted.screenshot({ clip: middle });
+    await hideOverlays(false);
+    check((await pngDiff(assisted, lineOff, lineGone)) < 20, 'the line is gone again with T OFF');
+
+    // The same with the naked eye, aimed well above the horizon.
+    await assisted.evaluate(() => {
+      window.__game.toggleScope();
+      window.__game.aimAt(0, 200, -1000);
+    });
+    await waitGameSeconds(assisted, 0.4);
+    const whole = { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height };
+    await hideOverlays(true);
+    const arcOff = await assisted.screenshot({ clip: whole });
+    await hideOverlays(false);
+    await assisted.keyboard.press('KeyT');
+    await waitGameSeconds(assisted, 0.4);
+    await hideOverlays(true);
+    const arcOn = await assisted.screenshot({ clip: whole });
+    await hideOverlays(false);
+    const arcDiff = await pngDiff(assisted, arcOff, arcOn);
+    check(arcDiff > 40, `T draws the line with the naked eye too, aimed above the horizon (${arcDiff} pixels changed)`);
+    await assisted.screenshot({ path: join(OUT_DIR, 'assists-arc.png') });
+    await assisted.keyboard.press('KeyT');
+    await assisted.evaluate(([x, y, z]) => {
+      window.__game.toggleScope();
+      window.__game.aimAt(x, y, z);
+    }, [chest.x, chest.y, chest.z]);
+    await waitGameSeconds(assisted, 0.4);
+
+    // A (by a real click on the button): the diamond. With the crosshair on the chest it sits just above the crosshair (the hold-over) and inside the lens.
+    await modeButton('aim').click();
+    check(await pressed('aim'), 'clicking the A button switches the aim marker ON');
+    check((await assisted.evaluate(() => document.pointerLockElement)) === null, 'a click on an assist button does not grab the pointer');
+    await waitGameSeconds(assisted, 0.4);
+    check(await assisted.locator('.aim-marker').isVisible(), 'A shows the aim marker (◇)');
+    const markerAt = async () => {
+      const box = await assisted.locator('.aim-marker').boundingBox();
+      return { x: box.x + box.width / 2 - VIEWPORT.width / 2, y: box.y + box.height / 2 - VIEWPORT.height / 2 };
+    };
+    const m1 = await markerAt();
+    check(m1.y < -2 && Math.abs(m1.y) < 60 && Math.abs(m1.x) < 60, `the marker is above the crosshair by the hold-over (${m1.x.toFixed(0)}, ${m1.y.toFixed(0)} px from the centre)`);
+    await assisted.screenshot({ path: join(OUT_DIR, 'assists-marker.png') });
+
+    // P: the spotter's call.
+    await assisted.keyboard.press('KeyP');
+    check(await pressed('spotter'), 'key P switches the spotter ON');
+    await waitGameSeconds(assisted, 0.4);
+    const call = (await assisted.locator('.assist-spotter').textContent()) ?? '';
+    log(`spotter: "${call}"`);
+    const called = /^Target (29\d|30\d) m · Hold (\d+\.\d) mil high, (\d+\.\d) mil left$/.exec(call);
+    check(called !== null, 'P shows the call: the range, "Hold … mil high" and, for wind from the left, "… mil left"');
+    const rangeM = Number(called[1]);
+    const upMil = Number(called[2]);
+    const leftMil = Number(called[3]);
+    check(upMil > 1 && upMil < 2.5, `the hold-over at 300 m is about 1.5 mil (${upMil})`);
+    await assisted.screenshot({ path: join(OUT_DIR, 'assists-all.png') });
+
+    // Follow the call: put the crosshair that far above and left of the chest. The marker then sits on the crosshair, the spotter says on target, and the shot hits.
+    const bearing = Math.atan2(chest.x, -chest.z); // the shooter is at the origin; right = (cos b, 0, sin b)
+    const hold = {
+      x: chest.x - rangeM * Math.tan(leftMil / 1000) * Math.cos(bearing),
+      y: chest.y + rangeM * Math.tan(upMil / 1000),
+      z: chest.z - rangeM * Math.tan(leftMil / 1000) * Math.sin(bearing),
+    };
+    await assisted.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [hold.x, hold.y, hold.z]);
+    await waitGameSeconds(assisted, 0.4);
+    const m2 = await markerAt();
+    check(Math.hypot(m2.x, m2.y) < 4, `with the crosshair where the spotter said, the marker sits on it (${m2.x.toFixed(1)}, ${m2.y.toFixed(1)} px off the centre)`);
+    const settled = (await assisted.locator('.assist-spotter').textContent()) ?? '';
+    check(/On target|Hold 0\.1 mil/.test(settled), `...and the spotter says so ("${settled}")`);
+    const assistedShot = await shootAt(assisted, hold, 0);
+    log(`assisted shot: "${assistedShot}"`);
+    check(/HIT/.test(assistedShot), 'the shot taken as the spotter called it hits the chest');
+    await assisted.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    const assistedRows = await resultsRows(assisted);
+    check(assistedRows['Assists used'] === 'Yes', 'the results say "Assists used: Yes"');
+    check((await assisted.locator('.assist-panel').count()) === 0 && (await assisted.locator('.aim-marker').count()) === 0, 'the results screen takes the assist panel and marker away');
+    await assisted.screenshot({ path: join(OUT_DIR, 'assists-results.png') });
+    await assisted.close();
 
     // 7. Restart reloads the same mission from scratch.
     const single = await openPage();
@@ -985,7 +1167,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, assists-trajectory, assists-arc, assists-marker, assists-all, assists-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }
