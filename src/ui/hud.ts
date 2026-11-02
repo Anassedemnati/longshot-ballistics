@@ -37,6 +37,21 @@ export function rangeText(rangeM: number | null): string {
   return rangeM === null || !Number.isFinite(rangeM) ? 'Range —' : `Range ${Math.round(rangeM)} m`;
 }
 
+/** Which optional keys the hint lists: C (cover) when the mission has enemy snipers, T / A / P when aim assists are on. */
+export interface HintKeys {
+  cover?: boolean;
+  assists?: boolean;
+}
+
+/** The key hint, on one line. */
+export function hintText(keys: HintKeys = {}): string {
+  const parts = ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload', 'M mute'];
+  if (keys.cover) parts.push('C cover');
+  if (keys.assists) parts.push('T/A/P assists');
+  parts.push('Esc release mouse');
+  return parts.join('  ·  ');
+}
+
 /**
  * Easy-style HUD: targets left, rangefinder, wind, magnification, rounds, the sound on/off indicator and
  * the last shot's result, plus a centre dot for the naked eye and the click-to-start hint. While the mouse
@@ -53,7 +68,13 @@ export class Hud {
   private readonly dot: HTMLElement;
   private readonly hint: HTMLElement;
 
-  constructor(parent: HTMLElement, wind: { windSpeedMps: number; windClock: number }, targetsTotal: number, menuHref: string) {
+  constructor(
+    parent: HTMLElement,
+    wind: { windSpeedMps: number; windClock: number },
+    targetsTotal: number,
+    menuHref: string,
+    keys: HintKeys = {},
+  ) {
     const root = el(parent, 'div', 'hud');
     const panel = el(root, 'div', 'hud-panel');
     this.targets = el(panel, 'div', 'hud-line', targetsText(targetsTotal, targetsTotal));
@@ -74,9 +95,7 @@ export class Hud {
     this.result = el(root, 'div', 'hud-result');
     this.dot = el(root, 'div', 'hud-dot');
     this.hint = el(root, 'div', 'hud-hint');
-    this.hint.append(
-      'Click to take aim  ·  Left click fire  ·  Right click scope  ·  Wheel zoom  ·  R reload  ·  M mute  ·  Esc release mouse',
-    );
+    this.hint.append(hintText(keys));
     const menu = el(this.hint, 'a', 'hud-menu', 'Menu') as HTMLAnchorElement;
     menu.href = menuHref;
     // The HUD lets the mouse through to the canvas; this link is the exception. Its press must not reach the

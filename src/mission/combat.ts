@@ -2,8 +2,8 @@ import type { Vec3 } from '../ballistics/types';
 import type { Encounter, EncounterEvent } from '../game/encounter';
 import type { Sniper } from '../scene/sniper';
 import type { TerrainField } from '../scene/terrainField';
-import { flashIntensity, threatText } from '../ui/threat';
-import type { ThreatView } from '../ui/threat';
+import { ThreatLine, flashIntensity } from '../ui/threat';
+import type { ThreatState, ThreatView } from '../ui/threat';
 
 // The enemy snipers' fight in one mission, between the pure `Encounter` and the screen: it feeds the
 // encounter the frame time, sweeps the snipers' glints, turns fire and bombardments into dust, sound and a
@@ -32,6 +32,8 @@ export interface CombatDeps {
   };
   /** Take the rifle out of the scope (ducking into cover does). */
   dropScope(): void;
+  /** The cache of the threat line (default: a new one); a test passes one with a counting formatter. */
+  line?: ThreatLine;
 }
 
 /** Distances, m, of the impact sounds of a sniper bullet and of a bombardment (the shell lands close). */
@@ -69,9 +71,24 @@ export class Combat {
   /** Seconds the snipers have been sweeping (stops while the game is paused). */
   private clock = 0;
   private incoming = 0;
+  /** What the threat line shows, refilled in place every frame (no object per frame). */
+  private readonly state: ThreatState = {
+    health: 0,
+    detection: 0,
+    covered: false,
+    snipersLeft: 0,
+    warning: 0,
+    firing: false,
+    fireIn: 0,
+    paused: false,
+    failed: false,
+    cleared: false,
+  };
+  private readonly line: ThreatLine;
 
   constructor(deps: CombatDeps) {
     this.deps = deps;
+    this.line = deps.line ?? new ThreatLine();
   }
 
   get encounter(): Encounter {
@@ -131,20 +148,18 @@ export class Combat {
     const cleared = !encounter.failed && (encounter.ended || alive === 0);
     if (cleared && this.covered) this.setCovered(false);
 
-    ui.setText(
-      threatText({
-        health: encounter.health,
-        detection: encounter.detection,
-        covered: this.covered,
-        snipersLeft: alive,
-        warning: encounter.warning,
-        firing: encounter.firing,
-        fireIn: encounter.fireIn,
-        paused,
-        failed: encounter.failed,
-        cleared,
-      }),
-    );
+    const state = this.state;
+    state.health = encounter.health;
+    state.detection = encounter.detection;
+    state.covered = this.covered;
+    state.snipersLeft = alive;
+    state.warning = encounter.warning;
+    state.firing = encounter.firing;
+    state.fireIn = encounter.fireIn;
+    state.paused = paused;
+    state.failed = encounter.failed;
+    state.cleared = cleared;
+    ui.setText(this.line.line(state));
     return encounter.failed;
   }
 

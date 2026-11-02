@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../src/ballistics/types';
 import type { Box, Obstacle } from '../../src/game/hit';
 import { DEFAULT_MISSION, clampMission, randomMission } from '../../src/mission/config';
-import type { MissionConfig } from '../../src/mission/config';
+import type { FiringPosition, MissionConfig } from '../../src/mission/config';
 import {
   facingYaw,
   generateLayout,
@@ -28,6 +28,7 @@ import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE, createTerrainField } from '../
 import type { TerrainField } from '../../src/scene/terrainField';
 
 const THEMES: ThemeId[] = ['desert', 'arctic', 'valley'];
+const POSITIONS: FiringPosition[] = ['valley', 'ridge', 'mountain'];
 const BANDS: Array<[number, number]> = [
   [100, 160],
   [300, 300],
@@ -39,7 +40,7 @@ const DEG = Math.PI / 180;
 const base = (over: Partial<MissionConfig>): MissionConfig => clampMission({ ...DEFAULT_MISSION, ...over });
 
 function setup(config: MissionConfig): { field: TerrainField; layout: MissionLayout } {
-  const field = createTerrainField(config.theme, config.seed);
+  const field = createTerrainField(config.theme, config.seed, config.position);
   return { field, layout: generateLayout(config, field) };
 }
 
@@ -188,6 +189,20 @@ describe('sniper placement', () => {
         for (const enemySnipers of [0, 1, 3]) {
           for (const buildings of ['none', 'many'] as const) {
             const config = base({ theme, rangeMin, rangeMax, enemySnipers, buildings, vehicles: 'few', soldiers: 4, seed: 11 + enemySnipers });
+            const { field, layout } = setup(config);
+            checkSnipers(config, field, layout);
+          }
+        }
+      }
+    }
+  });
+
+  it('places three snipers with every promise intact from the valley and the mountain firing positions too', () => {
+    for (const position of POSITIONS.filter((p) => p !== 'ridge')) {
+      for (const theme of THEMES) {
+        for (const [rangeMin, rangeMax] of BANDS) {
+          for (const buildings of ['none', 'many'] as const) {
+            const config = base({ theme, position, rangeMin, rangeMax, enemySnipers: 3, buildings, vehicles: 'few', soldiers: 4, seed: 31 });
             const { field, layout } = setup(config);
             checkSnipers(config, field, layout);
           }

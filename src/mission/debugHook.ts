@@ -28,7 +28,8 @@ export interface GameDebugState {
 
 /**
  * Debug/automation hook, `window.__game`: the same functions the mouse and keys call. Only exposed
- * in dev builds or with `?debug=1` in the URL (the headless smoke check uses it).
+ * in dev builds or with `?debug=1` in the URL (the headless smoke check uses it). The two cheats that change the
+ * fight (`setDetection`, `setHealth`) are only part of it with `?debug=1`.
  */
 export interface GameDebugHook {
   toggleScope(): void;
@@ -40,10 +41,13 @@ export interface GameDebugHook {
   state(): GameDebugState;
   /** Point the view at a world position (the crosshair, not the bullet: it adds no hold-over). */
   aimAt(x: number, y: number, z: number): void;
-  /** Force the detection (0..100 %), so a check can bring on incoming fire without firing. No effect without snipers. */
-  setDetection(percent: number): void;
-  /** Set the player's health (1..100), so a check can reach the Mission failed screen quickly. No effect without snipers. */
-  setHealth(points: number): void;
+  /**
+   * Force the detection (0..100 %), so a check can bring on incoming fire without firing. No effect without snipers.
+   * A cheat: only there with `?debug=1`, not on a dev server's plain URL.
+   */
+  setDetection?(percent: number): void;
+  /** Set the player's health (1..100), so a check can reach the Mission failed screen quickly. No effect without snipers. Only with `?debug=1`, like setDetection. */
+  setHealth?(points: number): void;
 }
 
 declare global {

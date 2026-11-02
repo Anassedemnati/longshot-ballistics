@@ -23,6 +23,10 @@ export interface ThreatState {
   cleared: boolean;
 }
 
+/** A countdown in tenths of a second: the unit it is shown in, and the unit the line is rebuilt in. */
+const tenths = (seconds: number): number => Math.round(seconds * 10);
+const showTenths = (seconds: number): string => (tenths(seconds) / 10).toFixed(1);
+
 /** The threat line, e.g. "EXPOSED · Health 82 · Detection 70 % · 2 snipers left · SNIPER FIRING IN 2.1 s". */
 export function threatText(s: ThreatState): string {
   if (s.failed) return 'MISSION FAILED · you were killed';
@@ -33,11 +37,57 @@ export function threatText(s: ThreatState): string {
     `Detection ${Math.round(s.detection)} %`,
     `${s.snipersLeft} sniper${s.snipersLeft === 1 ? '' : 's'} left`,
   ];
-  if (s.warning > 0) parts.push(`INCOMING BOMBARDMENT ${s.warning.toFixed(1)} s — C: COVER`);
-  else if (s.firing) parts.push(`SNIPER FIRING IN ${s.fireIn.toFixed(1)} s`);
+  if (s.warning > 0) parts.push(`INCOMING BOMBARDMENT ${showTenths(s.warning)} s — C: COVER`);
+  else if (s.firing) parts.push(`SNIPER FIRING IN ${showTenths(s.fireIn)} s`);
   else parts.push('Enemy searching · C: cover');
-  if (s.paused) parts.push('PAUSED — click to resume');
+  if (s.paused) parts.push('PAUSED');
   return parts.join(' · ');
+}
+
+/**
+ * The threat line as a cache: `line(state)` is called every frame and hands back the same string until something
+ * the line shows changes (the rounded health, the rounded detection, the countdown to a tenth of a second, the
+ * snipers left, a flag), so a frame in which nothing changed builds no string and makes no array.
+ */
+export class ThreatLine {
+  private readonly format: (s: ThreatState) => string;
+  private text = '';
+  private built = false;
+  private flags = 0;
+  private health = 0;
+  private detection = 0;
+  private left = 0;
+  private countdown = 0;
+
+  constructor(format: (s: ThreatState) => string = threatText) {
+    this.format = format;
+  }
+
+  line(s: ThreatState): string {
+    const flags =
+      (s.covered ? 1 : 0) | (s.firing ? 2 : 0) | (s.paused ? 4 : 0) | (s.failed ? 8 : 0) | (s.cleared ? 16 : 0) | (s.warning > 0 ? 32 : 0);
+    const health = Math.ceil(s.health);
+    const detection = Math.round(s.detection);
+    const countdown = s.warning > 0 ? tenths(s.warning) : s.firing ? tenths(s.fireIn) : 0;
+    if (
+      this.built &&
+      flags === this.flags &&
+      health === this.health &&
+      detection === this.detection &&
+      s.snipersLeft === this.left &&
+      countdown === this.countdown
+    ) {
+      return this.text;
+    }
+    this.built = true;
+    this.flags = flags;
+    this.health = health;
+    this.detection = detection;
+    this.left = s.snipersLeft;
+    this.countdown = countdown;
+    this.text = this.format(s);
+    return this.text;
+  }
 }
 
 /** How long a damage flash takes to fade, s. */
@@ -71,6 +121,7 @@ export class ThreatUi implements ThreatView {
   private readonly panel: HTMLElement;
   private readonly mask: HTMLElement;
   private readonly flashEl: HTMLElement;
+  private shown = '';
   private level = 0;
   private age = FLASH_SECONDS;
 
@@ -81,9 +132,11 @@ export class ThreatUi implements ThreatView {
     this.flashEl = el(parent, 'div', 'damage-flash');
   }
 
-  /** Cheap to call every frame: the DOM is only touched on change. */
+  /** Cheap to call every frame: the DOM is only touched on change (and never read back). */
   setText(text: string): void {
-    if (this.panel.textContent !== text) this.panel.textContent = text;
+    if (text === this.shown) return;
+    this.shown = text;
+    this.panel.textContent = text;
   }
 
   setCovered(covered: boolean): void {

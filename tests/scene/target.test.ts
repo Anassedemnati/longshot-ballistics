@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   DUMMY_BOXES,
@@ -13,6 +14,40 @@ import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
 
 const RANGE = 800;
+
+type Point = [number, number];
+
+/** The convex hull of a point set (Andrew's monotone chain), counter-clockwise. */
+function convexHull(points: Point[]): Point[] {
+  const sorted = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: Point, a: Point, b: Point): number => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const chain = (list: Point[]): Point[] => {
+    const out: Point[] = [];
+    for (const p of list) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  return [...chain(sorted), ...chain([...sorted].reverse())];
+}
+
+/** Distance from a point to a convex counter-clockwise polygon: 0 inside it. */
+function distanceToPolygon(p: Point, polygon: Point[]): number {
+  let inside = true;
+  let best = Infinity;
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const ex = b[0] - a[0];
+    const ey = b[1] - a[1];
+    if (ex * (p[1] - a[1]) - ey * (p[0] - a[0]) < 0) inside = false;
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / (ex * ex + ey * ey)));
+    best = Math.min(best, Math.hypot(p[0] - a[0] - t * ex, p[1] - a[1] - t * ey));
+  }
+  return inside ? 0 : best;
+}
 
 /** Kind and zone of the first impact of a shot through (x, height above the feet) at 800 m. */
 function shotAt(x: number, height: number): { kind: string; zone?: string } {
@@ -104,25 +139,40 @@ describe('dummy hit zones match the visible dummy', () => {
     expect(uncovered).toEqual([]);
   });
 
-  it('hit spheres overhang the visible silhouette by at most about 3 cm', () => {
-    const rectDistance = (px: number, py: number, cx: number, cy: number, w: number, h: number): number =>
-      Math.hypot(Math.max(Math.abs(px - cx) - w / 2, 0), Math.max(Math.abs(py - cy) - h / 2, 0));
-    const silhouetteDistance = (px: number, py: number): number => {
-      let best = Math.max(Math.hypot(px, py - DUMMY_HEAD.cy) - DUMMY_HEAD.radius, 0);
-      for (const b of DUMMY_BOXES) best = Math.min(best, rectDistance(px, py, b.cx, b.cy, b.w, b.h));
-      return best;
-    };
-    const worst: string[] = [];
+  it('hit spheres overhang the silhouette of the drawn shapes by at most 3 cm', () => {
+    // The shapes as the scene draws them (rounded boxes, head sphere, goggles, scarf), not the sharp DUMMY_BOXES
+    // they are built from: the outline of each convex mesh seen from the front is the hull of its vertices.
+    const dummy = createTargetDummy({ x: 0, y: 0, z: 0 }, 0);
+    dummy.group.updateMatrixWorld(true);
+    const outlines: Point[][] = [];
+    dummy.group.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const position = o.geometry.getAttribute('position');
+      const v = new THREE.Vector3();
+      const points: Point[] = [];
+      for (let i = 0; i < position.count; i++) {
+        v.fromBufferAttribute(position, i).applyMatrix4(o.matrixWorld);
+        points.push([v.x, v.y]);
+      }
+      outlines.push(convexHull(points));
+    });
+    expect(outlines.length).toBe(DUMMY_BOXES.length - 1 + 3); // no neck (the scarf covers it), plus head, goggles, scarf
+    let worst = 0;
+    let where = '';
     for (const s of dummyHitSpheres()) {
-      for (let k = 0; k < 24; k++) {
-        const a = (k / 24) * 2 * Math.PI;
-        const d = silhouetteDistance(s.x + Math.cos(a) * s.radius, s.y + Math.sin(a) * s.radius);
-        if (d > MAX_OVERHANG + 0.005) {
-          worst.push(`${s.name} (${s.x.toFixed(2)}, ${s.y.toFixed(2)}) r${s.radius}: ${d.toFixed(3)}`);
+      for (let k = 0; k < 360; k++) {
+        const a = (k / 360) * 2 * Math.PI;
+        const p: Point = [s.x + Math.cos(a) * s.radius, s.y + Math.sin(a) * s.radius];
+        if (p[1] < 0) continue; // below the ground nobody sees it
+        const d = Math.min(...outlines.map((outline) => distanceToPolygon(p, outline)));
+        if (d > worst) {
+          worst = d;
+          where = `${s.name} sphere (${s.x.toFixed(3)}, ${s.y.toFixed(3)}) r${s.radius} at (${p[0].toFixed(3)}, ${p[1].toFixed(3)})`;
         }
       }
     }
-    expect(worst).toEqual([]);
+    // Half a millimetre of slack for the polygons that stand in for the rounded corners.
+    expect(worst, where).toBeLessThanOrEqual(MAX_OVERHANG + 0.0005);
   });
 });
 

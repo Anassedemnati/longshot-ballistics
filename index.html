@@ -81,10 +81,11 @@
          Stacking, bottom to top: canvas (world + rifle), scope overlay 5, aim marker 8, cover mask 9 (the marker and the rifle never show
          through it), HUD and assist panel 10, damage flash 15, threat line 16, results 20. */
       .threat-panel { position: fixed; z-index: 16; top: 4px; left: 50%; transform: translateX(-50%); box-sizing: border-box;
-        /* One line when it fits, else wrapped; never wider than the gap between the status panel (left) and the assist panel (right). */
-        width: max-content; max-width: max(260px, calc(100vw - 660px));
-        padding: 3px 14px; background: rgba(24, 35, 37, 0.88); border: 1px solid #c9a16c; border-radius: 3px; color: #ffe0a2;
-        font: 12px/1.5 system-ui, sans-serif; text-align: center; pointer-events: none; user-select: none; }
+        /* Always one line, cut with an ellipsis when it does not fit: never wider than the gap between the status panel (left) and the
+           assist panel (right), and about 22 px tall, so it stays above the scope lens (whose top is 29 px down at 1280 x 720). */
+        width: max-content; max-width: max(260px, calc(100vw - 660px)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        padding: 2px 14px; background: rgba(24, 35, 37, 0.88); border: 1px solid #c9a16c; border-radius: 3px; color: #ffe0a2;
+        font: 12px/1.3 system-ui, sans-serif; text-align: center; pointer-events: none; user-select: none; }
       .cover-mask { position: fixed; inset: 0; z-index: 9; background: linear-gradient(#161e24c9, #433f34 40%, #242722); pointer-events: none; }
       .cover-mask::after { content: 'IN COVER — Press C to peek'; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
         color: #d6d4bd; font: 18px system-ui, sans-serif; }

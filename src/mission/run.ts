@@ -1,6 +1,6 @@
 import { RIFLES } from '../ballistics/rifles';
 import { findZeroElevation } from '../ballistics/trajectory';
-import type { WindField } from '../ballistics/types';
+import type { Vec3, WindField } from '../ballistics/types';
 import { AudioEngine } from '../audio/engine';
 import {
   playBoltCycle,
@@ -26,6 +26,7 @@ import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
 import { shadowFocus } from '../scene/shadows';
+import type { ShadowFocusInput } from '../scene/shadows';
 import { Assists } from '../ui/assists';
 import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
@@ -155,9 +156,45 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // range, no props, desert) is a valid menu setup, so the menu opens on what the player was practising.
   const menuHref = `${import.meta.env.BASE_URL}${menuSearch(config, opts.debug)}`;
 
-  const hud = new Hud(document.body, config, targetsTotal, menuHref);
+  // The hint lists C (cover) only when there are snipers to hide from, and T / A / P only when the assists are on.
+  const hasSnipers = !legacy && snipers.size > 0;
+  const hud = new Hud(document.body, config, targetsTotal, menuHref, { cover: hasSnipers, assists: config.assists });
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
+
+  // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
+  const audio = new AudioEngine();
+  const windLevel = windAmbienceGain(config.windSpeedMps);
+
+  function unlockAudio(): void {
+    audio.resume();
+    startWindAmbience(audio, windLevel); // starts the loop once; later calls only set its level
+  }
+
+  // Enemy snipers (spec B.4): the fight with them (detection, fire, bombardments, cover) and its threat line,
+  // damage flash and cover mask. A training mission (0 snipers) and the practice range have none of it. Declared
+  // before the handlers below that ask it whether the player is ducked.
+  const combat: Combat | null =
+    hasSnipers
+      ? new Combat({
+          encounter: new Encounter(),
+          snipers: [...snipers.values()].map((k) => k.sniper),
+          ui: new ThreatUi(document.body),
+          field,
+          shooter,
+          suppressed: config.suppressed,
+          yaw: () => input.yaw,
+          fx: {
+            dust: (point) => dust.spawn(point),
+            impactSound: (distanceM) => playImpactDust(audio, 0, distanceM),
+          },
+          dropScope: () => {
+            if (!view.isScoped) return;
+            view.toggleScope();
+            refreshView();
+          },
+        })
+      : null;
 
   // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's or an enemy
   // sniper's upper torso, a vehicle's engine.
@@ -180,20 +217,12 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         zero: zeroElevation,
         groundHeight: field.height,
         targets: assistTargets,
+        covered: () => combat?.covered ?? false,
         onUsed: () => {
           stats = markAssistsUsed(stats);
         },
       })
     : null;
-
-  // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
-  const audio = new AudioEngine();
-  const windLevel = windAmbienceGain(config.windSpeedMps);
-
-  function unlockAudio(): void {
-    audio.resume();
-    startWindAmbience(audio, windLevel); // starts the loop once; later calls only set its level
-  }
 
   function toggleMute(): void {
     audio.toggleMute();
@@ -309,30 +338,6 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (result.hud.refreshTargets) hud.setTargets(liveTargets.length, targetsTotal);
   }
 
-  // Enemy snipers (spec B.4): the fight with them (detection, fire, bombardments, cover) and its threat line,
-  // damage flash and cover mask. A training mission (0 snipers) and the practice range have none of it.
-  const combat: Combat | null =
-    !legacy && snipers.size > 0
-      ? new Combat({
-          encounter: new Encounter(),
-          snipers: [...snipers.values()].map((k) => k.sniper),
-          ui: new ThreatUi(document.body),
-          field,
-          shooter,
-          suppressed: config.suppressed,
-          yaw: () => input.yaw,
-          fx: {
-            dust: (point) => dust.spawn(point),
-            impactSound: (distanceM) => playImpactDust(audio, 0, distanceM),
-          },
-          dropScope: () => {
-            if (!view.isScoped) return;
-            view.toggleScope();
-            refreshView();
-          },
-        })
-      : null;
-
   const unbindInput = bindInput(
     renderer.domElement,
     input,
@@ -377,10 +382,15 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         reload,
         unlockAudio,
         aimAt: lookAtPoint,
-        setDetection: (percent) => combat?.encounter.setDetection(percent),
-        setHealth: (points) => {
-          if (combat && Number.isFinite(points)) combat.encounter.health = Math.min(100, Math.max(1, points));
-        },
+        // The cheats exist only with `?debug=1`: a dev server's plain URL gets the hook but not them.
+        ...(opts.debug
+          ? {
+              setDetection: (percent: number) => combat?.encounter.setDetection(percent),
+              setHealth: (points: number) => {
+                if (combat && Number.isFinite(points)) combat.encounter.health = Math.min(100, Math.max(1, points));
+              },
+            }
+          : {}),
       },
       {
         stats: () => stats,
@@ -413,6 +423,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   let lastRange: number | null = null;
   let completeTimer = 0;
   let failedTimer = 0;
+  // Scratch for the shadow focus, refilled every frame (the loop makes no objects of its own).
+  const viewDir: Vec3 = { x: 0, y: 0, z: 0 };
+  const focusInput: ShadowFocusInput = { scoped: false, eye: shooter, forward: viewDir, rangeM: null, ground: field.height };
+  const focus: Vec3 = { x: 0, y: 0, z: 0 };
   function tick(nowMs: number): void {
     // The first frame (and any bad timestamp) counts as 0 s; stalls are capped.
     const rawDt = lastMs === null ? 0 : (nowMs - lastMs) / 1000;
@@ -442,16 +456,17 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     sparks.update(dt);
     rifleModel.update(dt);
 
+    view.forwardInto(viewDir);
     rangeTimer += dt;
     if (rangeTimer >= RANGEFINDER_INTERVAL_S) {
       rangeTimer = 0;
-      lastRange = rangeUnderCrosshair(shooter, view.forward(), field, obstacles, liveTargets);
+      lastRange = rangeUnderCrosshair(shooter, viewDir, field, obstacles, liveTargets);
       hud.setRange(lastRange);
     }
     // The shadow box follows the crosshair point when scoped, the ground ahead otherwise.
-    world.shadow.update(
-      shadowFocus({ scoped: view.isScoped, eye: shooter, forward: view.forward(), rangeM: lastRange, ground: field.height }),
-    );
+    focusInput.scoped = view.isScoped;
+    focusInput.rangeM = lastRange;
+    world.shadow.update(shadowFocus(focusInput, focus));
 
     assists?.update(dt);
 

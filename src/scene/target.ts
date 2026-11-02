@@ -7,18 +7,20 @@ import {
   DUMMY_HEAD,
   DUMMY_KHAKI,
   LEG_X,
+  MAX_OVERHANG,
   LOWER_TORSO_CY,
   PELVIS,
   UPPER_TORSO_CY,
   VEST,
   arm,
   boot,
+  cornerRadius,
   leg,
 } from '../mission/dummyDims';
 import { terrainHeight } from './terrainHeight';
 
 // The pure dummy dimensions live in mission/dummyDims.ts (the mission layout uses them too).
-export { DUMMY_BOXES, DUMMY_HEAD } from '../mission/dummyDims';
+export { DUMMY_BOXES, DUMMY_HEAD, MAX_OVERHANG } from '../mission/dummyDims';
 export type { DummyBox } from '../mission/dummyDims';
 
 /** Time to tip over backwards, s. */
@@ -38,8 +40,6 @@ const BASE_ZONES: ReadonlyArray<{ name: ZoneName; radius: number; cy: number }> 
   { name: 'limbs', radius: 0.15, cy: 0.5 },
 ];
 
-/** Hit spheres may stick out past the visible silhouette by at most this, m. */
-export const MAX_OVERHANG = 0.03;
 /** Coverage margin: every point of a covered face is at least this far inside some sphere, m. */
 const COVER_MARGIN = 0.002;
 const MAX_SPHERES_PER_AXIS = 16;
@@ -166,10 +166,11 @@ const BOUNDS_MARGIN = 0.05;
 
 // Meshes of all dummies share their geometries and materials (ten soldiers would otherwise build a
 // hundred of each); nothing changes them after creation. They live as long as the page.
-// The look is smoother than the hit spheres need: rounded boxes for the trunk and boots, capsules for
-// the arms and legs, a sphere head, goggles and a scarf. Every piece stays inside the DUMMY_BOXES
-// dimensions (the hit spheres and the layout are built from those), and the goggles and scarf sit
-// within the head and torso spheres.
+// The look is smoother than the hit spheres need: rounded boxes for the trunk, the limbs and the boots (corner
+// radii from dummyDims' DUMMY_CORNER_RADIUS, small enough that the spheres do not stick out of what is drawn by
+// more than MAX_OVERHANG), a sphere head, goggles and a scarf. Every piece stays inside the DUMMY_BOXES
+// dimensions (the hit spheres and the layout are built from those), and the goggles and scarf sit within the
+// head and torso spheres.
 const dummyMaterials = new Map<number, THREE.MeshStandardMaterial>();
 const dummyGeometries = new Map<string, THREE.BufferGeometry>();
 
@@ -195,22 +196,15 @@ function sharedGeometry(key: string, make: () => THREE.BufferGeometry): THREE.Bu
   return g;
 }
 
-/** A box with rounded edges (radius a quarter of its thinnest side: the silhouette loses at most ~2 cm at a corner). */
-function roundedBox(w: number, h: number, d: number): THREE.BufferGeometry {
-  return sharedGeometry(`rb|${w}x${h}x${d}`, () => new RoundedBoxGeometry(w, h, d, 3, Math.min(w, h, d) * 0.25));
-}
-
-/** A capsule exactly `w` wide and `h` tall (a limb); the mesh is stretched in depth to the box's depth. */
-function capsule(w: number, h: number): THREE.BufferGeometry {
-  return sharedGeometry(`cap|${w}x${h}`, () => new THREE.CapsuleGeometry(w / 2, h - w, 6, 14));
+/** A box with edges rounded to `radius` (the silhouette loses about 0.41 * radius at a corner); a quarter of the thinnest side by default. */
+function roundedBox(w: number, h: number, d: number, radius = Math.min(w, h, d) * 0.25): THREE.BufferGeometry {
+  return sharedGeometry(`rb|${w}x${h}x${d}|${radius}`, () => new RoundedBoxGeometry(w, h, d, 3, radius));
 }
 
 function headGeometry(): THREE.BufferGeometry {
   return sharedGeometry('head', () => new THREE.SphereGeometry(DUMMY_HEAD.radius, 22, 16));
 }
 
-/** Limbs are capsules, everything else a rounded box. */
-const isLimb = (name: string): boolean => /arm|leg/.test(name);
 /** Parts that cast a shadow: the body and the limbs; boots, goggles and the scarf are too small to be worth a shadow-pass draw. */
 const castsShadow = (name: string): boolean => /vest|pelvis|arm|leg/.test(name);
 
@@ -248,9 +242,7 @@ export function createTargetDummy(
   add(head, true);
   for (const b of DUMMY_BOXES) {
     if (b.name === 'neck') continue; // the scarf covers it
-    const limb = isLimb(b.name);
-    const mesh = new THREE.Mesh(limb ? capsule(b.w, b.h) : roundedBox(b.w, b.h, b.d), dummyMaterial(b.color));
-    if (limb) mesh.scale.z = b.d / b.w; // a capsule is round; the box is a little deeper than wide
+    const mesh = new THREE.Mesh(roundedBox(b.w, b.h, b.d, cornerRadius(b)), dummyMaterial(b.color));
     mesh.position.set(b.cx, b.cy, b.cz);
     mesh.name = b.name;
     add(mesh, castsShadow(b.name));

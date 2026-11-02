@@ -4,6 +4,7 @@ import { Encounter } from '../../src/game/encounter';
 import { Combat, incomingPoints } from '../../src/mission/combat';
 import type { CombatSniper } from '../../src/mission/combat';
 import type { TerrainField } from '../../src/scene/terrainField';
+import { ThreatLine, threatText } from '../../src/ui/threat';
 import type { ThreatView } from '../../src/ui/threat';
 
 const SHOOTER: Vec3 = { x: 0, y: 12.4, z: 0 };
@@ -17,7 +18,7 @@ class FakeSniper implements CombatSniper {
   }
 }
 
-function fixture(snipers = 2, suppressed = false) {
+function fixture(snipers = 2, suppressed = false, line?: ThreatLine) {
   const encounter = new Encounter();
   const sn = Array.from({ length: snipers }, () => new FakeSniper());
   const log = { text: '', covered: false, flashes: [] as number[], dust: [] as Vec3[], sounds: [] as number[], scopeDrops: 0 };
@@ -37,6 +38,7 @@ function fixture(snipers = 2, suppressed = false) {
     yaw: () => 0,
     fx: { dust: (p) => log.dust.push(p), impactSound: (d) => log.sounds.push(d) },
     dropScope: () => log.scopeDrops++,
+    line,
   });
   return { encounter, sn, log, combat };
 }
@@ -286,5 +288,27 @@ describe('Combat: cover', () => {
     f.combat.update(0.1, true);
     f.combat.toggleCover(false);
     expect(f.combat.covered).toBe(false);
+  });
+});
+
+describe('Combat: the threat line is not rebuilt every frame', () => {
+  it('builds its text only when something it shows changes', () => {
+    const log = { built: 0 };
+    const f = fixture(
+      2,
+      false,
+      new ThreatLine((s) => {
+        log.built++;
+        return threatText(s);
+      }),
+    );
+    for (let i = 0; i < 60; i++) f.combat.update(0.1, true); // paused: nothing moves
+    expect(log.built).toBe(1);
+    expect(f.log.text).toContain('PAUSED');
+    f.encounter.setDetection(20);
+    for (let i = 0; i < 30; i++) f.combat.update(0, true); // a frame of no time: still the same line
+    expect(log.built).toBe(2); // the detection moved once, and the line followed it once
+    f.combat.update(1, false); // unpaused, and the detection rises to 24 %: both change the line, in one rebuild
+    expect(log.built).toBe(3);
   });
 });

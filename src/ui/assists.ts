@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Atmosphere, Rifle, Vec3, WindField } from '../ballistics/types';
-import { nearestToCrosshair, predictPath, solveAim, spotterCall } from '../game/assistance';
+import { createPathBuffer, nearestToCrosshair, predictPath, solveAim, spotterCall } from '../game/assistance';
+import type { PredictOptions } from '../game/assistance';
 import type { AimTarget } from '../game/assistance';
 import type { PlayerView } from '../player/view';
 
@@ -36,13 +37,15 @@ const DOT_SIZE_PX = 3;
 const LENS_RADIUS_FRACTION = 0.46;
 /** The marker needs the solved direction at least this far in front of the view axis (cosine), to rule out "behind". */
 const MIN_FRONT_COS = 0.01;
+/** The marker's style is only rewritten when it has moved this far, px (below that nobody sees the move). */
+const MARKER_STEP_PX = 0.5;
 
 export interface AssistsOptions {
   /** Where the panel and the marker go (document.body). */
   parent: HTMLElement;
   scene: THREE.Scene;
   /** The shooter's view: the camera and where it looks. */
-  view: Pick<PlayerView, 'camera' | 'forward' | 'up' | 'isScoped'>;
+  view: Pick<PlayerView, 'camera' | 'forwardInto' | 'upInto' | 'isScoped'>;
   eye: Vec3;
   rifle: Rifle;
   atmo: Atmosphere;
@@ -54,6 +57,8 @@ export interface AssistsOptions {
   targets: () => AimTarget[];
   /** Called once, the first time any assist is switched on. */
   onUsed: () => void;
+  /** True while the player is ducked behind cover: the spotter text and the aim marker are hidden then (the line is under the mask). */
+  covered?: () => boolean;
 }
 
 /** Whether a key press belongs to a text field (typing there must not toggle assists). */
@@ -87,14 +92,25 @@ export class Assists {
   private readonly dots: THREE.Points;
   private readonly positions = new Float32Array(LINE_CAPACITY * 3);
   private readonly ndc = new THREE.Vector3();
+  /** Scratch for the per-frame view direction and the 10 Hz refresh: no vector is made per frame. */
+  private readonly fwd: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly upDir: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly pathBuffer = createPathBuffer(LINE_CAPACITY);
+  private readonly pathOptions: PredictOptions;
   /** Solutions per target (targets stand still, the eye and the wind are fixed): solved once, reused. */
   private readonly solutions = new Map<string, { point: Vec3; dir: Vec3 | null }>();
   private used = false;
   private disposed = false;
   private timer = 0;
   private refreshDue = false;
-  /** The view direction the line was last flown for: a still view needs no new flight. */
-  private lineFor: Vec3 | null = null;
+  /** The view direction the line was last flown for (valid when `lineKnown`): a still view needs no new flight. */
+  private readonly lineFor: Vec3 = { x: 0, y: 0, z: 0 };
+  private lineKnown = false;
+  /** Where the marker's style was last written, px (NaN: not shown, write it at once). */
+  private markerX = Number.NaN;
+  private markerY = Number.NaN;
+  /** The player is ducked: spotter text and marker are hidden whatever the toggles say. */
+  private coverHidden = false;
   /** The direction that hits the selected target; null with none or no solution. */
   private solved: Vec3 | null = null;
   private readonly onKey = (e: KeyboardEvent): void => {
@@ -105,6 +121,7 @@ export class Assists {
 
   constructor(opts: AssistsOptions) {
     this.opts = opts;
+    this.pathOptions = { groundHeight: opts.groundHeight, sampleEvery: LINE_SAMPLE_EVERY, dt: LINE_DT_S, buffer: this.pathBuffer };
 
     this.panel = el(opts.parent, 'div', 'assist-panel');
     // The panel is clickable (the HUD is not): a press on it must not reach the document handlers that grab the pointer or fire.
@@ -156,15 +173,22 @@ export class Assists {
       this.opts.onUsed();
     }
     this.line.visible = this.dots.visible = this.modes.trajectory;
-    this.lineFor = null;
-    this.spotter.hidden = !this.modes.spotter;
-    if (!this.modes.aim) this.marker.hidden = true;
+    this.lineKnown = false;
+    this.spotter.hidden = !this.modes.spotter || this.coverHidden;
+    if (!this.modes.aim) this.hideMarker();
     this.refreshDue = true; // show the new assist at once, not up to 0.1 s later
   }
 
   /** Once per frame, after the view has turned: refresh at ~10 Hz, and keep the marker on its point every frame. */
   update(dt: number): void {
-    if (this.disposed || (!this.modes.trajectory && !this.modes.aim && !this.modes.spotter)) return;
+    if (this.disposed) return;
+    const covered = this.opts.covered?.() ?? false;
+    if (covered !== this.coverHidden) {
+      this.coverHidden = covered;
+      this.spotter.hidden = !this.modes.spotter || covered;
+      if (covered) this.hideMarker();
+    }
+    if (!this.modes.trajectory && !this.modes.aim && !this.modes.spotter) return;
     this.timer += dt;
     if (this.refreshDue || this.timer >= ASSIST_INTERVAL_S) {
       this.timer = 0;
@@ -208,15 +232,20 @@ export class Assists {
   }
 
   private refresh(): void {
-    const { view, eye, rifle, atmo, wind, zero, groundHeight } = this.opts;
-    const forward = view.forward();
-    const up = view.up();
+    const { view, eye, rifle, atmo, wind, zero } = this.opts;
+    const forward = view.forwardInto(this.fwd);
+    const up = view.upInto(this.upDir);
 
-    if (this.modes.trajectory && !(this.lineFor && this.lineFor.x === forward.x && this.lineFor.y === forward.y && this.lineFor.z === forward.z)) {
-      this.lineFor = forward;
-      const path = predictPath(eye, forward, up, rifle, atmo, wind, zero, { groundHeight, sampleEvery: LINE_SAMPLE_EVERY, dt: LINE_DT_S });
+    const known = this.lineFor;
+    if (this.modes.trajectory && !(this.lineKnown && known.x === forward.x && known.y === forward.y && known.z === forward.z)) {
+      known.x = forward.x;
+      known.y = forward.y;
+      known.z = forward.z;
+      this.lineKnown = true;
+      const path = predictPath(eye, forward, up, rifle, atmo, wind, zero, this.pathOptions);
       let n = 0;
-      for (const p of path.points) {
+      for (let i = 0; i < path.count; i++) {
+        const p = path.points[i];
         if (n >= LINE_CAPACITY || Math.hypot(p.x - eye.x, p.z - eye.z) < LINE_START_M) continue;
         this.positions[n * 3] = p.x;
         this.positions[n * 3 + 1] = p.y;
@@ -239,13 +268,21 @@ export class Assists {
     }
   }
 
-  /** The diamond sits where the solved direction appears on screen; hidden when that is behind the view, off screen or outside the scope's lens. */
+  private hideMarker(): void {
+    this.marker.hidden = true;
+    this.markerX = Number.NaN; // shown again: write the position at once
+  }
+
+  /**
+   * The diamond sits where the solved direction appears on screen; hidden when that is behind the view, off screen,
+   * outside the scope's lens, or while the player is ducked. Its style is rewritten only when it moved half a pixel.
+   */
   private placeMarker(): void {
     const { view, eye } = this.opts;
     const dir = this.solved;
-    const f = view.forward();
-    if (!dir || dir.x * f.x + dir.y * f.y + dir.z * f.z < MIN_FRONT_COS) {
-      this.marker.hidden = true;
+    const f = view.forwardInto(this.fwd);
+    if (this.coverHidden || !dir || dir.x * f.x + dir.y * f.y + dir.z * f.z < MIN_FRONT_COS) {
+      this.hideMarker();
       return;
     }
     view.camera.updateMatrixWorld();
@@ -256,9 +293,18 @@ export class Assists {
       Math.abs(this.ndc.x) > 1 ||
       Math.abs(this.ndc.y) > 1 ||
       (view.isScoped && Math.hypot((this.ndc.x * w) / 2, (this.ndc.y * h) / 2) > Math.min(w, h) * LENS_RADIUS_FRACTION);
-    this.marker.hidden = outside;
-    if (outside) return;
-    this.marker.style.left = `${((this.ndc.x + 1) * 50).toFixed(3)}%`;
-    this.marker.style.top = `${((1 - this.ndc.y) * 50).toFixed(3)}%`;
+    if (outside) {
+      this.hideMarker();
+      return;
+    }
+    const x = ((this.ndc.x + 1) * w) / 2;
+    const y = ((1 - this.ndc.y) * h) / 2;
+    if (!(Math.abs(x - this.markerX) < MARKER_STEP_PX && Math.abs(y - this.markerY) < MARKER_STEP_PX)) {
+      this.markerX = x;
+      this.markerY = y;
+      this.marker.style.left = `${x.toFixed(1)}px`;
+      this.marker.style.top = `${y.toFixed(1)}px`;
+    }
+    this.marker.hidden = false;
   }
 }

@@ -6,6 +6,7 @@ import type { Vec3, WindField } from '../../src/ballistics/types';
 import { muzzleLaunch } from '../../src/game/aim';
 import {
   aimOffsetMil,
+  createPathBuffer,
   levelUp,
   nearestToCrosshair,
   predictPath,
@@ -165,6 +166,42 @@ describe('predictPath', () => {
       expect(path.time).toBeLessThanOrEqual(6.01);
       expect(path.points.length).toBeLessThan(1000);
     }
+  });
+
+  it('with a buffer it writes the same points into preallocated vectors, call after call', () => {
+    const { rifle, zero } = setup('308');
+    const forward = unit({ x: 0.02, y: 0.003, z: -1 });
+    const up = levelUp(forward);
+    const options = { groundHeight: FLAT, dt: 0.005, sampleEvery: 2 };
+    const plain = predictPath(EYE, forward, up, rifle, ATMO, windOf(3, 9), zero, options);
+    expect(plain.count).toBe(plain.points.length);
+
+    const buffer = createPathBuffer(700);
+    const slots = [...buffer.points];
+    const a = predictPath(EYE, forward, up, rifle, ATMO, windOf(3, 9), zero, { ...options, buffer });
+    expect(a.points).toBe(buffer.points);
+    expect(a.count).toBe(plain.count);
+    for (let i = 0; i < a.count; i++) expect(a.points[i], `point ${i}`).toEqual(plain.points[i]);
+    expect(a.impact).toEqual(plain.impact);
+
+    // A second flight (another direction) reuses the very same objects: nothing is allocated per point.
+    const other = unit({ x: -0.05, y: 0.001, z: -1 });
+    const b = predictPath(EYE, other, levelUp(other), rifle, ATMO, windOf(3, 9), zero, { ...options, buffer });
+    expect(buffer.points).toHaveLength(slots.length);
+    buffer.points.forEach((p, i) => expect(p).toBe(slots[i]));
+    const plainOther = predictPath(EYE, other, levelUp(other), rifle, ATMO, windOf(3, 9), zero, options);
+    expect(b.count).toBe(plainOther.count);
+    expect(b.points[b.count - 1]).toEqual(plainOther.points[plainOther.count - 1]);
+  });
+
+  it('a buffer that is too small keeps the first points and says how many it holds', () => {
+    const { rifle, zero } = setup('308');
+    const forward = unit({ x: 0, y: 0.002, z: -1 });
+    const full = predictPath(EYE, forward, levelUp(forward), rifle, ATMO, windOf(0, 12), zero, { groundHeight: FLAT });
+    const small = createPathBuffer(10);
+    const cut = predictPath(EYE, forward, levelUp(forward), rifle, ATMO, windOf(0, 12), zero, { groundHeight: FLAT, buffer: small });
+    expect(cut.count).toBe(10);
+    for (let i = 0; i < 10; i++) expect(cut.points[i]).toEqual(full.points[i]);
   });
 });
 

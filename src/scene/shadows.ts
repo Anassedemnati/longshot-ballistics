@@ -32,53 +32,69 @@ export interface ShadowFocusInput {
 }
 
 /**
- * The point the shadow box is centred on. Scoped with a rangefinder reading: the point under the
- * crosshair (eye + forward * range). Otherwise (naked eye, or the scope aimed at the sky): the ground
+ * The point the shadow box is centred on. Scoped with a rangefinder reading: the point under the crosshair
+ * (eye + forward * range). Otherwise (naked eye, or the scope aimed at the sky): the ground
  * 40 m ahead along the horizontal part of the view direction (straight up or down: right below the eye).
+ * The result is written into `out` (returned): the game calls this every frame and must not allocate.
  */
-export function shadowFocus(input: ShadowFocusInput): Vec3 {
+export function shadowFocus(input: ShadowFocusInput, out: Vec3 = { x: 0, y: 0, z: 0 }): Vec3 {
   const { eye, forward, rangeM } = input;
   const length = Math.hypot(forward.x, forward.y, forward.z);
   if (input.scoped && rangeM !== null && Number.isFinite(rangeM) && rangeM >= 0 && length > 1e-9) {
     const k = rangeM / length;
-    return { x: eye.x + forward.x * k, y: eye.y + forward.y * k, z: eye.z + forward.z * k };
+    out.x = eye.x + forward.x * k;
+    out.y = eye.y + forward.y * k;
+    out.z = eye.z + forward.z * k;
+    return out;
   }
   const horizontal = Math.hypot(forward.x, forward.z);
   const reach = horizontal > 1e-9 ? SHADOW_AHEAD_M / horizontal : 0;
   const x = eye.x + forward.x * reach;
   const z = eye.z + forward.z * reach;
-  return { x, y: input.ground(x, z), z };
+  out.x = x;
+  out.y = input.ground(x, z);
+  out.z = z;
+  return out;
 }
 
 /**
  * Move `focus` to the nearest point on the shadow map's texel grid (the grid is the light's own right
  * and up axes, `texelM` metres apart), leaving its depth along the sun untouched. A shadow box that
  * only ever moves in whole texels does not make the shadow edges shimmer as the view turns.
+ * The result is written into `out` (returned; it may be `focus` itself).
  */
-export function snapToTexelGrid(focus: Vec3, sunDir: Vec3, texelM: number): Vec3 {
+export function snapToTexelGrid(focus: Vec3, sunDir: Vec3, texelM: number, out: Vec3 = { x: 0, y: 0, z: 0 }): Vec3 {
   const sl = Math.hypot(sunDir.x, sunDir.y, sunDir.z);
   const sx = sunDir.x / sl;
   const sy = sunDir.y / sl;
   const sz = sunDir.z / sl;
+  const fx = focus.x;
+  const fy = focus.y;
+  const fz = focus.z;
   // The light camera looks along -s with world up (0, 1, 0): its right axis is up x s, its up axis s x right.
   let rx = sz;
   let rz = -sx;
   const rl = Math.hypot(rx, rz);
-  if (!(rl > 1e-9)) return { ...focus }; // sun straight overhead: no preferred right axis
+  if (!(rl > 1e-9)) {
+    // sun straight overhead: no preferred right axis
+    out.x = fx;
+    out.y = fy;
+    out.z = fz;
+    return out;
+  }
   rx /= rl;
   rz /= rl;
   const ux = sy * rz;
   const uy = sz * rx - sx * rz;
   const uz = -sy * rx;
-  const a = focus.x * rx + focus.z * rz;
-  const b = focus.x * ux + focus.y * uy + focus.z * uz;
+  const a = fx * rx + fz * rz;
+  const b = fx * ux + fy * uy + fz * uz;
   const da = Math.round(a / texelM) * texelM - a;
   const db = Math.round(b / texelM) * texelM - b;
-  return {
-    x: focus.x + rx * da + ux * db,
-    y: focus.y + uy * db,
-    z: focus.z + rz * da + uz * db,
-  };
+  out.x = fx + rx * da + ux * db;
+  out.y = fy + uy * db;
+  out.z = fz + rz * da + uz * db;
+  return out;
 }
 
 export interface ShadowLight {
@@ -113,10 +129,11 @@ export function createShadowLight(scene: THREE.Scene, theme: ThemeId, sun?: THRE
   scene.add(light.target); // its world matrix places the box: it must be in the scene graph
 
   const texel = (2 * SHADOW_HALF_EXTENT) / SHADOW_MAP_SIZE;
+  const snapped: Vec3 = { x: 0, y: 0, z: 0 }; // reused every frame
   return {
     light,
     update(focus) {
-      const f = snapToTexelGrid(focus, dir, texel);
+      const f = snapToTexelGrid(focus, dir, texel, snapped);
       light.target.position.set(f.x, f.y, f.z);
       light.position.set(f.x + dir.x * LIGHT_DISTANCE, f.y + dir.y * LIGHT_DISTANCE, f.z + dir.z * LIGHT_DISTANCE);
     },

@@ -1,42 +1,20 @@
 import type { Vec3 } from '../ballistics/types';
 import type { HitZone, Obstacle, ZoneName } from '../game/hit';
+import { MAX_OVERHANG } from './dummyDims';
+import { SNIPER_CLOTH, SNIPER_METAL, SNIPER_PARTS } from './sniperParts';
+import type { SniperPart } from './sniperParts';
+import { SNIPER_SPHERES_FOR, SNIPER_SPHERE_ROWS } from './sniperSpheres';
+
+export { SNIPER_CLOTH, SNIPER_METAL, SNIPER_PARTS, SNIPER_SKIN, SNIPER_VEST } from './sniperParts';
+export type { SniperPart } from './sniperParts';
 
 // Pure dimensions of a prone enemy sniper (no three.js): the visible mesh in scene/sniper.ts, the hit
-// zones (spheres in chains along each body part) and the mission layout (aim points, bounds, how much
+// zones (small spheres blanketing each body part) and the mission layout (aim points, bounds, how much
 // room the body needs on a roof) are all built from these numbers, so they cannot drift apart.
 //
 // Local frame: origin on the ground (or the roof) under the sniper's belly, +Z toward the shooter (the
 // head end, like the standing dummy's front), +X to the sniper's left, +Y up. A placement turns the
 // body by `yaw` about +Y like three.js `rotation.y`: local (x, z) maps to world (c x + s z, -s x + c z).
-
-/** One elongated body part: an ellipsoid with its long axis along local Z. */
-export interface SniperPart {
-  zone: Exclude<ZoneName, 'engine'>;
-  cx: number;
-  cy: number;
-  cz: number;
-  /** Semi-axes along X, Y and Z, m. */
-  rx: number;
-  ry: number;
-  rz: number;
-  color: number;
-}
-
-export const SNIPER_CLOTH = 0x646449;
-export const SNIPER_VEST = 0x454b36;
-export const SNIPER_SKIN = 0x9c8768;
-export const SNIPER_METAL = 0x313738;
-
-/** The body: chest, hips, two legs, two arms (stretched forward along the rifle) and the head. */
-export const SNIPER_PARTS: readonly SniperPart[] = [
-  { zone: 'upperTorso', cx: 0, cy: 0.23, cz: -0.35, rx: 0.23, ry: 0.18, rz: 0.35, color: SNIPER_VEST },
-  { zone: 'lowerTorso', cx: 0, cy: 0.2, cz: -0.78, rx: 0.19, ry: 0.15, rz: 0.2, color: SNIPER_CLOTH },
-  { zone: 'limbs', cx: -0.14, cy: 0.13, cz: -1.24, rx: 0.095, ry: 0.1, rz: 0.37, color: SNIPER_CLOTH },
-  { zone: 'limbs', cx: 0.14, cy: 0.13, cz: -1.24, rx: 0.095, ry: 0.1, rz: 0.37, color: SNIPER_CLOTH },
-  { zone: 'limbs', cx: -0.25, cy: 0.16, cz: -0.03, rx: 0.075, ry: 0.08, rz: 0.29, color: SNIPER_CLOTH },
-  { zone: 'limbs', cx: 0.25, cy: 0.16, cz: -0.03, rx: 0.075, ry: 0.08, rz: 0.29, color: SNIPER_CLOTH },
-  { zone: 'head', cx: 0, cy: 0.37, cz: 0.13, rx: 0.12, ry: 0.12, rz: 0.12, color: SNIPER_SKIN },
-];
 
 /** The helmet: the upper part of a sphere over the head (decoration, not a hit zone: the head sphere is). */
 export const SNIPER_HELMET = { cy: 0.42, cz: 0.13, radius: 0.14, color: SNIPER_CLOTH } as const;
@@ -63,8 +41,6 @@ export const SNIPER_GLINT_LOCAL: Vec3 = {
   z: SNIPER_RIFLE.pivot.z + SNIPER_RIFLE.glint.z,
 };
 
-/** Hit spheres are this much bigger than the cross-section of a part they cover with a chain, as a factor. */
-const CHAIN_INFLATE = 1.15;
 /** The broad-phase sphere of a sniper is this much bigger than the farthest zone edge, m. */
 export const SNIPER_BOUNDS_MARGIN = 0.05;
 
@@ -78,26 +54,22 @@ export interface SniperSphere {
 }
 
 /**
- * The hit spheres of a part: one sphere for a round part (the head), otherwise a chain along the long axis whose
- * spheres are `CHAIN_INFLATE` times the widest cross-section radius, spaced so that no point of the part falls
- * between two of them (the gap between neighbours is 2 * sqrt(R^2 - rho^2) at most). The chain's end spheres sit
- * one cross-section radius inside the ends of the part.
+ * The hit spheres of a part. A flat ellipsoid cannot be covered by a few round spheres without them sticking out
+ * of the drawn body, so each part has its own table (`sniperSpheres.ts`, made by `scripts/gen-sniper-spheres.mjs`):
+ * together the spheres hold the whole ellipsoid (a bullet from any direction that crosses it meets one), and the
+ * disc each casts stays within MAX_OVERHANG of the part's silhouette seen from the front, from above, from a hill
+ * (looking down 10-75 degrees), from a valley (up 10 and 20) and with the sniper turned 10 degrees either way.
+ * The table records the dimensions it was made for; when they change it is stale, and this throws instead of
+ * letting the zones drift away from the mesh.
  */
-function chainOf(part: SniperPart): SniperSphere[] {
-  const rho = Math.max(part.rx, part.ry);
-  if (part.rz <= rho * 1.0001) {
-    return [{ name: part.zone, x: part.cx, y: part.cy, z: part.cz, radius: rho }];
+function spheresOf(part: SniperPart, index: number): SniperSphere[] {
+  const rows = SNIPER_SPHERE_ROWS[index];
+  const dims = SNIPER_SPHERES_FOR[index];
+  const now = [part.cx, part.cy, part.cz, part.rx, part.ry, part.rz, MAX_OVERHANG];
+  if (!rows || !dims || dims.length !== now.length || dims.some((v, i) => v !== now[i])) {
+    throw new Error('sniperSpheres.ts is stale: run `node scripts/gen-sniper-spheres.mjs`');
   }
-  const radius = rho * CHAIN_INFLATE;
-  const spacing = 2 * Math.sqrt(radius * radius - rho * rho);
-  const span = 2 * (part.rz - rho);
-  const n = Math.max(1, Math.ceil(span / spacing) + 1);
-  const out: SniperSphere[] = [];
-  for (let k = 0; k < n; k++) {
-    const z = n === 1 ? part.cz : part.cz - (part.rz - rho) + (span * k) / (n - 1);
-    out.push({ name: part.zone, x: part.cx, y: part.cy, z, radius });
-  }
-  return out;
+  return rows.map(([x, y, z, radius]) => ({ name: part.zone, x, y, z, radius }));
 }
 
 const ZONE_ORDER: Record<Exclude<ZoneName, 'engine'>, number> = { head: 0, upperTorso: 1, lowerTorso: 2, limbs: 3 };
@@ -106,9 +78,9 @@ let spheres: SniperSphere[] | null = null;
 
 /** Every hit sphere of a sniper in its own frame (built once). The head comes first, then the upper torso. */
 export function sniperHitSpheres(): readonly SniperSphere[] {
-  spheres ??= [...SNIPER_PARTS]
-    .sort((a, b) => ZONE_ORDER[a.zone] - ZONE_ORDER[b.zone])
-    .flatMap((part) => chainOf(part));
+  spheres ??= SNIPER_PARTS.map((part, index) => ({ part, index }))
+    .sort((a, b) => ZONE_ORDER[a.part.zone] - ZONE_ORDER[b.part.zone])
+    .flatMap(({ part, index }) => spheresOf(part, index));
   return spheres;
 }
 
