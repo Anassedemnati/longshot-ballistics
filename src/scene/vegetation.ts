@@ -87,7 +87,7 @@ export function modelParts(root: THREE.Object3D): ModelPart[] {
 export interface ModelKit {
   boulder: ModelPart | null;
   log: ModelPart | null;
-  /** Three grass clumps (mid_a, mid_b, large_b of the glb; null entries are skipped). */
+  /** Three grass clumps (mid_a, mid_b, mid_c of the glb; null entries are skipped). */
   grass: Array<ModelPart | null>;
 }
 
@@ -112,7 +112,7 @@ export function loadModelKit(loader: ModelLoader): Promise<ModelKit> {
       boulder: boulder[0] ?? null,
       log: log[0] ?? null,
       // The glb holds 17 clumps laid out in a row; take three (the tall ones are dark thin stalks).
-      grass: [pick(grass, 'mid_a'), pick(grass, 'mid_b'), pick(grass, 'large_b')],
+      grass: [pick(grass, 'mid_a'), pick(grass, 'mid_b'), pick(grass, 'mid_c')],
     }));
     kits.set(loader, kit);
   }
@@ -129,12 +129,12 @@ const FOLIAGE: Record<ThemeId, [number, number, number]> = {
   valley: [0.09, 0.2, 0.06],
 };
 const BARK: Record<ThemeId, [number, number, number]> = {
-  desert: [0.3, 0.22, 0.14],
-  arctic: [0.14, 0.12, 0.11],
-  valley: [0.2, 0.15, 0.1],
+  desert: [0.46, 0.37, 0.26], // silvery dry wood
+  arctic: [0.2, 0.17, 0.15],
+  valley: [0.3, 0.23, 0.16],
 };
 const SHRUB: Record<ThemeId, [number, number, number]> = {
-  desert: [0.34, 0.27, 0.12], // dry khaki
+  desert: [0.5, 0.42, 0.2], // dry khaki
   arctic: [0.13, 0.1, 0.08], // bare twigs
   valley: [0.11, 0.2, 0.05],
 };
@@ -329,10 +329,12 @@ export function snagGeometry(theme: ThemeId): THREE.BufferGeometry {
   const { height, radius, reach } = SNAG_UNIT;
   prism(g, 6, -0.15, height, radius, radius * 0.3, 0.05, 0.03, scaled(bark, 0.8), bark);
   const stubs: Array<[number, number, number]> = [
-    [0.45, 0.4, reach * 0.9],
-    [0.62, 2.6, reach * 0.75],
-    [0.78, 4.4, reach * 0.55],
-    [0.35, 5.2, reach * 0.6],
+    [0.4, 0.4, reach * 0.9],
+    [0.5, 3.1, reach * 0.8],
+    [0.62, 2.0, reach * 0.75],
+    [0.7, 5.0, reach * 0.65],
+    [0.8, 4.4, reach * 0.55],
+    [0.3, 5.7, reach * 0.6],
   ];
   for (const [at, turn, length] of stubs) {
     const y = at * height;
@@ -430,11 +432,11 @@ export function rockGeometry(): THREE.BufferGeometry {
 // Materials
 
 /** The rock material (far boulders, the nest's platform): the cliff texture tinted per theme, flat colour without it. */
-export function rockMaterial(theme: ThemeId, maxAnisotropy: number): THREE.MeshStandardMaterial {
-  const material = new THREE.MeshStandardMaterial({ color: ROCK_FLAT[theme], roughness: 0.95, metalness: 0, flatShading: true });
+export function rockMaterial(theme: ThemeId, maxAnisotropy: number, brightness = 1): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(ROCK_FLAT[theme]).multiplyScalar(brightness), roughness: 0.95, metalness: 0, flatShading: true });
   loadTexture(`${import.meta.env.BASE_URL}assets/textures/rock_diff.jpg`, maxAnisotropy, (texture) => {
     material.map = texture;
-    material.color.set(ROCK_TINT[theme]);
+    material.color.set(ROCK_TINT[theme]).multiplyScalar(brightness);
     material.needsUpdate = true;
   });
   patchSurface(material, 'rock', { saturation: ROCK_SATURATION[theme], snow: theme === 'arctic' ? { from: 0.45, to: 0.8, amount: 0.85 } : undefined });

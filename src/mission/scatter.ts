@@ -31,9 +31,9 @@ export const MAX_BOULDERS = 300;
 export const MAX_GRASS = 800;
 export const MAX_SHRUBS = 300;
 /** Of the boulders, at most this many use the detailed glTF model (the far ones use a light procedural rock). */
-export const MAX_NEAR_BOULDERS = 90;
+export const MAX_NEAR_BOULDERS = 60;
 /** Boulders nearer than this (m) to the shooter get the detailed model. */
-export const NEAR_BOULDER_RANGE = 170;
+export const NEAR_BOULDER_RANGE = 140;
 
 /** The height above which no firs grow, m (the snow line sits above it; named here because the terrain colours it). */
 export const TREE_LINE_M: Readonly<Record<'arctic' | 'valley', number>> = { arctic: 90, valley: 105 };
@@ -523,8 +523,13 @@ export function planScatter(inputs: ScatterInputs): ScatterPlan {
   // ---- shrubs: dry in the desert, green in the valley, bare and dark in the snow
   {
     const rng = mk(5);
+    const compounds: Array<{ x: number; z: number }> = layout.props;
     for (let attempts = 0; plan.shrubs.length < budget.shrubs && attempts < budget.shrubs * 120; attempts++) {
-      const p = nearField(rng, 22, 900, 1.9, 0.6, 100 * DEG);
+      // a third of them round the compounds, the rest over the slopes and the near field
+      const p =
+        compounds.length > 0 && rng() < 0.3
+          ? around(rng, compounds[Math.floor(rng() * compounds.length)], 4, 24, 1.2)
+          : nearField(rng, 22, 900, 1.9, 0.6, 100 * DEG);
       const g = ground(p.x, p.z);
       if (placer.slope(p.x, p.z) > 0.75 || g > 90) continue;
       const w = 0.45 + 0.9 * Math.pow(rng(), 1.5);
@@ -560,7 +565,7 @@ export function planScatter(inputs: ScatterInputs): ScatterPlan {
       const p = far ? nearField(rng, 70, 230, 1.4, 0.3) : nearField(rng, 6, 70, 1.5, 0.15);
       const g = ground(p.x, p.z);
       if (placer.slope(p.x, p.z) > 0.5) continue;
-      // mostly the light clumps (the glTF's three clumps have 340, 190 and 690 triangles)
+      // mostly the light clumps (the glTF's three clumps have 340, 190 and 220 triangles)
       const pick = rng();
       const variant = pick < 0.45 ? 1 : pick < 0.8 ? 0 : 2;
       const unit = GRASS_UNIT[variant];

@@ -28,7 +28,7 @@ const FAKE_SCENES: Record<ModelName, () => THREE.Object3D> = {
   },
   grass_clump: () => {
     const g = new THREE.Group();
-    const dims: Record<string, [number, number, number]> = { mid_a: [0.216, 0.217, 0.221], mid_b: [0.187, 0.177, 0.2], large_b: [0.269, 0.169, 0.262], tall_a: [0.159, 0.321, 0.159] };
+    const dims: Record<string, [number, number, number]> = { mid_a: [0.216, 0.217, 0.221], mid_b: [0.187, 0.177, 0.2], mid_c: [0.192, 0.143, 0.202], tall_a: [0.159, 0.321, 0.159] };
     let x = 0;
     for (const [key, d] of Object.entries(dims)) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(...d), new THREE.MeshStandardMaterial());
@@ -140,7 +140,7 @@ describe('modelParts / loadModelKit', () => {
     const kit = await loadModelKit(fakeLoader);
     expect(kit.boulder?.name).toBe('boulder_02');
     expect(kit.log?.name).toBe('dead_tree_trunk');
-    expect(kit.grass.map((p) => p?.name)).toEqual(['grass_medium_01_mid_a_LOD0', 'grass_medium_01_mid_b_LOD0', 'grass_medium_01_large_b_LOD0']);
+    expect(kit.grass.map((p) => p?.name)).toEqual(['grass_medium_01_mid_a_LOD0', 'grass_medium_01_mid_b_LOD0', 'grass_medium_01_mid_c_LOD0']);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const broken = await loadModelKit(failingLoader());
     expect(broken).toEqual({ boulder: null, log: null, grass: [null, null, null] });

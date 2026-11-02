@@ -148,7 +148,7 @@ export function createNest(field: TerrainField, seed: number, position: FiringPo
 
   // ---- the platform
   if (plan.pad) {
-    const material = rockMaterial(theme, maxAnisotropy);
+    const material = rockMaterial(theme, maxAnisotropy, 1.4); // lit from above only: the cliff face is in its own shade
     material.flatShading = false;
     material.polygonOffset = true; // wins the depth tie with the terrain mesh where they coincide
     material.polygonOffsetFactor = -2;

@@ -7,10 +7,10 @@ export const BOULDER_UNIT = { lx: 2.514, ly: 0.88, lz: 1.232 } as const;
 /** The fallen-log model (dead_tree.glb), lying along x, centred, base at y = 0, m. */
 export const LOG_UNIT = { length: 3.05, radius: 0.15 } as const;
 /** A standing snag (procedural) at scale 1: height, base radius and the reach of its branch stubs, m. */
-export const SNAG_UNIT = { height: 4.6, radius: 0.2, reach: 1.5 } as const;
-/** The grass clump variants (grass_clump.glb's mid_a, mid_b and large_b), base at y = 0, centred: footprint radius and height at scale 1, m. */
+export const SNAG_UNIT = { height: 4.6, radius: 0.28, reach: 1.7 } as const;
+/** The grass clump variants (grass_clump.glb's mid_a, mid_b and mid_c), base at y = 0, centred: footprint radius and height at scale 1, m. */
 export const GRASS_UNIT: ReadonlyArray<{ radius: number; height: number }> = [
   { radius: 0.16, height: 0.22 },
   { radius: 0.14, height: 0.18 },
-  { radius: 0.19, height: 0.17 },
+  { radius: 0.14, height: 0.15 },
 ];
