@@ -227,7 +227,7 @@ function legacyMission(params: URLSearchParams): MissionConfig {
   const wind = field(params.get('wind') ?? '') ?? LEGACY_WIND_MPS;
   const rifle = params.get('rifle');
   return clampMission({
-    theme: 'desert', // the legacy scene is the desert; `air` does not select a theme
+    theme: 'desert', // the legacy scene is the desert, desert air included: a legacy `?air=` stays ignored by ruling and does not select a theme
     rangeMin: range,
     rangeMax: range,
     soldiers: 1,
