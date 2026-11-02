@@ -75,6 +75,9 @@ describe('the rifle lit by the world', () => {
     expect(rifle.lightFrom(hdriWorld('desert').scene)).toBe(true);
     expect(rifle.flashGain).toBe(FLASH_HDR_GAIN);
     expect(FLASH_HDR_GAIN).toBeGreaterThan(3 * 2); // well over the bloom threshold (3) after the texture's own falloff
+    const noBloom = new FirstPersonRifle('308');
+    expect(noBloom.lightFrom(hdriWorld('desert').scene, RIFLE_REFERENCE_EXPOSURE, false)).toBe(true);
+    expect(noBloom.flashGain).toBe(1); // ?post=low has no bloom pass: a gain of 14 would only make a white blob
     const quiet = new FirstPersonRifle('308', true);
     expect(quiet.lightFrom(hdriWorld('valley').scene)).toBe(true);
     expect(quiet.flashGain).toBe(0);

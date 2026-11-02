@@ -157,7 +157,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     glow: () => rifleModel.flashVisible,
   });
   // Drawn into the post chain, the rifle is lit by the world's own sky and sun (its muzzle flash then blooms); on the direct path it keeps its stand-in light.
-  if (post.composer) rifleModel.lightFrom(scene, renderer.toneMappingExposure);
+  if (post.composer) rifleModel.lightFrom(scene, renderer.toneMappingExposure, post.bloom !== null);
   prep.remove(); // the canvas is in; the rest of the build runs before the next paint
 
   /** Turn the view at a world point (also used by the debug hook). */

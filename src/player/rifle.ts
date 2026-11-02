@@ -496,10 +496,11 @@ export class FirstPersonRifle {
    * Light the rifle with `world`'s sky and sun instead of its own stand-in: the world's image-based light (the PMREM of the
    * HDRI, shared, not copied), the sun's colour and strength, the hemisphere's. Call it when the world has its HDRI
    * (`applyHdriSky`), and only when the rifle is then drawn into the same HDR post chain (so the exposure is the world's and the
-   * muzzle flash, given an HDR colour, can bloom). `exposure` is the world's tone mapping exposure. Returns false, leaving the stand-in, when the world has no environment.
+   * muzzle flash, given an HDR colour, can bloom: `bloom` says whether the chain has a bloom pass, else the flash keeps its plain colour).
+   * `exposure` is the world's tone mapping exposure. Returns false, leaving the stand-in, when the world has no environment.
    * `orient` must then follow the view every frame.
    */
-  lightFrom(world: THREE.Scene, exposure: number = RIFLE_REFERENCE_EXPOSURE): boolean {
+  lightFrom(world: THREE.Scene, exposure: number = RIFLE_REFERENCE_EXPOSURE, bloom = true): boolean {
     const environment = world.environment;
     if (!environment) return false;
     // The sky's exposure differs by theme (the arctic's is high for its dim overcast, the desert's low for its strong sun): the rifle's
@@ -522,7 +523,7 @@ export class FirstPersonRifle {
       this.hemisphere.intensity = hemisphere.intensity * gain;
     }
     this.fill.intensity = FILL_WORLD_SHARE * (sun ? sun.intensity : 1) * gain;
-    this.flash?.setGain(FLASH_HDR_GAIN);
+    this.flash?.setGain(bloom ? FLASH_HDR_GAIN : 1); // an HDR flash only makes sense where a bloom pass will take it
     this.worldLit = true;
     this.orient(this.viewInverse.identity());
     return true;
