@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { Vec3 } from '../ballistics/types';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
 import {
@@ -165,33 +166,53 @@ const BOUNDS_MARGIN = 0.05;
 
 // Meshes of all dummies share their geometries and materials (ten soldiers would otherwise build a
 // hundred of each); nothing changes them after creation. They live as long as the page.
-const dummyMaterials = new Map<number, THREE.MeshLambertMaterial>();
-const dummyBoxGeometries = new Map<string, THREE.BoxGeometry>();
-let dummyHeadGeometry: THREE.IcosahedronGeometry | null = null;
+// The look is smoother than the hit spheres need: rounded boxes for the trunk and boots, capsules for
+// the arms and legs, a sphere head, goggles and a scarf. Every piece stays inside the DUMMY_BOXES
+// dimensions (the hit spheres and the layout are built from those), and the goggles and scarf sit
+// within the head and torso spheres.
+const dummyMaterials = new Map<number, THREE.MeshStandardMaterial>();
+const dummyGeometries = new Map<string, THREE.BufferGeometry>();
 
-function dummyMaterial(color: number): THREE.MeshLambertMaterial {
+/** Goggles and scarf (mesh only: they sit inside the head and upper-torso hit zones). */
+const GOGGLES = { cy: 1.68, cz: 0.105, w: 0.19, h: 0.045, d: 0.045, color: 0x1c2524 } as const;
+const SCARF = { cy: 1.56, rTop: 0.1, rBottom: 0.08, h: 0.1, color: 0x7b7352 } as const;
+
+function dummyMaterial(color: number): THREE.MeshStandardMaterial {
   let m = dummyMaterials.get(color);
   if (!m) {
-    m = new THREE.MeshLambertMaterial({ color, flatShading: true });
+    m = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 });
     dummyMaterials.set(color, m);
   }
   return m;
 }
 
-function boxGeometry(w: number, h: number, d: number): THREE.BoxGeometry {
-  const key = `${w}x${h}x${d}`;
-  let g = dummyBoxGeometries.get(key);
+function sharedGeometry(key: string, make: () => THREE.BufferGeometry): THREE.BufferGeometry {
+  let g = dummyGeometries.get(key);
   if (!g) {
-    g = new THREE.BoxGeometry(w, h, d);
-    dummyBoxGeometries.set(key, g);
+    g = make();
+    dummyGeometries.set(key, g);
   }
   return g;
 }
 
-function headGeometry(): THREE.IcosahedronGeometry {
-  dummyHeadGeometry ??= new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1);
-  return dummyHeadGeometry;
+/** A box with rounded edges (radius a quarter of its thinnest side: the silhouette loses at most ~2 cm at a corner). */
+function roundedBox(w: number, h: number, d: number): THREE.BufferGeometry {
+  return sharedGeometry(`rb|${w}x${h}x${d}`, () => new RoundedBoxGeometry(w, h, d, 3, Math.min(w, h, d) * 0.25));
 }
+
+/** A capsule exactly `w` wide and `h` tall (a limb); the mesh is stretched in depth to the box's depth. */
+function capsule(w: number, h: number): THREE.BufferGeometry {
+  return sharedGeometry(`cap|${w}x${h}`, () => new THREE.CapsuleGeometry(w / 2, h - w, 6, 14));
+}
+
+function headGeometry(): THREE.BufferGeometry {
+  return sharedGeometry('head', () => new THREE.SphereGeometry(DUMMY_HEAD.radius, 22, 16));
+}
+
+/** Limbs are capsules, everything else a rounded box. */
+const isLimb = (name: string): boolean => /arm|leg/.test(name);
+/** Parts that cast a shadow: the body and the limbs; boots, goggles and the scarf are too small to be worth a shadow-pass draw. */
+const castsShadow = (name: string): boolean => /vest|pelvis|arm|leg/.test(name);
 
 /**
  * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
@@ -216,15 +237,35 @@ export function createTargetDummy(
   group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
+  const add = (mesh: THREE.Mesh, cast: boolean): void => {
+    mesh.castShadow = cast;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+
   const head = new THREE.Mesh(headGeometry(), dummyMaterial(DUMMY_KHAKI));
   head.position.set(0, DUMMY_HEAD.cy, 0);
-  group.add(head);
+  add(head, true);
   for (const b of DUMMY_BOXES) {
-    const mesh = new THREE.Mesh(boxGeometry(b.w, b.h, b.d), dummyMaterial(b.color));
+    if (b.name === 'neck') continue; // the scarf covers it
+    const limb = isLimb(b.name);
+    const mesh = new THREE.Mesh(limb ? capsule(b.w, b.h) : roundedBox(b.w, b.h, b.d), dummyMaterial(b.color));
+    if (limb) mesh.scale.z = b.d / b.w; // a capsule is round; the box is a little deeper than wide
     mesh.position.set(b.cx, b.cy, b.cz);
     mesh.name = b.name;
-    group.add(mesh);
+    add(mesh, castsShadow(b.name));
   }
+  const goggles = new THREE.Mesh(roundedBox(GOGGLES.w, GOGGLES.h, GOGGLES.d), dummyMaterial(GOGGLES.color));
+  goggles.position.set(0, GOGGLES.cy, GOGGLES.cz);
+  goggles.name = 'goggles';
+  add(goggles, false);
+  const scarf = new THREE.Mesh(
+    sharedGeometry('scarf', () => new THREE.CylinderGeometry(SCARF.rTop, SCARF.rBottom, SCARF.h, 18)),
+    dummyMaterial(SCARF.color),
+  );
+  scarf.position.set(0, SCARF.cy, 0);
+  scarf.name = 'scarf';
+  add(scarf, false);
 
   // Hit spheres in world space: the dummy's own (x, y) turned by the yaw about the feet.
   const cos = Math.cos(yaw);

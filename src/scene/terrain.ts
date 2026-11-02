@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createRng } from '../mission/random';
 import type { ThemeId } from '../mission/themes';
+import { groundRelief } from './detail';
 import type { RockOutcrop, TerrainField } from './terrainField';
 
 export { DESERT_FIELD, SHOOTER_POS, terrainHeight } from './terrainHeight';
@@ -64,6 +65,18 @@ interface TerrainLook {
   rockColor: number;
   /** Neutral vertex tint around 1 at a vertex, from height `y` and a slow patchy variation 0..1. */
   tint(y: number, patch: number, out: THREE.Color): void;
+  /** Surface response: how rough the ground is (1 = no sheen). */
+  roughness: number;
+  /** Bump relief: strength, and how many metres one tile of the relief texture covers. */
+  bumpScale: number;
+  bumpTileM: number;
+  /**
+   * Bare rock: it shows through on steep ground (the horizontal part of the surface normal, 0 flat to 1 vertical,
+   * between `slopeFrom` and `slopeTo`) and on high ground (`heightFrom`..`heightTo`, m), up to `strength` of the surface.
+   */
+  rock: { slopeFrom: number; slopeTo: number; heightFrom: number; heightTo: number; strength: number };
+  /** World-space mottling: how strongly broad (hundreds of m) and fine (about a metre) patches vary the brightness, and the two tints the ground drifts between. */
+  mottle: { broad: number; grain: number; tintA: [number, number, number]; tintB: [number, number, number] };
 }
 
 const LOOKS: Record<ThemeId, TerrainLook> = {
@@ -79,6 +92,12 @@ const LOOKS: Record<ThemeId, TerrainLook> = {
       const shade = 0.88 + 0.1 * Math.max(-1, Math.min(1, y / 5)) + 0.1 * patch;
       out.setRGB(shade, shade, shade);
     },
+    roughness: 0.94,
+    bumpScale: 0.045,
+    bumpTileM: 4,
+    rock: { slopeFrom: 0.3, slopeTo: 0.65, heightFrom: 35, heightTo: 120, strength: 0.85 },
+    // Orange-warm hollows and paler, cooler crests.
+    mottle: { broad: 0.12, grain: 0.035, tintA: [1.05, 0.97, 0.88], tintB: [0.94, 0.96, 1.0] },
   },
   arctic: {
     texture: 'textures/snow_albedo.webp',
@@ -92,6 +111,12 @@ const LOOKS: Record<ThemeId, TerrainLook> = {
       const shade = 0.9 + 0.06 * Math.max(-1, Math.min(1, y / 4)) + 0.06 * patch;
       out.setRGB(shade * 0.96, shade * 0.98, shade);
     },
+    roughness: 0.82,
+    bumpScale: 0.05,
+    bumpTileM: 5,
+    rock: { slopeFrom: 0.24, slopeTo: 0.55, heightFrom: 40, heightTo: 130, strength: 0.88 },
+    // Blue-shaded hollows between sunlit white drifts.
+    mottle: { broad: 0.07, grain: 0.02, tintA: [0.93, 0.97, 1.07], tintB: [1.02, 1.0, 0.97] },
   },
   valley: {
     texture: 'textures/grass_albedo.webp',
@@ -105,6 +130,12 @@ const LOOKS: Record<ThemeId, TerrainLook> = {
       const high = Math.max(0, Math.min(1, y / 22));
       out.setRGB(0.95 + 0.2 * high + 0.12 * patch, 1.04 + 0.1 * high + 0.12 * patch, 0.85 + 0.05 * patch);
     },
+    roughness: 0.96,
+    bumpScale: 0.06,
+    bumpTileM: 4,
+    rock: { slopeFrom: 0.32, slopeTo: 0.7, heightFrom: 30, heightTo: 110, strength: 0.85 },
+    // Lush green meadow with drier, yellower patches.
+    mottle: { broad: 0.14, grain: 0.05, tintA: [0.88, 1.0, 0.8], tintB: [1.1, 1.02, 0.78] },
   },
 };
 
@@ -183,6 +214,47 @@ export function buildTerrainGeometry(field: TerrainField): THREE.BufferGeometry 
   return geometry;
 }
 
+const glsl = (n: number): string => n.toFixed(4);
+const glslVec = (v: ArrayLike<number>): string => `vec3(${glsl(v[0])}, ${glsl(v[1])}, ${glsl(v[2])})`;
+
+/**
+ * Terrain shading on top of the standard material (world-space, so it never tiles and never swims with the view):
+ *  - geological mottling: broad and fine brightness variation, and a slow drift between two tints;
+ *  - rock tint: steep or high ground blends to the theme's rock colour, with faint strata.
+ * The mesh sits at the origin, so object space is world space.
+ */
+function patchTerrainShader(shader: { vertexShader: string; fragmentShader: string }, look: TerrainLook): void {
+  const { rock, mottle } = look;
+  const rockColor = new THREE.Color(look.rockColor); // linear, like diffuseColor
+  shader.vertexShader =
+    'varying vec3 vGround;\nvarying vec3 vGroundN;\n' +
+    shader.vertexShader
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvGroundN = objectNormal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGround = position;');
+  shader.fragmentShader =
+    'varying vec3 vGround;\nvarying vec3 vGroundN;\n' +
+    shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+      // Each term fades out once a pixel spans more than a fraction of its wavelength (far ground, or a high zoom on it), or it aliases into streaks along the view.
+      float pixelM = max(fwidth(vGround.x), fwidth(vGround.z));
+      float fine = 1.0 - smoothstep(0.6, 2.0, pixelM);
+      float wide = 1.0 - smoothstep(25.0, 140.0, pixelM);
+      float broad = sin(vGround.x * 0.012 + sin(vGround.z * 0.016) * 1.6) * sin(vGround.z * 0.010 + 0.7) * wide;
+      float grain = sin(vGround.x * 0.67 + vGround.z * 0.37) * sin(vGround.z * 0.51 - vGround.x * 0.29) * fine;
+      float drift = 0.5 + 0.5 * mix(0.0, sin(vGround.x * 0.0123 + 1.7) * sin(vGround.z * 0.0087 - 0.4 + sin(vGround.x * 0.004) * 2.0), wide);
+      diffuseColor.rgb *= mix(${glslVec(mottle.tintA)}, ${glslVec(mottle.tintB)}, drift);
+      diffuseColor.rgb *= 1.0 + broad * ${glsl(mottle.broad)} + grain * ${glsl(mottle.grain)};
+      float steep = length(vGroundN.xz) / max(length(vGroundN), 1e-4);
+      float rockMix = max(smoothstep(${glsl(rock.slopeFrom)}, ${glsl(rock.slopeTo)}, steep),
+                          smoothstep(${glsl(rock.heightFrom)}, ${glsl(rock.heightTo)}, vGround.y)) * ${glsl(rock.strength)};
+      float strata = sin(vGround.y * 1.8 + sin(vGround.x * 0.08) * 2.0) * fine;
+      vec3 bare = ${glslVec([rockColor.r, rockColor.g, rockColor.b])} * (0.85 + strata * 0.1 + grain * 0.06 + broad * 0.08);
+      diffuseColor.rgb = mix(diffuseColor.rgb, bare, rockMix);
+      `,
+    );
+}
+
 /**
  * The 4 km x 4 km ground of `field`, textured for its theme (sand, snow or grass).
  * `maxAnisotropy` should be `renderer.capabilities.getMaxAnisotropy()`.
@@ -192,7 +264,18 @@ export function createTerrainMesh(field: TerrainField, maxAnisotropy = 8): THREE
   const geometry = buildTerrainGeometry(field);
 
   // Flat theme colour until the detail map arrives; if it never does, the terrain just stays flat.
-  const material = new THREE.MeshLambertMaterial({ color: look.fallbackColor, vertexColors: true });
+  const bump = groundRelief(field.theme, maxAnisotropy);
+  bump.repeat.set(look.tileM / look.bumpTileM, look.tileM / look.bumpTileM); // uv runs in albedo tiles
+  const material = new THREE.MeshStandardMaterial({
+    color: look.fallbackColor,
+    vertexColors: true,
+    roughness: look.roughness,
+    metalness: 0,
+    bumpMap: bump,
+    bumpScale: look.bumpScale,
+  });
+  material.onBeforeCompile = (shader) => patchTerrainShader(shader, look);
+  material.customProgramCacheKey = () => `terrain-${field.theme}`; // the patch differs per theme
   new THREE.TextureLoader().load(
     `${import.meta.env.BASE_URL}${look.texture}`,
     (texture) => {
@@ -214,6 +297,7 @@ export function createTerrainMesh(field: TerrainField, maxAnisotropy = 8): THREE
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'terrain';
   mesh.frustumCulled = false; // one big mesh that is almost always in view
+  mesh.receiveShadow = true; // the ground takes the shadows of props and soldiers; it casts none (it would fill the shadow map)
   return mesh;
 }
 
@@ -221,7 +305,7 @@ export function createTerrainMesh(field: TerrainField, maxAnisotropy = 8): THREE
 export function createRocks(field: TerrainField): THREE.Group {
   const group = new THREE.Group();
   group.name = 'rocks';
-  const material = new THREE.MeshLambertMaterial({ color: LOOKS[field.theme].rockColor, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({ color: LOOKS[field.theme].rockColor, roughness: 0.92, flatShading: true });
   const geometry = new THREE.DodecahedronGeometry(1, 0);
   // Deterministic jitter so the rocks are the same every load.
   const rand = createRng(7);
@@ -237,6 +321,8 @@ export function createRocks(field: TerrainField): THREE.Group {
       rock.scale.set(size * (1 + rand()), size * (0.6 + rand() * 0.5), size * (1 + rand()));
       rock.position.set(x, field.height(x, z) + size * 0.1, z);
       rock.rotation.set(rand() * 3, rand() * 6.28, rand() * 3);
+      rock.castShadow = true;
+      rock.receiveShadow = true;
       group.add(rock);
     }
   }

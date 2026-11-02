@@ -11,6 +11,8 @@ export function createRenderer(parent: HTMLElement): THREE.WebGLRenderer {
     logarithmicDepthBuffer: true,
     powerPreference: 'high-performance',
   });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.9;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));

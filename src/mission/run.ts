@@ -25,6 +25,7 @@ import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
+import { shadowFocus } from '../scene/shadows';
 import { Assists } from '../ui/assists';
 import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
@@ -409,6 +410,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // Game loop
   let lastMs: number | null = null;
   let rangeTimer = RANGEFINDER_INTERVAL_S; // read it on the first frame
+  let lastRange: number | null = null;
   let completeTimer = 0;
   let failedTimer = 0;
   function tick(nowMs: number): void {
@@ -443,8 +445,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     rangeTimer += dt;
     if (rangeTimer >= RANGEFINDER_INTERVAL_S) {
       rangeTimer = 0;
-      hud.setRange(rangeUnderCrosshair(shooter, view.forward(), field, obstacles, liveTargets));
+      lastRange = rangeUnderCrosshair(shooter, view.forward(), field, obstacles, liveTargets);
+      hud.setRange(lastRange);
     }
+    // The shadow box follows the crosshair point when scoped, the ground ahead otherwise.
+    world.shadow.update(
+      shadowFocus({ scoped: view.isScoped, eye: shooter, forward: view.forward(), rangeM: lastRange, ground: field.height }),
+    );
 
     assists?.update(dt);
 

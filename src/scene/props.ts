@@ -224,8 +224,19 @@ function decalBox(b: LocalBox, face: Face, u0: number, u1: number, v0: number, v
 
 // ---------------------------------------------------------------------------------------------
 
-function addBox(group: THREE.Group, center: THREE.Vector3, half: THREE.Vector3, mat: THREE.Material, name: string): THREE.Mesh {
+/** `cast`: the box casts a shadow (the body boxes do; thin decorations and the foundation only take them). */
+function addBox(
+  group: THREE.Group,
+  center: THREE.Vector3,
+  half: THREE.Vector3,
+  mat: THREE.Material,
+  name: string,
+  cast = false,
+  receive = true,
+): THREE.Mesh {
   const mesh = new THREE.Mesh(sharedBox(), mat);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = receive;
   mesh.position.copy(center);
   mesh.scale.set(half.x * 2, half.y * 2, half.z * 2);
   mesh.name = name;
@@ -238,7 +249,8 @@ function addBox(group: THREE.Group, center: THREE.Vector3, half: THREE.Vector3, 
 /**
  * The mesh of a prop: a group at the footprint centre (ground height `groundY`) turned by the placement
  * yaw, holding one box mesh per collider box (tagged with `userData.boxIndex` and `userData.part`) plus
- * the decorations. Vehicles include their engine block (the last box).
+ * the decorations. Vehicles include their engine block (the last box). The body boxes cast and receive
+ * sun shadows (not the tyres, which only receive); decorations only receive.
  */
 export function createPropMesh(p: PropPlacement, groundY: number, theme: ThemeId): THREE.Group {
   const group = new THREE.Group();
@@ -256,6 +268,7 @@ export function createPropMesh(p: PropPlacement, groundY: number, theme: ThemeId
       new THREE.Vector3(b.halfSize.x, b.halfSize.y, b.halfSize.z),
       boxMaterial(p.kind, b.part, theme, shade),
       `${p.kind} ${b.part}`,
+      b.part !== 'wheel', // tyres are small and sit in the hull's own shadow: one shadow-pass draw less each
     );
     mesh.userData.boxIndex = i;
     mesh.userData.part = b.part;
@@ -276,6 +289,8 @@ export function createPropMesh(p: PropPlacement, groundY: number, theme: ThemeId
       new THREE.Vector3(wall.halfSize.x, SKIRT_DEPTH / 2, wall.halfSize.z),
       boxMaterial(p.kind, 'wall', theme, shade),
       'foundation',
+      false,
+      false, // below the ground
     );
   }
   return group;

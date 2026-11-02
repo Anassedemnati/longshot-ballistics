@@ -3,7 +3,10 @@ import type { Vec3 } from '../ballistics/types';
 import { DustSystem } from '../fx/dust';
 import { SparkSystem } from '../fx/sparks';
 import type { HitTarget, Obstacle } from '../game/hit';
+import { createGroundDetail } from '../scene/detail';
 import { createPropMesh } from '../scene/props';
+import { createShadowLight } from '../scene/shadows';
+import type { ShadowLight } from '../scene/shadows';
 import { createSky } from '../scene/sky';
 import { createSniper } from '../scene/sniper';
 import type { Sniper } from '../scene/sniper';
@@ -21,7 +24,7 @@ import { propColliders, vehicleEngineObstacle } from './props';
 import { sniperAimPoints } from './sniperDims';
 
 // Builds the mission's world from its config: the terrain field and the layout (pure, no three.js),
-// then the scene with the sky, terrain, props, soldiers and vehicle targets, and the lists the bullets
+// then the scene with the sky and sun shadow, terrain, ground detail, props, soldiers and vehicle targets, and the lists the bullets
 // and the rangefinder read (cover colliders, live hit targets). `run.ts` plays it.
 
 /** Height of the aim point on a soldier (chest), m above the feet. */
@@ -63,6 +66,8 @@ export interface MissionPlan {
 
 export interface World extends MissionPlan {
   scene: THREE.Scene;
+  /** The sun's shadow: `run.ts` re-centres its box on where the player looks, every frame. */
+  shadow: ShadowLight;
   dust: DustSystem;
   sparks: SparkSystem;
   /**
@@ -107,9 +112,12 @@ export function buildWorld(
 ): World {
   const { field, layout } = plan;
   const scene = new THREE.Scene();
-  createSky(scene, config.theme);
+  const { sun } = createSky(scene, config.theme);
+  const shadow = createShadowLight(scene, config.theme, sun);
   scene.add(createTerrainMesh(field, opts.maxAnisotropy));
   scene.add(createRocks(field));
+  // Pebbles (and grass in the valley): visual only, kept off the lane, the props and the targets.
+  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy).group);
   const dust = new DustSystem();
   scene.add(dust.group);
   const sparks = new SparkSystem();
@@ -164,7 +172,7 @@ export function buildWorld(
   }
   const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length;
 
-  return { ...plan, scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
+  return { ...plan, scene, shadow, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */
