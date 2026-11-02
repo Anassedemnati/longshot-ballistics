@@ -1,13 +1,17 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Rifle } from '../ballistics/types';
 import { BOLT_TIME_S, RELOAD_TIME_S } from '../game/weapon';
+import { rifleEnvironment } from './rifleEnvironment';
+import { addHands } from './rifleHands';
+import { type MaterialKey, PartSet, type PartStyle } from './rifleParts';
+import { rifleTextures } from './rifleTextures';
 
-// The visible rifle (spec B.3): a camera-local model with its own scene and camera, drawn after the world with
+// The visible rifle (spec B.3, C.5): a camera-local model with its own scene and camera, drawn after the world with
 // the depth buffer cleared so it never sinks into terrain. Modelled after public/references/rifle-concept.png.
-// All parts are baked into one mesh per material (about 8 draw calls in all) and built once; nothing here
-// allocates per frame.
+// PBR finish: anodised / cerakote metal (roughness and metalness maps, edge wear in the vertex colours), stippled
+// polymer, rubber, a coated glass scope lens, camo-tan gloves; lit by a small environment of its own (the world's sky
+// is not in this scene). All parts are baked into one mesh per material (7 draw calls at most) and built once;
+// nothing here allocates per frame.
 
 /** Barrel length by rifle, m: the .338 is the longer rifle. */
 export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47 };
@@ -21,6 +25,9 @@ const BARREL_Y = 0.04;
 /** The suppressor is this long, m, and sits on the muzzle. */
 export const SUPPRESSOR_LENGTH_M = 0.19;
 
+/** Scope axis height, m, and the rear lens' radius: the eyepiece faces the shooter. */
+const SCOPE_Y = 0.17;
+
 /** Bolt handle pivot (on the bolt axis, in model space), m. */
 const BOLT_PIVOT = { x: 0, y: BARREL_Y, z: 0.02 } as const;
 /** The raised bolt handle is turned this far about the bolt axis, rad. */
@@ -29,16 +36,23 @@ const BOLT_LIFT_RAD = 1.1;
 const BOLT_SLIDE_M = 0.045;
 
 /** Where the rifle sits relative to the camera, m (right, down, forward = -z). */
-const HOLD = { x: 0.21, y: -0.24, z: -0.49 } as const;
-/** Slight yaw of the whole model toward the centre of the view, rad. */
-const HOLD_YAW_RAD = -0.09;
+const HOLD = { x: 0.3, y: -0.26, z: -0.8 } as const;
+/** Yaw of the whole model toward the centre of the view (muzzle to the left), rad: shows the rifle's left side. */
+const HOLD_YAW_RAD = 0.3;
 /** Resting roll, rad. */
-const HOLD_ROLL_RAD = -0.025;
+const HOLD_ROLL_RAD = -0.06;
 /** The rifle's own field of view, deg (independent of the world camera's scope zoom). */
-const VIEW_FOV_DEG = 55;
-/** Idle sway: amplitude m and speed rad/s. */
-const SWAY_M = 0.002;
-const SWAY_SPEED = 1.2;
+const VIEW_FOV_DEG = 58;
+/** Strength of the rifle's own environment light (the sky stand-in, see rifleEnvironment.ts). */
+const ENVIRONMENT_INTENSITY = 0.9;
+
+/** Idle breathing: a slow rise and fall, a slower drift, and a tiny tilt. Amplitudes in m / rad, periods in s. */
+const BREATH_PERIOD_S = 4.6;
+const BREATH_RISE_M = 0.0022;
+const BREATH_DRIFT_PERIOD_S = 7.3;
+const BREATH_DRIFT_M = 0.0008;
+const BREATH_PITCH_RAD = 0.0035;
+const BREATH_ROLL_RAD = 0.0015;
 
 /** Recoil: the kick fades as exp(-KICK_DECAY * t); it pushes the rifle back and tips the muzzle up. */
 const KICK_DECAY = 13;
@@ -62,63 +76,36 @@ const CORE_SIZE_M = 0.12;
 /** The flame starts this far in front of the barrel's muzzle end, m. */
 const FLASH_GAP_M = 0.026;
 
-type MaterialKey = 'metal' | 'edge' | 'stock' | 'rubber' | 'glass';
+/** Part colours (sRGB hex): the coats and metals of the rifle. */
+const CERAKOTE = 0x4a4e54;
+const ANODISED = 0x3a3d42;
+const BLUED = 0x32353a;
+const STEEL = 0x9a9da1;
+/** Ribs, teeth and rings: a lighter coat than the body's. */
+const LIGHT_COAT = 0x565a60;
+const BRASS = 0xb28a3c;
+const BORE = 0x050607;
 
-/** The part-by-part geometry of one rifle, collected per material and then baked into one mesh per material. */
-class PartSet {
-  private readonly byMaterial = new Map<MaterialKey, THREE.BufferGeometry[]>();
-  private readonly matrix = new THREE.Matrix4();
-  private readonly euler = new THREE.Euler();
+/** Where the sway of the breathing rifle is, m and rad (see `breathingSway`). */
+export interface Sway {
+  x: number;
+  y: number;
+  pitch: number;
+  roll: number;
+}
 
-  /** Put `geometry` at (x, y, z), turned by the Euler angles (XYZ order), and file it under `material`. */
-  add(material: MaterialKey, geometry: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void {
-    this.euler.set(rx, ry, rz, 'XYZ');
-    this.matrix.makeRotationFromEuler(this.euler).setPosition(x, y, z);
-    geometry.applyMatrix4(this.matrix);
-    // Rounded boxes are not indexed and cylinders are; a merge needs them all alike.
-    const part = geometry.index ? geometry.toNonIndexed() : geometry;
-    if (part !== geometry) geometry.dispose();
-    const list = this.byMaterial.get(material);
-    if (list) list.push(part);
-    else this.byMaterial.set(material, [part]);
-  }
-
-  /** A box of w x h x d with softened edges (plain for slivers, where rounding would only add triangles). */
-  box(material: MaterialKey, w: number, h: number, d: number, x: number, y: number, z: number, rx = 0): void {
-    const smallest = Math.min(w, h, d);
-    const geometry = smallest < 0.02 ? new THREE.BoxGeometry(w, h, d) : new RoundedBoxGeometry(w, h, d, 2, smallest * 0.15);
-    this.add(material, geometry, x, y, z, rx);
-  }
-
-  /**
-   * A cylinder (or cone: `rFront` is the radius at the muzzle end) along the z axis by default; `rx/rz` turn it.
-   * Small tubes get fewer sides.
-   */
-  tube(material: MaterialKey, rFront: number, rBack: number, length: number, x: number, y: number, z: number, rx = Math.PI / 2, rz = 0): void {
-    const radius = Math.max(rFront, rBack);
-    const sides = radius >= 0.03 ? 32 : radius >= 0.015 ? 20 : 10;
-    // CylinderGeometry has its +y end (radiusTop) toward the shooter once turned about x.
-    this.add(material, new THREE.CylinderGeometry(rBack, rFront, length, sides), x, y, z, rx, 0, rz);
-  }
-
-  sphere(material: MaterialKey, radius: number, x: number, y: number, z: number): void {
-    this.add(material, new THREE.SphereGeometry(radius, 16, 10), x, y, z);
-  }
-
-  /** One mesh per material, in `materials`' colours; the part geometry is merged and then released. */
-  toMeshes(materials: Readonly<Record<MaterialKey, THREE.Material>>): THREE.Mesh[] {
-    const meshes: THREE.Mesh[] = [];
-    for (const [key, list] of this.byMaterial) {
-      const merged = mergeGeometries(list);
-      if (!merged) throw new Error(`rifle: parts of '${key}' could not be merged`);
-      for (const part of list) part.dispose();
-      const mesh = new THREE.Mesh(merged, materials[key]);
-      mesh.name = key;
-      mesh.frustumCulled = false; // always within a hand's reach of the camera
-      meshes.push(mesh);
-    }
-    return meshes;
-  }
+/**
+ * Idle breathing at time `timeS` (s): a few millimetres of rise and fall with a trace of drift and tilt. Pure and
+ * deterministic (the same time gives the same pose); writes into `out`, so it allocates nothing.
+ */
+export function breathingSway(timeS: number, out: Sway): Sway {
+  const breath = Math.sin((timeS * Math.PI * 2) / BREATH_PERIOD_S);
+  const drift = Math.sin((timeS * Math.PI * 2) / BREATH_DRIFT_PERIOD_S + 1.3);
+  out.x = drift * BREATH_DRIFT_M;
+  out.y = breath * BREATH_RISE_M;
+  out.pitch = (breath * 0.8 + drift * 0.2) * BREATH_PITCH_RAD;
+  out.roll = drift * BREATH_ROLL_RAD;
+  return out;
 }
 
 /** What `buildRifleModel` returns. */
@@ -132,82 +119,187 @@ export interface RifleModel {
 }
 
 function makeMaterials(id: Rifle['id']): Record<MaterialKey, THREE.Material> {
+  const maps = rifleTextures();
   return {
-    metal: new THREE.MeshStandardMaterial({ color: 0x30343a, metalness: 0.35, roughness: 0.32 }),
-    edge: new THREE.MeshStandardMaterial({ color: 0x62666a, metalness: 0.4, roughness: 0.42 }),
-    stock: new THREE.MeshStandardMaterial({ color: STOCK_COLOR[id], metalness: 0.12, roughness: 0.8 }),
-    rubber: new THREE.MeshStandardMaterial({ color: 0x161b1c, roughness: 0.95 }),
-    glass: new THREE.MeshPhysicalMaterial({ color: 0x214b59, metalness: 0.65, roughness: 0.08, clearcoat: 1 }),
+    // Albedo is in the vertex colours; roughness and metalness come from the packed map (G, B).
+    metal: new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 1,
+      roughness: 1,
+      roughnessMap: maps.metal,
+      metalnessMap: maps.metal,
+    }),
+    // Polymer: the stock colour times the vertex wear, with a stipple normal map.
+    stock: new THREE.MeshStandardMaterial({
+      color: STOCK_COLOR[id],
+      vertexColors: true,
+      metalness: 0.02,
+      roughness: 0.6,
+      normalMap: maps.stipple,
+      normalScale: new THREE.Vector2(0.6, 0.6),
+    }),
+    rubber: new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0,
+      roughness: 0.88,
+      normalMap: maps.pebble,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+    }),
+    // Coated glass: a dark teal tint that still reflects (not a black disc), a clear lacquer layer and the thin-film
+    // sheen of an anti-reflection coating. No transmission: that would cost a second pass of the scene.
+    glass: new THREE.MeshPhysicalMaterial({
+      color: 0x3b6a73,
+      emissive: 0x03100f,
+      metalness: 0.85,
+      roughness: 0.03,
+      clearcoat: 1,
+      clearcoatRoughness: 0.03,
+      iridescence: 0.5,
+      iridescenceIOR: 1.38,
+      iridescenceThicknessMinimum: 180,
+      iridescenceThicknessMaximum: 420,
+    }),
+    glove: new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      map: maps.fabric,
+      normalMap: maps.fabricNormal,
+      normalScale: new THREE.Vector2(0.7, 0.7),
+      metalness: 0,
+      roughness: 0.93,
+    }),
   };
 }
 
 /**
- * Build the rifle model (no WebGL needed): the body parts (butt, cheek rest, receiver, fore-end, grip,
- * magazine, rails, scope), the bolt handle as its own small group, and - only when `suppressed` - a
- * suppressor group on the muzzle. The camera looks down -z; +x is to the right.
+ * A shallow spherical lens cap (a dome of `radius` m aperture bulging `bulge` m) with its rim plane at `rimZ`, facing
+ * the shooter (`+1`) or the muzzle (`-1`). Curved, so it reflects a spread of the environment instead of one flat tone.
  */
-export function buildRifleModel(id: Rifle['id'], suppressed: boolean): RifleModel {
+function lens(parts: PartSet, radius: number, bulge: number, facing: 1 | -1, y: number, rimZ: number): void {
+  const sphereRadius = (radius * radius + bulge * bulge) / (2 * bulge);
+  const theta = Math.asin(radius / sphereRadius);
+  const dome = new THREE.SphereGeometry(sphereRadius, 40, 10, 0, Math.PI * 2, 0, theta);
+  dome.translate(0, -sphereRadius * Math.cos(theta), 0); // rim plane at y = 0, pole at y = bulge
+  parts.add('glass', dome, 0, y, rimZ, (facing * Math.PI) / 2);
+}
+
+/**
+ * Build the rifle model (no WebGL needed): the body parts (butt, cheek rest, receiver, fore-end, grip,
+ * magazine, rails, scope), the gloved hands holding grip and fore-end (unless `hands` is false), the bolt handle as
+ * its own small group, and - only when `suppressed` - a suppressor group on the muzzle. The camera looks down -z;
+ * +x is to the right. One mesh per surface: stock (polymer), metal, rubber, glass, glove.
+ */
+export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = true): RifleModel {
   const materials = makeMaterials(id);
   const group = new THREE.Group();
   const body = new PartSet();
   const length = BARREL_LENGTH_M[id];
+  const coat: PartStyle = { color: CERAKOTE, wear: 0.8 };
+  const bare: PartStyle = { color: STEEL };
 
-  // Butt, cheek rest, receiver and fore-end.
-  body.box('stock', 0.105, 0.16, 0.27, 0, -0.05, 0.2);
-  body.box('rubber', 0.11, 0.175, 0.035, 0, -0.055, 0.35); // butt pad
-  body.box('rubber', 0.105, 0.055, 0.18, 0, 0.055, 0.19); // cheek rest
-  body.box('stock', 0.08, 0.105, 0.26, 0, 0, -0.06); // receiver housing
-  body.tube('metal', 0.039, 0.039, 0.25, 0, 0.055, -0.065);
-  body.box('stock', 0.075, 0.075, 0.34, 0, -0.005, -0.34); // fore-end
-  body.box('rubber', 0.065, 0.15, 0.085, 0, -0.12, 0.02, -0.25); // pistol grip
-  body.box('metal', 0.065, 0.135, 0.095, 0, -0.12, -0.14); // magazine
-  body.box('metal', 0.065, 0.014, 0.12, 0, -0.13, -0.035); // trigger guard
-  body.box('metal', 0.012, 0.085, 0.013, 0.025, -0.08, -0.085); // safety / release
-  body.box('edge', 0.009, 0.05, 0.012, 0, -0.06, -0.035, 0.3); // trigger
+  // Butt, neck, cheek rest on its posts, receiver and fore-end.
+  body.box('stock', 0.105, 0.16, 0.2, 0, -0.05, 0.27, 0, { wear: 0.7, round: 0.3 }); // butt
+  body.box('stock', 0.064, 0.1, 0.1, 0, -0.03, 0.135, 0, { wear: 0.7 }); // neck, behind the grip
+  body.box('rubber', 0.11, 0.175, 0.035, 0, -0.055, 0.385, 0, { wear: 0.4, round: 0.3 }); // butt pad
+  body.box('rubber', 0.08, 0.045, 0.2, 0, 0.07, 0.24, 0, { wear: 0.5, round: 0.45 }); // cheek rest
+  for (const z of [0.18, 0.3]) body.tube('metal', 0.007, 0.007, 0.03, 0, 0.04, z, 0, 0, { color: ANODISED }); // its posts
+  body.box('stock', 0.08, 0.105, 0.26, 0, 0, -0.06, 0, { wear: 0.7 }); // receiver housing
+  body.tube('metal', 0.039, 0.039, 0.25, 0, 0.055, -0.065, Math.PI / 2, 0, { color: BLUED });
+  body.box('stock', 0.075, 0.075, 0.34, 0, -0.005, -0.34, 0, { wear: 0.7 }); // fore-end
+  body.box('stock', 0.065, 0.15, 0.085, 0, -0.12, 0.02, -0.25, { wear: 0.6 }); // pistol grip
+  body.box('metal', 0.065, 0.135, 0.095, 0, -0.12, -0.14, 0, { color: ANODISED, wear: 0.9 }); // magazine
+  body.box('metal', 0.065, 0.014, 0.12, 0, -0.145, -0.035, 0, { color: ANODISED, wear: 0.5 }); // trigger guard
+  body.box('metal', 0.012, 0.085, 0.013, 0.025, -0.08, -0.085, 0, bare); // safety / release
+  body.box('metal', 0.009, 0.05, 0.012, 0, -0.06, -0.035, 0.3, bare); // trigger
 
-  // Barrel, muzzle crown and the dark bore.
-  body.tube('metal', 0.015, 0.021, length, 0, BARREL_Y, BARREL_START_Z - length / 2); // tapers toward the muzzle
-  body.tube('metal', 0.024, 0.024, 0.065, 0, BARREL_Y, BARREL_START_Z - 0.01 - length);
-  body.tube('rubber', 0.013, 0.013, 0.001, 0, BARREL_Y, BARREL_START_Z - 0.044 - length);
+  // Barrel, muzzle brake (with its side ports) and the dark bore.
+  body.tube('metal', 0.015, 0.021, length, 0, BARREL_Y, BARREL_START_Z - length / 2, Math.PI / 2, 0, { color: BLUED }); // tapers toward the muzzle
+  body.tube('metal', 0.024, 0.024, 0.065, 0, BARREL_Y, BARREL_START_Z - 0.01 - length, Math.PI / 2, 0, { color: ANODISED });
+  for (let i = 0; i < 3; i++) {
+    for (const side of [-1, 1]) body.box('rubber', 0.006, 0.02, 0.008, side * 0.0245, BARREL_Y, BARREL_START_Z - 0.006 - length - i * 0.014);
+  }
+  body.tube('metal', 0.013, 0.013, 0.001, 0, BARREL_Y, BARREL_START_Z - 0.044 - length, Math.PI / 2, 0, { color: BORE });
 
   // Top rail with its teeth, handguard recesses, magazine fluting.
-  body.box('metal', 0.055, 0.016, 0.44, 0, 0.09, -0.19);
-  for (let i = 0; i < 24; i++) body.box('edge', 0.062, 0.009, 0.008, 0, 0.102, -0.395 + i * 0.018);
+  body.box('metal', 0.055, 0.016, 0.44, 0, 0.09, -0.19, 0, { color: ANODISED, wear: 0.8 });
+  for (let i = 0; i < 24; i++) body.box('metal', 0.062, 0.009, 0.008, 0, 0.102, -0.395 + i * 0.018, 0, { color: LIGHT_COAT });
   for (let i = 0; i < 7; i++) {
     for (const side of [-1, 1]) body.box('rubber', 0.003, 0.018, 0.028, side * 0.038, 0.005, -0.23 - i * 0.038);
   }
   for (let i = 0; i < 4; i++) {
-    for (const side of [-1, 1]) body.box('edge', 0.003, 0.095, 0.006, side * 0.033, -0.13, -0.17 + i * 0.02);
+    for (const side of [-1, 1]) body.box('metal', 0.003, 0.095, 0.006, side * 0.033, -0.13, -0.17 + i * 0.02, 0, { color: LIGHT_COAT });
   }
 
-  // Scope: rings, tube, eyepiece, objective bell, lenses, turrets.
+  // Scope: rings, tube, eyepiece with its eyecup and rear lens, objective bell with its coated ring and front lens, turrets.
   for (const z of [-0.04, -0.23]) {
-    body.box('metal', 0.07, 0.04, 0.035, 0, 0.125, z);
-    body.tube('edge', 0.036, 0.036, 0.028, 0, 0.17, z);
+    body.box('metal', 0.07, 0.04, 0.035, 0, 0.125, z, 0, coat);
+    body.tube('metal', 0.036, 0.036, 0.028, 0, SCOPE_Y, z, Math.PI / 2, 0, { color: ANODISED });
   }
-  body.tube('metal', 0.028, 0.028, 0.32, 0, 0.17, -0.14);
-  body.tube('metal', 0.041, 0.041, 0.085, 0, 0.17, 0.045);
-  body.tube('metal', 0.045, 0.029, 0.11, 0, 0.17, -0.35);
-  body.tube('metal', 0.046, 0.046, 0.035, 0, 0.17, -0.42);
-  body.tube('glass', 0.035, 0.035, 0.002, 0, 0.17, 0.089);
-  body.tube('glass', 0.04, 0.04, 0.002, 0, 0.17, -0.439);
-  for (const z of [0.012, 0.078, -0.407]) body.tube('edge', 0.043, 0.043, 0.008, 0, 0.17, z);
-  body.tube('metal', 0.024, 0.024, 0.04, 0, 0.215, -0.12, 0); // elevation turret (axis up)
-  body.tube('metal', 0.022, 0.022, 0.035, 0.04, 0.17, -0.12, Math.PI / 2, Math.PI / 2); // windage turret (axis sideways)
+  body.tube('metal', 0.028, 0.028, 0.32, 0, SCOPE_Y, -0.14, Math.PI / 2, 0, { color: ANODISED });
+  // Eyepiece: z 0.0025 .. 0.086, flaring to the eyecup lip, hollow at the rear for the lens.
+  body.lathe(
+    'metal',
+    [
+      [0.0405, 0],
+      [0.0405, 0.066],
+      [0.0405, 0.066],
+      [0.0445, 0.07],
+      [0.0445, 0.0835],
+      [0.0445, 0.0835],
+      [0.0375, 0.0835],
+      [0.0375, 0.0835],
+      [0.0375, 0.0745],
+    ],
+    0,
+    SCOPE_Y,
+    0.0025,
+    { color: ANODISED },
+  );
+  lens(body, 0.0375, 0.0065, 1, SCOPE_Y, 0.0025 + 0.0745);
+  body.tube('metal', 0.0375, 0.0375, 0.002, 0, SCOPE_Y, 0.0025 + 0.0735, Math.PI / 2, 0, { color: BORE }); // the dark inside behind it
+  for (let i = 0; i < 36; i++) {
+    const a = (i * Math.PI) / 18;
+    body.box('metal', 0.0035, 0.0035, 0.024, Math.cos(a) * 0.0425, SCOPE_Y + Math.sin(a) * 0.0425, 0.04, 0, { color: LIGHT_COAT }); // magnification ring knurling
+  }
+  // Objective bell: z -0.44 (front) .. -0.29, flaring from the tube, recessed at the front for the lens.
+  body.lathe(
+    'metal',
+    [
+      [0.0415, 0.016],
+      [0.0415, 0],
+      [0.0415, 0],
+      [0.0455, 0],
+      [0.0455, 0],
+      [0.0455, 0.04],
+      [0.0455, 0.04],
+      [0.029, 0.15],
+    ],
+    0,
+    SCOPE_Y,
+    -0.44,
+    { color: ANODISED },
+  );
+  lens(body, 0.0415, 0.0075, -1, SCOPE_Y, -0.44 + 0.015);
+  body.tube('metal', 0.0415, 0.0415, 0.002, 0, SCOPE_Y, -0.44 + 0.016, Math.PI / 2, 0, { color: BORE });
+  body.tube('metal', 0.0458, 0.0458, 0.003, 0, SCOPE_Y, -0.4, Math.PI / 2, 0, { color: BRASS }); // the gold coating ring
+  for (const z of [0.012]) body.tube('metal', 0.0435, 0.0435, 0.006, 0, SCOPE_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT });
+  body.tube('metal', 0.024, 0.024, 0.04, 0, 0.215, -0.12, 0, 0, { color: ANODISED }); // elevation turret (axis up)
+  body.tube('metal', 0.022, 0.022, 0.035, 0.04, SCOPE_Y, -0.12, Math.PI / 2, Math.PI / 2, { color: ANODISED }); // windage turret (axis sideways)
+  body.tube('metal', 0.02, 0.02, 0.03, -0.04, SCOPE_Y, -0.12, Math.PI / 2, Math.PI / 2, { color: ANODISED }); // parallax knob
   for (let i = 0; i < 24; i++) {
     const a = (i * Math.PI) / 12;
-    body.box('edge', 0.004, 0.027, 0.004, Math.cos(a) * 0.024, 0.22, -0.12 + Math.sin(a) * 0.024); // turret ridges
+    body.box('metal', 0.004, 0.027, 0.004, Math.cos(a) * 0.024, 0.22, -0.12 + Math.sin(a) * 0.024, 0, { color: 0x6a6e73 }); // turret ridges
   }
   for (const z of [-0.25, -0.12, 0.1]) {
-    for (const side of [-1, 1]) body.tube('edge', 0.006, 0.006, 0.003, side * 0.052, 0.015, z, Math.PI / 2, Math.PI / 2); // screws
+    for (const side of [-1, 1]) body.tube('metal', 0.006, 0.006, 0.003, side * 0.052, 0.015, z, Math.PI / 2, Math.PI / 2, bare); // screws
   }
 
+  if (hands) addHands(body);
   for (const mesh of body.toMeshes(materials)) group.add(mesh);
 
   // The bolt handle: a rod out of the receiver's right side and its knob, local to the pivot.
   const boltParts = new PartSet();
-  boltParts.tube('edge', 0.008, 0.008, 0.07, 0.06, 0, 0, Math.PI / 2, Math.PI / 2);
-  boltParts.sphere('edge', 0.018, 0.1, -0.004, 0);
+  boltParts.tube('metal', 0.008, 0.008, 0.07, 0.06, 0, 0, Math.PI / 2, Math.PI / 2, bare);
+  boltParts.sphere('metal', 0.018, 0.1, -0.004, 0, { color: ANODISED });
   const bolt = new THREE.Group();
   bolt.name = 'bolt';
   bolt.position.set(BOLT_PIVOT.x, BOLT_PIVOT.y, BOLT_PIVOT.z);
@@ -219,9 +311,10 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean): RifleMode
   if (suppressed) {
     const can = new PartSet();
     const centre = BARREL_START_Z - 0.12 - length;
-    can.tube('metal', 0.032, 0.032, SUPPRESSOR_LENGTH_M, 0, BARREL_Y, centre);
+    can.tube('metal', 0.032, 0.032, SUPPRESSOR_LENGTH_M, 0, BARREL_Y, centre, Math.PI / 2, 0, { color: CERAKOTE, wear: 0 });
     muzzleZ = centre - SUPPRESSOR_LENGTH_M / 2;
-    can.tube('rubber', 0.016, 0.016, 0.002, 0, BARREL_Y, muzzleZ - 0.001);
+    can.tube('metal', 0.016, 0.016, 0.002, 0, BARREL_Y, muzzleZ - 0.001, Math.PI / 2, 0, { color: BORE });
+    for (const z of [centre + 0.09, centre - 0.09]) can.tube('metal', 0.0335, 0.0335, 0.008, 0, BARREL_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT });
     const suppressor = new THREE.Group();
     suppressor.name = 'suppressor';
     for (const mesh of can.toMeshes(materials)) suppressor.add(mesh);
@@ -331,6 +424,11 @@ export class FirstPersonRifle {
   readonly camera = new THREE.PerspectiveCamera(VIEW_FOV_DEG, 1, 0.01, 10);
   /** The model group (recoils and dips as a whole). */
   readonly model: THREE.Group;
+  /** Carries `model` and the breathing sway (kept apart so the sway never mixes with the recoil poses). */
+  private readonly holder = new THREE.Group();
+  private readonly sway: Sway = { x: 0, y: 0, pitch: 0, roll: 0 };
+  /** The rifle's own environment is set up on the first `render` (it needs the renderer); this is true from then on. */
+  private environmentTried = false;
   private readonly bolt: THREE.Group;
   /** Null when suppressed: a suppressed shot has no flash at all. */
   private readonly flash: MuzzleFlash | null;
@@ -351,11 +449,14 @@ export class FirstPersonRifle {
     this.flash = suppressed ? null : new MuzzleFlash(built.muzzleZ);
     if (this.flash) this.model.add(this.flash.group, this.flash.light);
     this.model.rotation.y = HOLD_YAW_RAD;
-    this.scene.add(this.model);
-    this.scene.add(new THREE.HemisphereLight(0xdcecff, 0x8d7654, 3));
-    const key = new THREE.DirectionalLight(0xffdfad, 4);
+    this.holder.name = 'holder';
+    this.holder.add(this.model);
+    this.scene.add(this.holder);
+    // A touch of ambient for the frame before the environment map exists, then a key and a fill: the map does the rest.
+    this.scene.add(new THREE.HemisphereLight(0xeeeadf, 0x8d7654, 0.5));
+    const key = new THREE.DirectionalLight(0xffdfad, 2.4);
     key.position.set(-3, 4, 2);
-    const fill = new THREE.DirectionalLight(0xc5e0ff, 2);
+    const fill = new THREE.DirectionalLight(0xe6eef5, 0.7);
     fill.position.set(3, 1, -2);
     this.scene.add(key, fill);
     this.update(0); // settle into the hold pose
@@ -396,8 +497,11 @@ export class FirstPersonRifle {
     this.kick *= Math.exp(-step * KICK_DECAY);
     this.reloadRemaining = Math.max(0, this.reloadRemaining - step);
     const dip = this.reloadRemaining > 0 ? Math.sin(Math.PI * (1 - this.reloadRemaining / this.reloadDuration)) : 0;
+    breathingSway(this.time, this.sway);
+    this.holder.position.set(this.sway.x, this.sway.y, 0);
+    this.holder.rotation.set(this.sway.pitch, 0, this.sway.roll);
     this.model.position.set(
-      HOLD.x + Math.sin(this.time * SWAY_SPEED) * SWAY_M,
+      HOLD.x,
       HOLD.y - dip * RELOAD_DIP_M,
       HOLD.z + this.kick * KICK_BACK_M,
     );
@@ -423,6 +527,15 @@ export class FirstPersonRifle {
    * world pass reset at its start, so the readings cover the whole frame.
    */
   render(renderer: THREE.WebGLRenderer): void {
+    if (!this.environmentTried) {
+      this.environmentTried = true;
+      try {
+        this.scene.environment = rifleEnvironment(renderer);
+        this.scene.environmentIntensity = ENVIRONMENT_INTENSITY;
+      } catch {
+        this.scene.environment = null; // no float render targets or the like: keep the plain lights
+      }
+    }
     const { autoClear } = renderer;
     const { autoReset } = renderer.info;
     renderer.autoClear = false;
