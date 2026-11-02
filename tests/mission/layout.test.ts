@@ -45,7 +45,7 @@ function bounds(layout: MissionLayout, field: TerrainField, except?: string): Ob
 }
 
 function setup(config: MissionConfig): { field: TerrainField; layout: MissionLayout } {
-  const field = createTerrainField(config.theme, config.seed);
+  const field = createTerrainField(config.theme, config.seed, config.position);
   return { field, layout: generateLayout(config, field) };
 }
 
@@ -300,7 +300,7 @@ describe('generateLayout', () => {
 
   it('places everything for the worst case (10 soldiers, 3 vehicle targets, many/many, band 800-800) in under 500 ms', () => {
     const config = base({ rangeMin: 800, rangeMax: 800, soldiers: 10, vehicleTargets: 3, buildings: 'many', vehicles: 'many', seed: 123 });
-    const field = createTerrainField(config.theme, config.seed);
+    const field = createTerrainField(config.theme, config.seed, config.position);
     const t0 = performance.now();
     const layout = generateLayout(config, field);
     const ms = performance.now() - t0;
@@ -341,6 +341,31 @@ describe('generateLayout', () => {
         }
       }
     }
+  });
+
+  it('places and sees everything from every firing position: valley floor, rocky ridge, mountain overlook (any theme, busy and crowded missions)', { timeout: 30_000 }, () => {
+    const behind = { valley: 0, ridge: 0, mountain: 0 };
+    for (const position of ['valley', 'ridge', 'mountain'] as const) {
+      for (const [k, theme] of THEMES.entries()) {
+        for (const [rangeMin, rangeMax, vehicleTargets] of [
+          [100, 1500, 3],
+          [100, 100, 3],
+          [300, 500, 1],
+          [800, 800, 2],
+        ] as const) {
+          for (const seed of [11 + k, 2026 + k * 17]) {
+            const config = base({ theme, position, rangeMin, rangeMax, soldiers: 10, vehicleTargets, buildings: 'many', vehicles: 'many', seed });
+            const { field, layout } = setup(config);
+            expect(field.shooter.y, `${position} eye`).toBeCloseTo({ valley: 1.9, ridge: 12.4, mountain: 85.4 }[position], 6);
+            behind[position] += checkLayout(config, field, layout);
+          }
+        }
+      }
+    }
+    // Cover still works from each position (from the mountain only a narrow strip behind a wall hides the legs).
+    expect(behind.valley).toBeGreaterThan(0);
+    expect(behind.ridge).toBeGreaterThan(0);
+    expect(behind.mountain).toBeGreaterThan(0);
   });
 
   it('with no props there is no cover', () => {

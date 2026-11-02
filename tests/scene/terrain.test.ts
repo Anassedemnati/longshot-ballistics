@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sectorDistance } from '../../src/scene/terrainField';
 import { ROCK_OUTCROPS, SHOOTER_POS, terrainHeight } from '../../src/scene/terrainHeight';
 import * as terrainModule from '../../src/scene/terrain';
 
@@ -26,22 +27,38 @@ describe('terrainHeight', () => {
     }
   });
 
-  it('has a ~12 m rise around the shooter and gentle dunes (3-6 m) elsewhere', () => {
+  it('has a ~12 m rise around the shooter and the dunes starting to build beside the sector, before the walls start', () => {
     expect(terrainHeight(0, 0)).toBeGreaterThan(11);
     expect(terrainHeight(0, 0)).toBeLessThan(13);
-    // Dune field away from the rise and the lane: bounded amplitude, and actually varying.
+    // The dunes fade in over 140 m beyond the sector edge and the valley walls start 60 m outside it: here they are
+    // still low (a third of their full 3-6 m) but already varying.
     let min = Infinity;
     let max = -Infinity;
     for (let x = -1800; x <= 1800; x += 40) {
       for (let z = -2800; z <= 800; z += 40) {
-        if (Math.abs(x) < 60) continue;
+        if (Math.abs(x) < 60 || sectorDistance(x, z) > 60 || Math.hypot(x, z) < 100) continue;
         const h = terrainHeight(x, z);
         min = Math.min(min, h);
         max = Math.max(max, h);
       }
     }
-    expect(max - min).toBeGreaterThan(3);
+    expect(max - min).toBeGreaterThan(1);
     expect(max - min).toBeLessThan(14); // dunes + rock outcrops
+  });
+
+  it('is walled in: 55-250 m ridgelines rise on both sides, behind the shooter and beyond the far end', () => {
+    for (const [x, z] of [
+      [-1500, -800],
+      [1500, -800],
+      [-1000, 400],
+      [0, -2900],
+    ]) {
+      expect(terrainHeight(x, z), `(${x}, ${z})`).toBeGreaterThan(50);
+    }
+    let max = 0;
+    for (let x = -1950; x <= 1950; x += 50) for (let z = -2950; z <= 950; z += 50) max = Math.max(max, terrainHeight(x, z));
+    expect(max).toBeGreaterThan(150);
+    expect(max).toBeLessThan(275);
   });
 
   it('puts the prone eye 0.4 m above the top of the rise, on the lane axis', () => {

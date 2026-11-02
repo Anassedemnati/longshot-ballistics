@@ -76,7 +76,7 @@ function freezeStatic(root: THREE.Object3D): void {
  * modules already hold.
  */
 export function planMission(config: MissionConfig, legacy: boolean): MissionPlan {
-  const field = legacy ? DESERT_FIELD : createTerrainField(config.theme, config.seed);
+  const field = legacy ? DESERT_FIELD : createTerrainField(config.theme, config.seed, config.position);
   const layout = legacy ? legacyLayout(config) : generateLayout(config, field);
   return { field, layout };
 }
