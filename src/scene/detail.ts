@@ -292,15 +292,17 @@ function tuftMesh(plan: GroundDetailPlan, maxAnisotropy: number): THREE.Instance
 
 /**
  * The instanced ground detail of a mission: pebbles (every theme) and, in the valley, grass tufts.
- * Placement is `planGroundDetail` (seeded by the mission seed). Returns the group and the plan it built from.
+ * Placement is `planGroundDetail` (seeded by the mission seed; `extraTargets`, such as snipers, are kept clear like
+ * the soldiers). Returns the group and the plan it built from.
  */
 export function createGroundDetail(
   field: TerrainField,
   layout: MissionLayout,
   seed: number,
   maxAnisotropy = 8,
+  extraTargets: ReadonlyArray<{ x: number; z: number }> = [],
 ): { group: THREE.Group; plan: GroundDetailPlan } {
-  const plan = planGroundDetail(field, layout, seed);
+  const plan = planGroundDetail(field, layout, seed, extraTargets);
   const group = new THREE.Group();
   group.name = 'ground-detail';
   group.add(pebbleMesh(plan, field.theme));
