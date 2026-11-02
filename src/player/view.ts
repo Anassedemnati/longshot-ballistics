@@ -58,6 +58,7 @@ class ScopeOverlay {
 export class PlayerView {
   readonly camera: THREE.PerspectiveCamera;
   private readonly overlay: ScopeOverlay;
+  private readonly scratch = new THREE.Vector3();
   private scoped = false;
   private mag = MAG_DEFAULT;
   private width: number;
@@ -119,15 +120,30 @@ export class PlayerView {
 
   /** Unit vector the camera is looking along. */
   forward(): Vec3 {
-    const v = new THREE.Vector3();
-    this.camera.getWorldDirection(v);
-    return { x: v.x, y: v.y, z: v.z };
+    return this.forwardInto({ x: 0, y: 0, z: 0 });
+  }
+
+  /** `forward()` written into `out` (returned): for the per-frame callers, which must not allocate. */
+  forwardInto(out: Vec3): Vec3 {
+    this.camera.getWorldDirection(this.scratch);
+    out.x = this.scratch.x;
+    out.y = this.scratch.y;
+    out.z = this.scratch.z;
+    return out;
   }
 
   /** Unit vector pointing up out of the top of the view. */
   up(): Vec3 {
-    const v = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
-    return { x: v.x, y: v.y, z: v.z };
+    return this.upInto({ x: 0, y: 0, z: 0 });
+  }
+
+  /** `up()` written into `out` (returned). */
+  upInto(out: Vec3): Vec3 {
+    this.scratch.set(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    out.x = this.scratch.x;
+    out.y = this.scratch.y;
+    out.z = this.scratch.z;
+    return out;
   }
 
   private applyFov(): void {
