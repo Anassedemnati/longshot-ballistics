@@ -18,8 +18,10 @@ const MODES: ReadonlyArray<{ mode: AssistMode; key: string; code: string; label:
 
 /** The line, the selected target, the solution and the spotter text are refreshed this often, s of game time. */
 export const ASSIST_INTERVAL_S = 0.1;
-/** Every n-th 1 ms integration step becomes a vertex of the line (one per 10 ms: a point about every 8 m at speed). */
-const LINE_SAMPLE_EVERY = 10;
+/** The drawn line is flown with 5 ms steps (the solver keeps the bullets' 1 ms): a refresh costs a few ms, not ten, and the difference is millimetres. */
+const LINE_DT_S = 0.005;
+/** Every n-th integration step becomes a vertex of the line (one per 10 ms: a point about every 8 m at speed). */
+const LINE_SAMPLE_EVERY = 2;
 /**
  * The line starts this far from the eye, m: the bore sits 4 cm below the eye, so the first metres of the path would
  * be drawn as a stick hanging down from the crosshair (4 cm below at 0.1 m is 22 degrees under the view axis).
@@ -212,7 +214,7 @@ export class Assists {
 
     if (this.modes.trajectory && !(this.lineFor && this.lineFor.x === forward.x && this.lineFor.y === forward.y && this.lineFor.z === forward.z)) {
       this.lineFor = forward;
-      const path = predictPath(eye, forward, up, rifle, atmo, wind, zero, { groundHeight, sampleEvery: LINE_SAMPLE_EVERY });
+      const path = predictPath(eye, forward, up, rifle, atmo, wind, zero, { groundHeight, sampleEvery: LINE_SAMPLE_EVERY, dt: LINE_DT_S });
       let n = 0;
       for (const p of path.points) {
         if (n >= LINE_CAPACITY || Math.hypot(p.x - eye.x, p.z - eye.z) < LINE_START_M) continue;

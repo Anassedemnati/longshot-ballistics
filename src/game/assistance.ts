@@ -64,6 +64,8 @@ export interface PredictOptions {
   sampleEvery?: number;
   /** Longest flight time, s. Default 6. */
   maxTime?: number;
+  /** Integration step, s. Default 1 ms, the live bullets' own step; a drawn line can take a coarser one (5 ms is within millimetres, 5x cheaper). */
+  dt?: number;
 }
 
 export interface PathPrediction {
@@ -91,8 +93,8 @@ function groundCrossing(prev: Vec3, next: Vec3, ground: (x: number, z: number) =
 }
 
 /**
- * Fly a shot from the rifle with the real integrator (same 1 ms steps, drag, wind and bore offset as a
- * live bullet) until it meets the ground, crosses `maxRange`, or runs out of time. `forward` and `up`
+ * Fly a shot from the rifle with the real integrator (same drag, wind and bore offset as a live bullet,
+ * 1 ms steps unless `opts.dt` says otherwise) until it meets the ground, crosses `maxRange`, or runs out of time. `forward` and `up`
  * are what the weapon would fire with (see `levelUp`), `zero` the zero elevation (`findZeroElevation`).
  */
 export function predictPath(
@@ -107,6 +109,7 @@ export function predictPath(
 ): PathPrediction {
   const maxRange = opts.maxRange ?? DEFAULT_PREVIEW_RANGE_M;
   const maxTime = opts.maxTime ?? MAX_FLIGHT_S;
+  const dt = opts.dt ?? DEFAULT_DT;
   const every = Math.max(1, opts.sampleEvery ?? 10);
   const ground = opts.groundHeight;
   const dirSource = opts.bearing ?? forward;
@@ -120,15 +123,15 @@ export function predictPath(
   const bz = dirSource.z / horizontal;
   const along = (p: Vec3): number => (p.x - eye.x) * bx + (p.z - eye.z) * bz;
 
-  const steps = Math.ceil(maxTime / DEFAULT_DT - 1e-9);
+  const steps = Math.ceil(maxTime / dt - 1e-9);
   for (let i = 1; i <= steps; i++) {
     const prev = s;
-    s = step(prev, DEFAULT_DT, rifle.bcG7, atmo, wind);
+    s = step(prev, dt, rifle.bcG7, atmo, wind);
     if (ground !== undefined && s.pos.y < ground(s.pos.x, s.pos.z)) {
       const u = groundCrossing(prev.pos, s.pos, ground);
       const impact = lerp(prev.pos, s.pos, u);
       points.push(impact);
-      return { points, impact, time: prev.t + u * DEFAULT_DT, atRange: null };
+      return { points, impact, time: prev.t + u * dt, atRange: null };
     }
     const a1 = along(s.pos);
     if (a1 >= maxRange) {
@@ -136,7 +139,7 @@ export function predictPath(
       const u = a1 > a0 ? Math.min(1, Math.max(0, (maxRange - a0) / (a1 - a0))) : 1;
       const end = lerp(prev.pos, s.pos, u);
       points.push(end);
-      return { points, impact: null, time: prev.t + u * DEFAULT_DT, atRange: end };
+      return { points, impact: null, time: prev.t + u * dt, atRange: end };
     }
     if (i % every === 0) points.push(s.pos);
   }

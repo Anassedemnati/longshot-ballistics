@@ -96,19 +96,20 @@ describe('levelUp', () => {
 });
 
 describe('predictPath', () => {
-  it('lands where a real BulletSystem shot lands (within 5 cm, 700-900 m out), in a crosswind and over sloping ground', () => {
-    for (const id of RIFLE_IDS) {
+  it('lands where a real BulletSystem shot lands (within 5 cm at 800 m), in a crosswind and over sloping ground', () => {
+    // Pitches (view down from the 12.4 m eye) that bring each rifle's shot to the ground about 800 m out.
+    for (const [id, pitch] of [['308', -0.0046], ['338', -0.008]] as const) {
       const { rifle, zero } = setup(id);
       const wind = windOf(WIND_SPEED, 9);
-      // The ground rises a little away from the shooter, so the bullet meets it 700-900 m out.
+      // The ground rises a little away from the shooter, so the bullet meets it about 800 m out.
       const ground = (x: number, z: number): number => -z * 0.004 - 2 + 0.002 * x;
-      const forward = unit({ x: 0.02, y: -0.008, z: -1 });
+      const forward = unit({ x: 0.02, y: pitch, z: -1 });
       const up = levelUp(forward);
       const path = predictPath(EYE, forward, up, rifle, ATMO, wind, zero, { groundHeight: ground, maxRange: 3000 });
       expect(path.impact).not.toBeNull();
       const impact = path.impact as Vec3;
-      expect(Math.hypot(impact.x - EYE.x, impact.z - EYE.z)).toBeGreaterThan(700);
-      expect(Math.hypot(impact.x - EYE.x, impact.z - EYE.z)).toBeLessThan(900);
+      expect(Math.hypot(impact.x - EYE.x, impact.z - EYE.z)).toBeGreaterThan(780);
+      expect(Math.hypot(impact.x - EYE.x, impact.z - EYE.z)).toBeLessThan(820);
       expect(Math.abs(impact.y - ground(impact.x, impact.z))).toBeLessThan(0.01);
 
       const bullets = new BulletSystem({ atmo: ATMO, wind, terrainHeight: ground, targets: () => [] });
@@ -120,6 +121,11 @@ describe('predictPath', () => {
       if (event?.kind !== 'terrain') return;
       expect(len(sub(impact, event.point))).toBeLessThan(0.05);
       expect(Math.abs(path.time - event.time)).toBeLessThan(0.002);
+
+      // The drawn line's coarser 5 ms step (5x cheaper) stays within the same 5 cm.
+      const drawn = predictPath(EYE, forward, up, rifle, ATMO, wind, zero, { groundHeight: ground, maxRange: 3000, dt: 0.005, sampleEvery: 2 });
+      expect(len(sub(drawn.impact as Vec3, event.point))).toBeLessThan(0.05);
+      expect(Math.abs(drawn.points.length - path.points.length)).toBeLessThanOrEqual(2); // a vertex per 10 ms either way
     }
   });
 
