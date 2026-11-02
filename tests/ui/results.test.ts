@@ -103,6 +103,16 @@ describe('the failed variant', () => {
     ]);
   });
 
+  it('a mission that used aim assists and was failed says both: the "Assists used" row and the failed title', () => {
+    const s = recordFailure(markAssistsUsed(startClock(newStats(3), 1000)), 9000);
+    expect(s.assistsUsed && s.failed).toBe(true);
+    expect(resultTitle(s)).toBe('Mission failed');
+    expect(failedSummary(s)).toBe('0 of 3 targets down');
+    const rows = resultRows(s);
+    expect(rows[rows.length - 1]).toEqual(['Assists used', 'Yes']);
+    expect(rows).toContainEqual(['Mission time', '00:08']);
+  });
+
   it('summarises how many targets were down', () => {
     let s = newStats(4, 0);
     s = recordImpact(

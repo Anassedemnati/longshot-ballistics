@@ -158,11 +158,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
 
-  // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's chest, a vehicle's engine.
+  // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's or an enemy
+  // sniper's upper torso, a vehicle's engine.
   const assistTargets = (): AimTarget[] => {
     const list: AimTarget[] = [];
     for (const s of soldiers.values()) if (!s.dummy.down) list.push({ id: s.placement.id, point: s.upperTorso });
     for (const v of vehicles.values()) if (!v.target.disabled) list.push({ id: v.placement.id, point: v.engineCenter });
+    for (const k of snipers.values()) if (!k.sniper.down) list.push({ id: k.placement.id, point: k.upperTorso });
     return list;
   };
   const assists = config.assists
@@ -462,7 +464,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
 
     renderer.render(scene, view.camera);
-    if (!view.isScoped) rifleModel.render(renderer);
+    // The rifle is in front of the player's face: not through the scope, and not while he is ducked behind cover.
+    if (!view.isScoped && !combat?.covered) rifleModel.render(renderer);
   }
   function frame(nowMs: number): void {
     try {

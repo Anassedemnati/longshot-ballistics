@@ -62,8 +62,9 @@
       .scope-reticle { position: absolute; left: 0; top: 0; }
       .hud { z-index: 10; }
 
-      /* Aim assists (only in missions that enable them): a small panel of toggles at the bottom right, and the ◇ marker above the scope overlay. */
-      .assist-panel { position: fixed; right: 16px; bottom: 36px; z-index: 10; box-sizing: border-box; width: max-content; max-width: min(280px, 30vw);
+      /* Aim assists (only in missions that enable them): a small panel of toggles at the top right (the status panel is top left, the threat
+         line top centre, the rifle bottom right), and the ◇ marker above the scope overlay. */
+      .assist-panel { position: fixed; right: 16px; top: 14px; z-index: 10; box-sizing: border-box; width: max-content; max-width: min(280px, 30vw);
         padding: 8px 12px; background: rgba(0, 0, 0, 0.35); border-radius: 6px; user-select: none;
         font: 600 14px/1.4 system-ui, sans-serif; color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; }
       .assist-title { font-size: 11px; letter-spacing: 0.2em; opacity: 0.75; }
@@ -73,15 +74,19 @@
       .assist-button:hover, .assist-button:focus-visible { background: rgba(255, 255, 255, 0.26); outline: none; }
       .assist-button[aria-pressed="true"] { background: #7debdc; color: #122c29; border-color: #7debdc; }
       .assist-spotter { margin: 6px 0 0; font-size: 13px; }
-      .aim-marker { position: fixed; z-index: 9; transform: translate(-50%, -50%); color: #7debdc; font: 28px/1 system-ui, sans-serif;
+      .aim-marker { position: fixed; z-index: 8; transform: translate(-50%, -50%); color: #7debdc; font: 28px/1 system-ui, sans-serif;
         text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; user-select: none; }
 
-      /* Enemy snipers: the threat line (top centre, above the lens), the cover mask and the damage flash. None of them take the mouse. */
-      .threat-panel { position: fixed; z-index: 16; top: 4px; left: 50%; transform: translateX(-50%); max-width: 94vw; box-sizing: border-box;
+      /* Enemy snipers: the threat line (top centre), the cover mask and the damage flash. None of them take the mouse.
+         Stacking, bottom to top: canvas (world + rifle), scope overlay 5, aim marker 8, cover mask 9 (the marker and the rifle never show
+         through it), HUD and assist panel 10, damage flash 15, threat line 16, results 20. */
+      .threat-panel { position: fixed; z-index: 16; top: 4px; left: 50%; transform: translateX(-50%); box-sizing: border-box;
+        /* One line when it fits, else wrapped; never wider than the gap between the status panel (left) and the assist panel (right). */
+        width: max-content; max-width: max(260px, calc(100vw - 660px));
         padding: 3px 14px; background: rgba(24, 35, 37, 0.88); border: 1px solid #c9a16c; border-radius: 3px; color: #ffe0a2;
         font: 12px/1.5 system-ui, sans-serif; text-align: center; pointer-events: none; user-select: none; }
-      .cover-mask { position: fixed; inset: 0; z-index: 14; background: linear-gradient(#161e24c9, #433f34 40%, #242722); pointer-events: none; }
-      .cover-mask::after { content: 'IN COVER — Press C to peek'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      .cover-mask { position: fixed; inset: 0; z-index: 9; background: linear-gradient(#161e24c9, #433f34 40%, #242722); pointer-events: none; }
+      .cover-mask::after { content: 'IN COVER — Press C to peek'; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
         color: #d6d4bd; font: 18px system-ui, sans-serif; }
       .damage-flash { position: fixed; inset: 0; z-index: 15; pointer-events: none; box-shadow: inset 0 0 100px 45px #d5471c; opacity: 0; }
       .results-failed { color: #ff8a6a; }

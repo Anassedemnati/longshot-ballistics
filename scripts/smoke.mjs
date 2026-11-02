@@ -90,6 +90,12 @@ const MISSION_MAX_SNIPERS = 'v2.d.100.1500.10.3.120.3.338.m.m.1.r.0.3.0'; // the
 const MISSION_SNIPERS = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.2.0';
 /** The same with one enemy sniper, for the mission-failed path. */
 const MISSION_SNIPER_ONE = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0';
+/** 1 soldier, 2 rooftop snipers (seed 2), 4.5 m/s from 9 o'clock, aim assists ON: the three features that share the screen. */
+const MISSION_SNIPERS_ASSISTS = 'v2.d.300.300.1.0.45.9.308.m.n.2.r.0.2.1';
+/** The largest mission with everything on: mountain, suppressor, 3 enemy snipers, aim assists. */
+const MISSION_MAX_ALL = 'v2.d.100.1500.10.3.120.3.338.m.m.1.m.1.3.1';
+/** The longest the threat line gets (3 snipers, a bombardment coming, pointer free). */
+const LONGEST_THREAT = 'EXPOSED · Health 100 · Detection 100 % · 3 snipers left · INCOMING BOMBARDMENT 3.0 s — C: COVER · PAUSED — click to resume';
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
 function log(message) {
@@ -450,6 +456,58 @@ async function resultsRows(page) {
       ]),
     ),
   );
+}
+
+/**
+ * The screen boxes of the HUD's panels: status (top left), threat line (top centre), assist panel (top right), key hint (bottom).
+ * `threatText` (the longest line) is put into the threat panel for the measurement and taken out again at once.
+ */
+function panelRects(page, threatText) {
+  return page.evaluate((longest) => {
+    const threat = document.querySelector('.threat-panel');
+    const kept = threat?.textContent ?? '';
+    if (threat && longest) threat.textContent = longest;
+    const rect = (selector) => {
+      const node = document.querySelector(selector);
+      if (!node) return null;
+      const r = node.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null;
+    };
+    const out = { hud: rect('.hud-panel'), threat: rect('.threat-panel'), assist: rect('.assist-panel'), hint: rect('.hud-hint') };
+    if (threat && longest) threat.textContent = kept;
+    return out;
+  }, threatText);
+}
+
+const rectsOverlap = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+const rectText = (r) => `${Math.round(r.left)},${Math.round(r.top)}-${Math.round(r.right)},${Math.round(r.bottom)}`;
+
+/** No two HUD panels overlap and every panel is inside the window. */
+function checkPanelsClear(rects, width, height, label) {
+  const names = Object.keys(rects).filter((k) => rects[k] !== null);
+  log(`${label}: ${names.map((k) => `${k} ${rectText(rects[k])}`).join(' | ')}`);
+  for (const name of names) {
+    const r = rects[name];
+    check(r.left >= 0 && r.top >= 0 && r.right <= width && r.bottom <= height, `${label}: the ${name} panel is inside the window`);
+  }
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      check(!rectsOverlap(rects[names[i]], rects[names[j]]), `${label}: the ${names[i]} and ${names[j]} panels do not overlap`);
+    }
+  }
+}
+
+/** "Target 198 m · Hold 0.7 mil high, 0.4 mil left" -> range and signed offsets in mil (up and right positive); null when it is not a call. */
+function parseSpotter(text) {
+  const m = /^Target (\d+) m · (.+)$/.exec(text);
+  if (!m) return null;
+  const up = /(\d+\.\d) mil (high|low)/.exec(m[2]);
+  const side = /(\d+\.\d) mil (left|right)/.exec(m[2]);
+  return {
+    rangeM: Number(m[1]),
+    upMil: up ? Number(up[1]) * (up[2] === 'high' ? 1 : -1) : 0,
+    rightMil: side ? Number(side[1]) * (side[2] === 'right' ? 1 : -1) : 0,
+  };
 }
 
 async function run() {
@@ -1333,7 +1391,7 @@ async function run() {
     check(Object.entries(custom).every(([k, v]) => setBefore[k] === v), 'the menu holds the non-default settings before Start');
     await clickStart(backPage, { debug: true });
     st = await gameState(backPage);
-    check(st.targetsLeft === 6 && st.vehicles.length === 1 && st.snipers.length === 1, 'the mission started with those settings (4 soldiers + 1 vehicle target + the default enemy sniper)');
+    check(st.targetsLeft === 5 && st.vehicles.length === 1 && st.snipers.length === 0, 'the mission started with those settings (4 soldiers + 1 vehicle target, 0 enemy snipers)');
     await backPage.waitForLoadState('networkidle');
     await backPage.goBack({ waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
@@ -1581,6 +1639,105 @@ async function run() {
     check(st.render.calls <= MAX_DRAW_CALLS, `with 3 enemy snipers it stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
     await bigFight.close();
 
+    // 12d. Enemy snipers, aim assists and the first-person rifle in one mission: the panels share the screen without overlapping, the
+    // rifle is not drawn in cover, the cover mask sits between the picture and the HUD, and the assists aim at enemy snipers too.
+    const combo = await openPage();
+    await startGame(combo, `m=${MISSION_SNIPERS_ASSISTS}&debug=1`);
+    await combo.evaluate(() => window.__game.unlockAudio());
+    st = await gameState(combo);
+    check(st.snipers.length === 2 && st.soldiers.length === 1 && st.targetsLeft === 3, 'the combined mission has 1 soldier and 2 enemy snipers');
+    check((await combo.locator('.assist-panel').count()) === 1 && (await combo.locator('.threat-panel').count()) === 1, 'both the assist panel and the threat panel are there');
+    for (const key of ['KeyT', 'KeyA', 'KeyP']) await combo.keyboard.press(key); // every assist on: the assist panel is at its tallest
+    await waitGameSeconds(combo, 0.4);
+    // The panels, at 1280x720 and at 1024x640, with the longest threat line.
+    checkPanelsClear(await panelRects(combo, LONGEST_THREAT), VIEWPORT.width, VIEWPORT.height, 'snipers + assists 1280x720');
+    checkPanelsClear(await panelRects(combo, null), VIEWPORT.width, VIEWPORT.height, 'snipers + assists 1280x720 (live threat line)');
+    await animationFrames(combo, 3);
+    const callsUnscoped = (await gameState(combo)).render.calls;
+    await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-rifle.png') });
+    await combo.setViewportSize({ width: 1024, height: 640 });
+    await animationFrames(combo, 4);
+    checkPanelsClear(await panelRects(combo, LONGEST_THREAT), 1024, 640, 'snipers + assists 1024x640');
+    checkPanelsClear(await panelRects(combo, null), 1024, 640, 'snipers + assists 1024x640 (live threat line)');
+    await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-1024.png') });
+    await combo.setViewportSize(VIEWPORT);
+    await animationFrames(combo, 4);
+
+    // Cover: no rifle (fewer draw calls), the mask between the picture and the HUD, the threat line on top.
+    await combo.keyboard.press('KeyC');
+    await animationFrames(combo, 4);
+    st = await gameState(combo);
+    check(st.covered, 'C ducks into cover in the combined mission');
+    log(`draw calls: ${callsUnscoped} with the rifle, ${st.render.calls} in cover`);
+    check(callsUnscoped - st.render.calls >= 4, `the rifle is not drawn in cover (${callsUnscoped} draw calls up, ${st.render.calls} ducked)`);
+    const stacking = await combo.evaluate(() => {
+      const z = (selector) => Number(getComputedStyle(document.querySelector(selector)).zIndex);
+      return { scope: z('.scope-overlay'), marker: z('.aim-marker'), mask: z('.cover-mask'), hud: z('.hud'), assist: z('.assist-panel'), flash: z('.damage-flash'), threat: z('.threat-panel') };
+    });
+    check(stacking.mask > stacking.scope && stacking.mask > stacking.marker, `the cover mask is above the scope overlay and the aim marker (z ${stacking.mask} > ${stacking.scope}, ${stacking.marker})`);
+    check(stacking.mask < stacking.hud && stacking.mask < stacking.assist && stacking.mask < stacking.threat && stacking.mask < stacking.flash, `the cover mask is below the HUD, the assist panel, the damage flash and the threat line (z ${stacking.mask} < ${stacking.hud}, ${stacking.assist}, ${stacking.flash}, ${stacking.threat})`);
+    check((await combo.locator('.cover-mask').isVisible()) && (await combo.locator('.hud-panel').isVisible()) && (await combo.locator('.threat-panel').isVisible()), 'in cover the mask, the status panel and the threat line show together');
+    await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-cover.png') });
+    await combo.keyboard.press('KeyC');
+    await animationFrames(combo, 4);
+    st = await gameState(combo);
+    check(!st.covered && st.render.calls >= callsUnscoped - 2, `back up from cover the rifle is drawn again (${st.render.calls} draw calls)`);
+
+    // The assists aim at enemy snipers: scoped on the nearer one, the marker is on the crosshair's neighbourhood and the spotter calls him.
+    const prey = [...st.snipers].sort((a, b) => Math.hypot(a.upperTorso.x, a.upperTorso.z) - Math.hypot(b.upperTorso.x, b.upperTorso.z))[0];
+    const preyRange = Math.hypot(prey.upperTorso.x, prey.upperTorso.z);
+    await combo.evaluate(([x, y, z]) => {
+      window.__game.toggleScope();
+      window.__game.aimAt(x, y, z);
+    }, [prey.upperTorso.x, prey.upperTorso.y, prey.upperTorso.z]);
+    await waitGameSeconds(combo, 0.5);
+    const markerOf = async () => {
+      const box = await combo.locator('.aim-marker').boundingBox();
+      return { x: box.x + box.width / 2 - VIEWPORT.width / 2, y: box.y + box.height / 2 - VIEWPORT.height / 2 };
+    };
+    check(await combo.locator('.aim-marker').isVisible(), 'A shows the aim marker with the crosshair on an enemy sniper');
+    const mark = await markerOf();
+    check(Math.abs(mark.x) < 60 && Math.abs(mark.y) < 60, `the marker is near the crosshair, on the sniper (${mark.x.toFixed(0)}, ${mark.y.toFixed(0)} px from the centre)`);
+    const calls = parseSpotter((await combo.locator('.assist-spotter').textContent()) ?? '');
+    check(calls !== null && Math.abs(calls.rangeM - preyRange) < 3, `the spotter calls the sniper (${(await combo.locator('.assist-spotter').textContent()) ?? ''}; he is ${preyRange.toFixed(0)} m out)`);
+    const comboLens = await combo.locator('.scope-lens').boundingBox();
+    const comboAssist = await combo.locator('.assist-panel').boundingBox();
+    const lensCx = comboLens.x + comboLens.width / 2;
+    const lensCy = comboLens.y + comboLens.height / 2;
+    const nearPx = Math.min(Math.max(lensCx, comboAssist.x), comboAssist.x + comboAssist.width);
+    const nearPy = Math.min(Math.max(lensCy, comboAssist.y), comboAssist.y + comboAssist.height);
+    check(Math.hypot(nearPx - lensCx, nearPy - lensCy) > comboLens.width / 2, 'with the spotter on, the assist panel does not cover the scope lens');
+    await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-scoped.png') });
+    // Follow the call: the crosshair that far above (and beside) the upper torso puts the marker on it, and the shot takes him out.
+    const preyBearing = Math.atan2(prey.upperTorso.x, -prey.upperTorso.z);
+    const aimPoint = {
+      x: prey.upperTorso.x + calls.rangeM * Math.tan(calls.rightMil / 1000) * Math.cos(preyBearing),
+      y: prey.upperTorso.y + calls.rangeM * Math.tan(calls.upMil / 1000),
+      z: prey.upperTorso.z + calls.rangeM * Math.tan(calls.rightMil / 1000) * Math.sin(preyBearing),
+    };
+    await combo.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [aimPoint.x, aimPoint.y, aimPoint.z]);
+    await waitGameSeconds(combo, 0.4);
+    const mark2 = await markerOf();
+    check(Math.hypot(mark2.x, mark2.y) < 6, `with the crosshair where the spotter said, the marker sits on it (${mark2.x.toFixed(1)}, ${mark2.y.toFixed(1)} px off the centre)`);
+    const assistedKill = await shootAt(combo, aimPoint, 0);
+    log(`assisted shot at the sniper: "${assistedKill}"`);
+    check(/^SNIPER DOWN/.test(assistedKill), 'the shot taken as the spotter called it takes the enemy sniper out');
+    await waitGameSeconds(combo, 0.5);
+    const next = parseSpotter((await combo.locator('.assist-spotter').textContent()) ?? '');
+    check(next !== null && Math.abs(next.rangeM - preyRange) > 5, 'the dead sniper is no longer a target: the spotter moved on to another');
+    await combo.close();
+
+    // The largest mission with everything on: mountain, suppressor, 3 snipers, assists with the trajectory line drawn.
+    const everything = await openPage();
+    await startGame(everything, `m=${MISSION_MAX_ALL}&debug=1`);
+    await everything.keyboard.press('KeyT');
+    await animationFrames(everything, 8);
+    st = await gameState(everything);
+    log(`largest mission with everything on: ${st.render.calls} draw calls, ${st.render.triangles} triangles`);
+    check(st.snipers.length === 3 && st.targetsLeft === 16, 'the largest mission with everything on has 3 snipers and 16 targets');
+    check(st.render.calls > 100 && st.render.calls <= MAX_DRAW_CALLS, `with everything on it stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
+    await everything.close();
+
     // 13. A failed start and a failed frame leave a way out. These pages break on purpose, so they log errors the
     // other pages must not: they are opened without the `problems` listeners.
     const noGl = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
@@ -1628,7 +1785,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, assists-trajectory, assists-arc, assists-marker, assists-all, assists-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-new-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-last-target, snipers-failed, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, assists-trajectory, assists-arc, assists-marker, assists-all, assists-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-new-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-last-target, snipers-failed, snipers-assists-rifle, snipers-assists-1024, snipers-assists-cover, snipers-assists-scoped, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }
