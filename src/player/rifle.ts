@@ -158,7 +158,6 @@ function makeMaterials(id: Rifle['id']): Record<MaterialKey, THREE.Material> {
       iridescenceIOR: 1.38,
       iridescenceThicknessMinimum: 180,
       iridescenceThicknessMaximum: 420,
-      envMapIntensity: 1.4,
     }),
     glove: new THREE.MeshStandardMaterial({
       vertexColors: true,

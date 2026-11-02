@@ -72,7 +72,8 @@ function rightHand(parts: PartSet): void {
   parts.setFrame(frame);
 
   // Palm: the heel on the back strap, the pad up the right side, the web over the top of the grip, the back of the hand.
-  parts.ellipsoid('glove', 0.03, 0.036, 0.022, 0.014, -0.012, 0.062);
+  parts.ellipsoid('glove', 0.04, 0.038, 0.024, 0.006, -0.012, 0.062);
+  parts.ellipsoid('glove', 0.026, 0.032, 0.022, -0.012, 0.034, 0.064); // the thumb's base on the left of the back strap
   parts.ellipsoid('glove', 0.02, 0.05, 0.04, 0.048, 0.022, 0.03);
   parts.ellipsoid('glove', 0.03, 0.02, 0.022, 0.014, 0.06, 0.058);
   parts.ellipsoid('glove', 0.014, 0.05, 0.044, 0.062, 0.028, 0.026);
@@ -98,9 +99,9 @@ function rightHand(parts: PartSet): void {
   }
   for (const y of [0.068, 0.04, 0.0185, -0.0035]) parts.ellipsoid('rubber', 0.006, 0.01, 0.011, 0.0715, y, 0.015); // knuckle guards
   // Thumb across the back of the grip and forward along its left side.
-  digit(parts, v(0.004, 0.05, 0.062), v(-0.85, 0.1, -0.5), left, [
-    { length: 0.038, radius: 0.0118, bend: 0 },
-    { length: 0.032, radius: 0.0105, bend: 0.42 },
+  digit(parts, v(0.012, 0.052, 0.064), v(-0.85, 0.1, -0.5), left, [
+    { length: 0.046, radius: 0.0138, bend: 0 },
+    { length: 0.04, radius: 0.0122, bend: 0.5 },
   ]);
   parts.setFrame(null);
 
