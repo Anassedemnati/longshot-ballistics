@@ -98,7 +98,7 @@
 .menu-card-img {
   display: block;
   width: 100%;
-  height: clamp(76px, 15vh, 132px);
+  height: clamp(72px, 14vh, 120px);
   object-fit: cover;
   filter: saturate(0.85) brightness(0.8);
   transition: filter 0.2s;
@@ -110,7 +110,7 @@
 .menu-card:has(input:checked) .menu-card-name { color: var(--accent); }
 
 /* Panels */
-.menu-columns { display: grid; grid-template-columns: 1.1fr 1fr 0.9fr; gap: 14px; align-items: stretch; }
+.menu-columns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; align-items: stretch; }
 .menu-panel {
   display: flex;
   flex-direction: column;
@@ -187,6 +187,7 @@
 }
 .menu-scale { display: flex; justify-content: space-between; margin-top: 1px; color: var(--muted); font: 11px/1 var(--mono); }
 .menu-seg-note { margin-top: 5px; font: 12px/1.2 var(--mono); }
+.menu-slider-note { margin-top: 3px; font: 12px/1.2 var(--mono); }
 
 /* Segmented controls */
 .menu-seg { display: flex; margin-top: 4px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
@@ -194,7 +195,7 @@
 .menu-seg-option + .menu-seg-option { border-left: 1px solid var(--line); }
 .menu-seg-text {
   display: block;
-  padding: 7px 6px;
+  padding: 7px 4px;
   text-align: center;
   font-size: 13px;
   font-weight: 600;
@@ -207,9 +208,77 @@
 .menu-sr:checked + .menu-seg-text { background: var(--accent); color: #17130a; }
 .menu-sr:focus-visible + .menu-seg-text { outline: 2px solid #fff; outline-offset: -4px; }
 
+/* On/off switches: a native checkbox (hidden, focusable) and a drawn switch after it. */
+.menu-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.menu-toggle > .menu-label { margin-right: auto; cursor: pointer; }
+.menu-toggle-state { min-width: 2.2em; text-align: right; }
+.menu-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 20px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 0.12s, border-color 0.12s;
+}
+.menu-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  transition: transform 0.12s;
+}
+.menu-toggle:hover .menu-switch { border-color: rgba(255, 255, 255, 0.5); }
+.menu-sr:checked + .menu-switch { background: var(--accent); border-color: var(--accent); }
+.menu-sr:checked + .menu-switch::after { transform: translateX(18px); background: #17130a; }
+.menu-sr:focus-visible + .menu-switch { outline: 2px solid #fff; outline-offset: 2px; }
+.menu-toggle-note { margin-top: 4px; font: 12px/1.2 var(--mono); min-height: 2.4em; }
+
+/* Rifle concept art: the picture is cut to one rifle by an overflow-hidden box (the percentages come from menuModel). */
+.menu-rifle-art {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 12px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #4a4a4a;
+}
+.menu-rifle-img { position: absolute; display: block; height: auto; max-width: none; user-select: none; }
+.menu-rifle-art::after { /* soften the cut edges, and keep the caption readable */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(10, 13, 12, 0.7), rgba(10, 13, 12, 0) 30%), radial-gradient(ellipse at center, rgba(10, 13, 12, 0) 70%, rgba(10, 13, 12, 0.45) 100%);
+}
+.menu-rifle-caption {
+  position: absolute;
+  left: 8px;
+  bottom: 4px;
+  z-index: 1;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 3px #000;
+}
+
 /* Wind dial */
 .menu-dial-field { display: flex; flex-direction: column; align-items: stretch; }
-.menu-dial { display: block; width: clamp(120px, 24vh, 172px); height: auto; margin: 4px auto 2px; overflow: visible; user-select: none; }
+/* The direction text ("from 10 o'clock (front left)") is too long to share a line with its caption in a narrow panel:
+   it always sits under it, so the panel does not change height with the clock position. */
+.menu-dial-field .menu-field-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+.menu-dial-field .menu-value { font-size: 13px; }
+.menu-dial { display: block; width: clamp(120px, 22vh, 160px); height: auto; margin: 4px auto 2px; overflow: visible; user-select: none; }
 .menu-dial-field .menu-note { text-align: center; }
 .menu-dial-ring { fill: rgba(255, 255, 255, 0.04); stroke: var(--line); stroke-width: 1.5; }
 .menu-dial-shooter { fill: var(--muted); }
@@ -244,6 +313,11 @@
 .menu-button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .menu-start { min-width: 230px; padding: 13px 28px; color: #17130a; background: var(--accent); border-color: var(--accent); }
 .menu-start:hover { background: #e6b95c; border-color: #e6b95c; }
+
+/* Medium windows: two panels a row (the page scrolls). */
+@media (max-width: 1100px) {
+  .menu-columns { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* Narrow windows: stack the panels. */
 @media (max-width: 900px) {
