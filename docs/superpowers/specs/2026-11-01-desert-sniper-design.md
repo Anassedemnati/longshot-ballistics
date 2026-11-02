@@ -285,3 +285,20 @@ Menu option **Aim assists** (off by default). When enabled, HUD buttons: **T** t
 
 ## B.6 Menu & HUD
 Our menu gains the new controls (firing position, suppressor, enemy snipers, aim assists); ChatGPT's rifle concept art is used in the rifle panel. HUD adopts ChatGPT's panel styling; threat panel (exposed/cover, health, detection, snipers left, incoming fire countdown), damage flash, cover mask.
+
+---
+
+# Addendum C — Realism pass (stage 1d)
+
+Date: 2026-11-02. From a screenshot audit of the merged game (user: "check the graphics you should enhance" → "go implement"). All new art is CC0 from Poly Haven (`public/assets/`, credited in `public/assets/CREDITS.md`): 1k PBR textures (rock/cliff, sand, snow, grass-rock, clay plaster, white plaster, planks, painted metal), 2k HDRI skies (desert late afternoon, arctic overcast snow field, valley partly cloudy), simplified glTF models (2 boulders, dead tree, grass clump; meshopt-compressed).
+
+## C.1 Terrain
+Photographic PBR materials blended by slope and height (triplanar on steep faces so walls and the mountain spur read as rock cliffs), macro variation so mid/far ground is not a flat colour, snow caps on high ground (arctic, valley), and baked sun shadowing / ambient occlusion so the walls shade the valley.
+## C.2 Sky and light
+HDRI sky per theme as background and image-based lighting; sun direction and fog colour matched to the HDRI; tone mapping/exposure per theme; light post-processing (subtle bloom for sun and scope glints, colour grading). Scope image stays crisp.
+## C.3 Buildings and vehicles
+PBR textures (plaster, planks, painted metal) with world-scale UVs; window and door frames, roof parapets and edges, small rooftop details — decorations stay within 3 cm of the colliders (or below ground), as before.
+## C.4 Vegetation, rocks and the firing nest
+Trees (procedural low-poly firs in arctic/valley; dead trees in the desert), boulders and shrubs on the slopes and around compounds — never inside the engagement sector lines of sight to any target or sniper; grass clumps near the player in the valley. A firing nest at every position: sandbags and rocks around the shooter, leaving the forward field of view clear.
+## C.5 Rifle
+PBR finish (metal, polymer), a glass scope lens with reflections, gloved hands holding the rifle.
