@@ -83,22 +83,29 @@ export const SKY_LOOKS: Record<ThemeId, SkyLook> = {
   },
 };
 
+/** Unit vector from the scene towards the sun of `look` (the shadow light uses the same one). */
+export function sunDirectionOf(look: SkyLook): THREE.Vector3 {
+  const elevation = (look.sunElevationDeg * Math.PI) / 180;
+  const azimuth = (look.sunAzimuthDeg * Math.PI) / 180;
+  return new THREE.Vector3(
+    -Math.sin(azimuth) * Math.cos(elevation),
+    Math.sin(elevation),
+    Math.cos(azimuth) * Math.cos(elevation),
+  );
+}
+
 export interface SkySetup {
   sky: Sky;
   /** Unit vector from the scene towards the sun. */
   sunDirection: THREE.Vector3;
+  /** The sun light; `createShadowLight` makes this same light cast the shadows. */
+  sun: THREE.DirectionalLight;
 }
 
 /** Add the sky dome, haze (fog) and sun/ambient lights of `theme` to the scene. */
 export function createSky(scene: THREE.Scene, theme: ThemeId): SkySetup {
   const look = SKY_LOOKS[theme];
-  const elevation = (look.sunElevationDeg * Math.PI) / 180;
-  const azimuth = (look.sunAzimuthDeg * Math.PI) / 180;
-  const sunDirection = new THREE.Vector3(
-    -Math.sin(azimuth) * Math.cos(elevation),
-    Math.sin(elevation),
-    Math.cos(azimuth) * Math.cos(elevation),
-  );
+  const sunDirection = sunDirectionOf(look);
 
   const sky = new Sky();
   sky.scale.setScalar(50000);
@@ -121,5 +128,5 @@ export function createSky(scene: THREE.Scene, theme: ThemeId): SkySetup {
   // Sky light from above, a bounce from the ground below (warm sand, snow, grass).
   scene.add(new THREE.HemisphereLight(look.skyLight, look.groundLight, look.hemisphereIntensity));
 
-  return { sky, sunDirection };
+  return { sky, sunDirection, sun };
 }
