@@ -1,6 +1,6 @@
 import type { Vec3 } from '../ballistics/types';
 import { segmentBox } from '../game/hit';
-import type { Obstacle } from '../game/hit';
+import type { Box, Obstacle } from '../game/hit';
 import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import type { Density, MissionConfig } from './config';
@@ -9,19 +9,23 @@ import {
   propBoxes,
   propColliders,
   propFootprintRadius,
+  rooftopSpot,
   vehicleEngineObstacle,
   vehicleTargetColliders,
 } from './props';
 import type { PropKind, PropPlacement } from './props';
 import { createRng, randInt } from './random';
 import type { Rng } from './random';
+import { SNIPER_REACH, sniperAimPoints, sniperBoundsObstacle } from './sniperDims';
 
 // Seeded, deterministic mission layout (pure, no three.js): where the props, the vehicle targets and
 // the soldiers go. World frame: Y up, downrange = -Z, the shooter's eye is `field.shooter` near the origin.
 //
-// Order of work: props (clustered into 1-3 "sites"), then vehicle targets, then soldiers. Every
-// accepted soldier has a clear line of sight from the shooter to the head and upper-torso centres
-// past the terrain, all colliders and the other soldiers; some stand behind low cover (see below).
+// Order of work: props (clustered into 1-3 "sites"), then vehicle targets, then soldiers, then the enemy
+// snipers. Every accepted soldier has a clear line of sight from the shooter to the head and upper-torso
+// centres past the terrain, all colliders and the other soldiers; some stand behind low cover (see below).
+// Snipers come last, so they never move anything else: they lie on a house roof, else on high ground at the
+// sector's edge, else in the open, always with a clear line of sight both ways (see `placeSniper`).
 
 export interface SoldierPlacement {
   id: string;
@@ -44,9 +48,27 @@ export interface VehicleTargetPlacement {
   range: number;
 }
 
+/** Where an enemy sniper lies: on a roof, on high ground near the sector's edge, or in the open. */
+export type SniperSite = 'roof' | 'ridge' | 'open';
+
+export interface SniperPlacement {
+  id: string;
+  x: number;
+  /** Height of the surface under his belly (the ground, or the top of a roof), m. */
+  y: number;
+  z: number;
+  /** Rotation about +Y, rad; his head end (local +Z) points toward the shooter at yaw = facingYaw(x, z). */
+  yaw: number;
+  site: SniperSite;
+  /** Horizontal distance from the shooter, m. */
+  range: number;
+}
+
 export interface MissionLayout {
   soldiers: SoldierPlacement[];
   vehicleTargets: VehicleTargetPlacement[];
+  /** Enemy snipers, `config.enemySnipers` of them: extra targets that shoot back (see game/encounter.ts). */
+  snipers: SniperPlacement[];
   /** Scenery: houses, sheds, walls and parked vehicles (the vehicle targets are not in here). */
   props: PropPlacement[];
 }
@@ -158,6 +180,7 @@ export function legacyLayout(config: MissionConfig): MissionLayout {
   return {
     soldiers: [{ id: 'soldier-0', x: 0, z: -range, yaw: 0, range, behindCover: false }],
     vehicleTargets: [],
+    snipers: [],
     props: [],
   };
 }
@@ -409,6 +432,16 @@ interface Ctx {
   soldiers: PlacedSoldier[];
   /** Upright bounds of the soldiers placed so far. */
   bounds: Obstacle[];
+  /** Enemy snipers placed so far, their body bounds, and the houses whose roof one of them already holds. */
+  snipers: PlacedSniper[];
+  sniperBounds: Obstacle[];
+  usedRoofs: Set<string>;
+}
+
+interface PlacedSniper {
+  s: SniperPlacement;
+  aim: { head: Vec3; upperTorso: Vec3 };
+  bounds: Obstacle;
 }
 
 function shuffle<T>(items: T[], rng: Rng): T[] {
@@ -594,6 +627,184 @@ function isBehindCover(ctx: Ctx, p: PlacedSoldier): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Enemy snipers
+
+/** Snipers lie this far outside the range band at most, m (like the props' sites). */
+const SNIPER_BAND_MARGIN = 150;
+/** Snipers never lie nearer than this, m. */
+const MIN_SNIPER_RANGE = 100;
+/** Ridge snipers lie in the outer strip of the sector: bearings from this to RIDGE_BEARING_MAX. */
+const RIDGE_BEARING_MIN = 7 * DEG;
+const RIDGE_BEARING_MAX = 11.5 * DEG;
+/** Random spots drawn per ridge pass; the highest ground that is valid wins. */
+const RIDGE_CANDIDATES = 40;
+/** Snipers turn up to this far either side of facing the shooter, rad. */
+const SNIPER_YAW_JITTER = 8 * DEG;
+/** Random spots tried on each roof. */
+const ROOF_PROBES = 8;
+/** Minimum distance, m, between a roof sniper and any other target (a roof is high above them). */
+const ROOF_SPACING = 5;
+/** Ground passes, strictest first: spacing between targets, bearing limit of the open-ground draw, attempts. */
+const SNIPER_STAGES: readonly Stage[] = [
+  { spacing: 15, bearing: STRICT_BEARING, attempts: 40 },
+  { spacing: 6, bearing: STRICT_BEARING, attempts: 40 },
+  { spacing: 2, bearing: MAX_BEARING, attempts: 60 },
+  { spacing: 0, bearing: MAX_BEARING, attempts: 300 },
+];
+
+/** True when two boxes (rotated about Y only) share any volume. */
+function boxesOverlap(a: Box, b: Box): boolean {
+  if (Math.abs(a.center.y - b.center.y) >= a.halfSize.y + b.halfSize.y) return false;
+  const dx = b.center.x - a.center.x;
+  const dz = b.center.z - a.center.z;
+  // Local +X of a box is world (cos, -sin), local +Z is (sin, cos): four separating axes in the plane.
+  for (const box of [a, b]) {
+    const c = Math.cos(box.yaw);
+    const s = Math.sin(box.yaw);
+    for (const [ux, uz] of [[c, -s], [s, c]] as const) {
+      const radius = (q: Box): number => {
+        const qc = Math.cos(q.yaw);
+        const qs = Math.sin(q.yaw);
+        return Math.abs(ux * qc - uz * qs) * q.halfSize.x + Math.abs(ux * qs + uz * qc) * q.halfSize.z;
+      };
+      if (Math.abs(ux * dx + uz * dz) >= radius(a) + radius(b)) return false;
+    }
+  }
+  return true;
+}
+
+/** True when the segment a -> b is stopped by a collider, a soldier's body or an earlier sniper's body. */
+function sniperBlocked(ctx: Ctx, a: Vec3, b: Vec3): boolean {
+  return hitsAny(a, b, ctx.staticObs) || hitsAny(a, b, ctx.bounds) || hitsAny(a, b, ctx.sniperBounds);
+}
+
+/**
+ * A sniper lying at (x, z) on a surface at height y, or null if the spot is no good: outside the engagement
+ * sector or the allowed range window, too close to another target, his body touching a collider or another
+ * body, no clear line of sight both ways between the shooter's eye and his head (and eye -> upper torso)
+ * past the terrain, every collider and every soldier, or his body hiding a soldier, an engine or another
+ * sniper from the shooter.
+ */
+function evaluateSniper(
+  ctx: Ctx,
+  window: readonly [number, number],
+  x: number,
+  y: number,
+  z: number,
+  yaw: number,
+  site: SniperSite,
+  spacing: number,
+): PlacedSniper | null {
+  const range = Math.hypot(x, z);
+  if (range < window[0] || range > window[1] || !propFitsSector(x, z, SNIPER_REACH)) return null;
+  for (const o of ctx.soldiers) if (Math.hypot(o.s.x - x, o.s.z - z) < spacing) return null;
+  for (const o of ctx.snipers) if (Math.hypot(o.s.x - x, o.s.z - z) < Math.max(spacing, ROOF_SPACING)) return null;
+  for (const o of ctx.vehicles) if (Math.hypot(o.x - x, o.z - z) < spacing) return null;
+
+  const s: SniperPlacement = { id: `sniper-${ctx.snipers.length}`, x, y, z, yaw, site, range };
+  const bounds = sniperBoundsObstacle(s, s.id);
+  for (const o of ctx.staticObs) if (boxesOverlap(bounds.box, o.box)) return null;
+  for (const o of ctx.bounds) if (boxesOverlap(bounds.box, o.box)) return null;
+  for (const o of ctx.sniperBounds) if (boxesOverlap(bounds.box, o.box)) return null;
+
+  const { eye, field } = ctx;
+  const aim = sniperAimPoints(s);
+  if (sniperBlocked(ctx, eye, aim.head) || sniperBlocked(ctx, eye, aim.upperTorso)) return null;
+  // He must not hide anything the shooter has to see.
+  for (const o of ctx.soldiers) {
+    if (segmentBox(eye, o.aim.head, bounds.box) !== null || segmentBox(eye, o.aim.upperTorso, bounds.box) !== null) return null;
+  }
+  for (const e of ctx.engineCenters) if (segmentBox(eye, e, bounds.box) !== null) return null;
+  for (const o of ctx.snipers) if (segmentBox(eye, o.aim.head, bounds.box) !== null) return null;
+  // Terrain, the dear test last: both ways for the head (the skipped last 2 m differ), one way for the chest.
+  if (!terrainClear(eye, aim.head, field) || !terrainClear(aim.head, eye, field) || !terrainClear(eye, aim.upperTorso, field)) return null;
+  return { s, aim, bounds };
+}
+
+/** On a house roof: random spots over the roofs of the houses in reach (each roof holds one sniper). */
+function placeOnRoof(ctx: Ctx, window: readonly [number, number]): PlacedSniper | null {
+  const spot = rooftopSpot('house', SNIPER_REACH);
+  if (!spot) return null;
+  const houses = shuffle(
+    ctx.props.filter((p) => p.kind === 'house' && !ctx.usedRoofs.has(p.id)),
+    ctx.rng,
+  );
+  for (const house of houses) {
+    const c = Math.cos(house.yaw);
+    const sn = Math.sin(house.yaw);
+    const y = ctx.field.height(house.x, house.z) + spot.top;
+    for (let probe = 0; probe < ROOF_PROBES; probe++) {
+      const lx = spot.cx + (ctx.rng() * 2 - 1) * spot.halfX;
+      const lz = spot.cz + (ctx.rng() * 2 - 1) * spot.halfZ;
+      const x = house.x + c * lx + sn * lz;
+      const z = house.z - sn * lx + c * lz;
+      const yaw = wrapAngle(facingYaw(x, z) + (ctx.rng() * 2 - 1) * SNIPER_YAW_JITTER);
+      const placed = evaluateSniper(ctx, window, x, y, z, yaw, 'roof', ROOF_SPACING);
+      if (placed) {
+        ctx.usedRoofs.add(house.id);
+        return placed;
+      }
+    }
+  }
+  return null;
+}
+
+/** On high ground near the sector's edge: draws spots in the outer strip and tries the highest ground first. */
+function placeOnRidge(ctx: Ctx, window: readonly [number, number], stage: Stage): PlacedSniper | null {
+  const { field, rng } = ctx;
+  const spots: Array<{ x: number; z: number; ground: number }> = [];
+  for (let i = 0; i < RIDGE_CANDIDATES; i++) {
+    const range = window[0] + rng() * (window[1] - window[0]);
+    const bearing = (rng() < 0.5 ? -1 : 1) * (RIDGE_BEARING_MIN + rng() * (RIDGE_BEARING_MAX - RIDGE_BEARING_MIN));
+    const x = range * Math.sin(bearing);
+    const z = -range * Math.cos(bearing);
+    spots.push({ x, z, ground: field.height(x, z) });
+  }
+  spots.sort((a, b) => b.ground - a.ground);
+  for (const spot of spots) {
+    const yaw = wrapAngle(facingYaw(spot.x, spot.z) + (rng() * 2 - 1) * SNIPER_YAW_JITTER);
+    const placed = evaluateSniper(ctx, window, spot.x, spot.ground, spot.z, yaw, 'ridge', stage.spacing);
+    if (placed) return placed;
+  }
+  return null;
+}
+
+/** In the open: range and bearing drawn uniformly. */
+function placeInOpen(ctx: Ctx, window: readonly [number, number], stage: Stage): PlacedSniper | null {
+  const { field, rng } = ctx;
+  for (let attempt = 0; attempt < stage.attempts; attempt++) {
+    const range = window[0] + rng() * (window[1] - window[0]);
+    const bearing = (rng() * 2 - 1) * stage.bearing;
+    const x = range * Math.sin(bearing);
+    const z = -range * Math.cos(bearing);
+    const yaw = wrapAngle(facingYaw(x, z) + (rng() * 2 - 1) * SNIPER_YAW_JITTER);
+    const placed = evaluateSniper(ctx, window, x, field.height(x, z), z, yaw, 'open', stage.spacing);
+    if (placed) return placed;
+  }
+  return null;
+}
+
+/**
+ * The next enemy sniper: on a roof if a house is in reach, else on high ground at the sector's edge, else in the
+ * open. Every ground pass is tried before giving up (spacing relaxes pass by pass; the line-of-sight and
+ * not-inside-a-box checks never do), so the caller never drops props for a sniper it could have placed.
+ */
+function placeSniper(ctx: Ctx): PlacedSniper | null {
+  const { config } = ctx;
+  const window = [
+    Math.max(MIN_SNIPER_RANGE, config.rangeMin - SNIPER_BAND_MARGIN),
+    Math.min(SECTOR_MAX_RANGE, config.rangeMax + SNIPER_BAND_MARGIN),
+  ] as const;
+  const roof = placeOnRoof(ctx, window);
+  if (roof) return roof;
+  for (const stage of SNIPER_STAGES) {
+    const placed = placeOnRidge(ctx, window, stage) ?? placeInOpen(ctx, window, stage);
+    if (placed) return placed;
+  }
+  return null;
+}
+
 function describeBand(config: MissionConfig): string {
   return `${config.theme}, band ${config.rangeMin}-${config.rangeMax} m, seed ${config.seed}`;
 }
@@ -626,6 +837,9 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
     engineCenters: [],
     soldiers: [],
     bounds: [],
+    snipers: [],
+    sniperBounds: [],
+    usedRoofs: new Set(),
   };
 
   for (let i = 0; i < config.vehicleTargets; i++) {
@@ -654,8 +868,19 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
     acceptSoldier(ctx, placed);
   }
 
+  // Enemy snipers last: they never move a soldier, a vehicle or a prop.
+  for (let i = 0; i < config.enemySnipers; i++) {
+    const sniper = placeSniper(ctx);
+    if (!sniper) {
+      if (final) throw new Error(`generateLayout: no valid spot for enemy sniper ${i + 1} of ${config.enemySnipers} (${describeBand(config)})`);
+      return null;
+    }
+    ctx.snipers.push(sniper);
+    ctx.sniperBounds.push(sniper.bounds);
+  }
+
   const soldiers = ctx.soldiers.map((p) => ({ ...p.s, behindCover: isBehindCover(ctx, p) }));
-  return { soldiers, vehicleTargets: ctx.vehicles, props: placedProps };
+  return { soldiers, vehicleTargets: ctx.vehicles, snipers: ctx.snipers.map((p) => p.s), props: placedProps };
 }
 
 /**

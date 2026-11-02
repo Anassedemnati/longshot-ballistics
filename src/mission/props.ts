@@ -133,6 +133,33 @@ export function propFootprintRadius(kind: PropKind): number {
   return r;
 }
 
+/** A roof must leave at least this much room (m, each side of the centre) for a body to lie on it. */
+const MIN_ROOF_ROOM = 0.5;
+
+/**
+ * Where something can lie on top of a building, in the building's local frame: the roof's top face height
+ * `top` above the ground, and the rectangle (centre `cx`, `cz`, half sizes `halfX`, `halfZ`) its reference point may
+ * be in so that a body reaching `reach` m from that point (any direction) stays on the roof. Null when the
+ * kind has no roof, or the roof is too small for such a body (a shed's roof is 3.8 m wide).
+ */
+export interface RoofSpot {
+  top: number;
+  cx: number;
+  cz: number;
+  halfX: number;
+  halfZ: number;
+}
+
+export function rooftopSpot(kind: PropKind, reach: number): RoofSpot | null {
+  const roof = BOXES[kind].find((b) => b.part === 'roof');
+  if (!roof) return null;
+  const halfX = roof.halfSize.x - reach;
+  const halfZ = roof.halfSize.z - reach;
+  // A body that fits with only centimetres to spare is no place to lie: it needs room to pick a spot in.
+  if (halfX < MIN_ROOF_ROOM || halfZ < MIN_ROOF_ROOM) return null;
+  return { top: roof.center.y + roof.halfSize.y, cx: roof.center.x, cz: roof.center.z, halfX, halfZ };
+}
+
 /** A local box placed in the world: footprint centre (x, z), ground height `groundY`, rotation `yaw` about +Y. */
 export function toWorldBox(b: LocalBox, x: number, z: number, yaw: number, groundY: number): Box {
   const c = Math.cos(yaw);
