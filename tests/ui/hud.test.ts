@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rangeText, soundLabel, targetsText, windText } from '../../src/ui/hud';
+import { hintText, rangeText, soundLabel, targetsText, windText } from '../../src/ui/hud';
 
 describe('soundLabel', () => {
   it('asks for a click until the audio context is running', () => {
@@ -15,6 +15,23 @@ describe('soundLabel', () => {
   it('says so when the browser has no usable audio', () => {
     expect(soundLabel(false, false, false)).toBe('Sound unavailable');
     expect(soundLabel(false, true, false)).toBe('Sound unavailable');
+  });
+});
+
+describe('hintText', () => {
+  it('lists the basic keys, and nothing about cover or assists when the mission has neither', () => {
+    const text = hintText();
+    for (const key of ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload', 'M mute', 'Esc release mouse']) {
+      expect(text).toContain(key);
+    }
+    expect(text).not.toMatch(/\bC cover|T\/A\/P/);
+  });
+
+  it('adds C (cover) with snipers, and T/A/P with assists, before the Esc key', () => {
+    expect(hintText({ cover: true })).toContain('M mute  ·  C cover  ·  Esc release mouse');
+    expect(hintText({ assists: true })).toContain('M mute  ·  T/A/P assists  ·  Esc release mouse');
+    expect(hintText({ cover: true, assists: true })).toContain('C cover  ·  T/A/P assists  ·  Esc');
+    expect(hintText({ cover: true, assists: true })).not.toContain('\n'); // one line
   });
 });
 
