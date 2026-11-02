@@ -85,8 +85,8 @@ const LOOKS: Record<ThemeId, TerrainLook> = {
     tileM: 4,
     fallbackColor: 0xcfb083,
     mapTint: 0xe2e2ec, // the texture carries the sand colour; a cool tint tames its orange
-    rockPatch: new THREE.Color(0.55, 0.5, 0.45),
-    rockColor: 0x7a6a58,
+    rockPatch: new THREE.Color(0.5, 0.48, 0.46),
+    rockColor: 0x6b645d, // grey-brown sandstone: it must read as rock against the orange sand, not as sand in shade
     // Pale crests, darker hollows.
     tint: (y, patch, out) => {
       const shade = 0.88 + 0.1 * Math.max(-1, Math.min(1, y / 5)) + 0.1 * patch;

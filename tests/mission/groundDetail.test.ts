@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MISSION, clampMission } from '../../src/mission/config';
-import type { MissionConfig } from '../../src/mission/config';
+import type { FiringPosition, MissionConfig } from '../../src/mission/config';
 import {
   DETAIL_REGION,
+  EYE_CLEARANCE,
+  EYE_CLEAR_RADIUS,
   LANE_HALF_WIDTH,
+  MAX_DETAIL_SLOPE,
   MAX_PEBBLES,
   MAX_TUFTS,
   SHOOTER_CLEARANCE,
   TARGET_CLEARANCE,
+  groundSlope,
   planGroundDetail,
 } from '../../src/mission/groundDetail';
 import type { GroundDetailPlan } from '../../src/mission/groundDetail';
@@ -15,6 +19,7 @@ import { generateLayout, legacyLayout } from '../../src/mission/layout';
 import type { MissionLayout } from '../../src/mission/layout';
 import { propColliders, vehicleTargetColliders } from '../../src/mission/props';
 import type { ThemeId } from '../../src/mission/themes';
+import { terrainGridAxes } from '../../src/scene/terrain';
 import { createTerrainField } from '../../src/scene/terrainField';
 import type { TerrainField } from '../../src/scene/terrainField';
 
@@ -152,5 +157,95 @@ describe('planGroundDetail', () => {
       expect(p.size).toBeGreaterThanOrEqual(0.04);
       expect(p.size).toBeLessThanOrEqual(0.22);
     }
+  });
+});
+
+const POSITIONS: FiringPosition[] = ['valley', 'ridge', 'mountain'];
+
+/** The largest mission with 3 enemy snipers at one firing position. */
+function bigAt(theme: ThemeId, seed: number, position: FiringPosition): { field: TerrainField; layout: MissionLayout } {
+  const config = clampMission({ ...big(theme, seed), position, enemySnipers: 3 });
+  const field = createTerrainField(theme, seed, position);
+  return { field, layout: generateLayout(config, field) };
+}
+
+describe('planGroundDetail at every firing position, with enemy snipers', () => {
+  it('the mountain spur and the valley walls really are steep (so the slope rule has something to do)', () => {
+    let spur = 0;
+    for (const theme of THEMES) {
+      const field = createTerrainField(theme, 3, 'mountain');
+      for (let a = 0; a < 72; a++) {
+        const t = (a / 72) * 2 * Math.PI;
+        for (const r of [30, 45, 60, 75]) spur = Math.max(spur, groundSlope(field, r * Math.cos(t), r * Math.sin(t)));
+      }
+    }
+    expect(spur).toBeGreaterThan(1);
+    // The walls: ground steeper than the limit inside the part of the map that gets detail (every theme, ridge position).
+    for (const theme of THEMES) {
+      const field = createTerrainField(theme, 3, 'ridge');
+      let steep = 0;
+      for (let x = DETAIL_REGION.xMin; x <= DETAIL_REGION.xMax; x += 10) {
+        for (let z = DETAIL_REGION.zMin; z <= DETAIL_REGION.zMax; z += 10) if (groundSlope(field, x, z) > MAX_DETAIL_SLOPE) steep++;
+      }
+      expect(steep).toBeGreaterThan(50);
+    }
+  });
+
+  for (const theme of THEMES) {
+    for (const position of POSITIONS) {
+      it(`${theme} / ${position}: no stone or tuft on a steep face, none up at the eye near the shooter, clear of the snipers`, () => {
+        for (const seed of [3, 11]) {
+          const { field, layout } = bigAt(theme, seed, position);
+          expect(layout.snipers).toHaveLength(3);
+          const plan = planGroundDetail(field, layout, seed, layout.snipers);
+          expect(plan.pebbles.length).toBeGreaterThan(MAX_PEBBLES * 0.8);
+          if (theme === 'valley') expect(plan.tufts.length).toBeGreaterThan(MAX_TUFTS * 0.8);
+          const bad: string[] = [];
+          const items = [
+            ...plan.pebbles.map((p) => ({ x: p.x, z: p.z, top: p.y + p.size })),
+            ...plan.tufts.map((t) => ({ x: t.x, z: t.z, top: t.y + t.size })),
+          ];
+          for (const it of items) {
+            const at = `(${it.x.toFixed(1)}, ${it.z.toFixed(1)})`;
+            // slope by another stencil (+-0.5 m): the rule's own is +-1 m, so allow a little for the difference
+            const h = field.height;
+            const slope = Math.hypot(h(it.x + 0.5, it.z) - h(it.x - 0.5, it.z), h(it.x, it.z + 0.5) - h(it.x, it.z - 0.5));
+            if (slope > MAX_DETAIL_SLOPE * 1.3) bad.push(`${at} on ground of slope ${slope.toFixed(2)}`);
+            if (Math.hypot(it.x - field.shooter.x, it.z - field.shooter.z) < EYE_CLEAR_RADIUS && it.top > field.shooter.y - EYE_CLEARANCE) {
+              bad.push(`${at} reaches the shooter's eye`);
+            }
+            for (const s of layout.snipers) {
+              if (Math.hypot(it.x - s.x, it.z - s.z) < TARGET_CLEARANCE) bad.push(`${at} within ${TARGET_CLEARANCE} m of ${s.id}`);
+              if (toSegment(it.x, it.z, field.shooter.x, field.shooter.z, s.x, s.z) < LANE_HALF_WIDTH) bad.push(`${at} on the lane to ${s.id}`);
+            }
+          }
+          expect(bad).toEqual([]);
+        }
+      });
+    }
+  }
+
+  it('the rule bites: without it the mountain would get stones on its steep flanks', () => {
+    // Re-plan with the slope rule's limit exceeded by hand: count what the unfiltered near field would put on ground steeper than the limit.
+    const { field } = bigAt('valley', 3, 'mountain');
+    let steepSamples = 0;
+    for (let a = 0; a < 360; a++) {
+      const t = (a / 360) * 2 * Math.PI;
+      for (const r of [20, 40, 60, 80]) if (groundSlope(field, r * Math.cos(t), r * Math.sin(t)) > MAX_DETAIL_SLOPE) steepSamples++;
+    }
+    expect(steepSamples).toBeGreaterThan(300); // most of the spur is steeper than the limit
+  });
+});
+
+describe('DETAIL_REGION', () => {
+  it('lies inside the part of the render mesh whose grid is fine (4 m or less), so stones sit on the drawn ground', () => {
+    const { xs, zs } = terrainGridAxes();
+    const steps = (axis: number[], min: number, max: number): number[] => {
+      const out: number[] = [];
+      for (let i = 1; i < axis.length; i++) if (axis[i] >= min && axis[i - 1] <= max) out.push(axis[i] - axis[i - 1]);
+      return out;
+    };
+    expect(Math.max(...steps(xs, DETAIL_REGION.xMin, DETAIL_REGION.xMax))).toBeLessThanOrEqual(4.0001);
+    expect(Math.max(...steps(zs, DETAIL_REGION.zMin, DETAIL_REGION.zMax))).toBeLessThanOrEqual(4.0001);
   });
 });

@@ -116,8 +116,8 @@ export function buildWorld(
   const shadow = createShadowLight(scene, config.theme, sun);
   scene.add(createTerrainMesh(field, opts.maxAnisotropy));
   scene.add(createRocks(field));
-  // Pebbles (and grass in the valley): visual only, kept off the lane, the props and the targets.
-  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy).group);
+  // Pebbles (and grass in the valley): visual only, kept off the lanes, the props and every target, enemy snipers included.
+  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers).group);
   const dust = new DustSystem();
   scene.add(dust.group);
   const sparks = new SparkSystem();

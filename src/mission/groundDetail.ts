@@ -11,6 +11,9 @@ import type { ThemeId } from './themes';
 //   - the lane: a corridor around the line of sight from the shooter to every target;
 //   - the prone shooter's own spot (the eye is only 0.4 m above the ground);
 //   - 2 m around every target, and every prop's footprint.
+//   - ground that is too steep (the valley walls, the mountain spur, the flanks of an outcrop): a stone or a tuft stands
+//     flat on its instance, so on a cliff face it would float edge-on;
+//   - anything that would stick up to the shooter's eye level near him (the top of the rise he lies on).
 // It stays inside the part of the map the fine terrain mesh covers, where mesh and height() agree.
 
 /** At most this many pebbles per mission. */
@@ -25,6 +28,12 @@ export const LANE_HALF_WIDTH = 2.5;
 export const SHOOTER_CLEARANCE = 3;
 /** Extra clearance around a prop's footprint circle, m. */
 const PROP_MARGIN = 0.6;
+/** Detail stays off ground steeper than this (rise over run, about 27 degrees): wall faces, the mountain spur, outcrop flanks. */
+export const MAX_DETAIL_SLOPE = 0.5;
+/** Within this distance of the shooter (m) no detail reaches up to his eye. */
+export const EYE_CLEAR_RADIUS = 60;
+/** ... its top stays at least this far (m) below the eye's height. */
+export const EYE_CLEARANCE = 0.25;
 /** Detail only goes where the terrain mesh is fine (4 m grid): |x| <= 440, -1690 <= z <= 110. */
 export const DETAIL_REGION = { xMin: -440, xMax: 440, zMin: -1690, zMax: 110 } as const;
 
@@ -114,6 +123,12 @@ export function detailClear(ex: DetailExclusions, x: number, z: number): boolean
   return true;
 }
 
+/** The steepness of the ground at (x, z): rise over run by central differences over 2 m. */
+export function groundSlope(field: Pick<TerrainField, 'height'>, x: number, z: number): number {
+  const h = field.height;
+  return Math.hypot(h(x + 1, z) - h(x - 1, z), h(x, z + 1) - h(x, z - 1)) / 2;
+}
+
 const DEG = Math.PI / 180;
 /** Half-width of the sector in front of the shooter that gets most of the detail (the opening view is about +-46 deg), rad. */
 const FRONT_HALF_ANGLE = 70 * DEG;
@@ -154,6 +169,10 @@ export function planGroundDetail(
   const onMound = (x: number, z: number, scale: number): boolean =>
     outcrops.some((o) => Math.hypot(x - o.x, z - o.z) < o.radius * scale);
 
+  // How high detail may reach at (x, z): unlimited far from the shooter, below his eye near him.
+  const eyeCeiling = (x: number, z: number): number =>
+    Math.hypot(x - shooter.x, z - shooter.z) < EYE_CLEAR_RADIUS ? field.shooter.y - EYE_CLEARANCE : Infinity;
+
   const pebbleRng = createRng((Math.imul(seed, 0x2c1b3c6d) ^ 0x70656262) >>> 0);
   const pebbles: Pebble[] = [];
   for (let attempts = 0; pebbles.length < MAX_PEBBLES && attempts < MAX_PEBBLES * 30; attempts++) {
@@ -170,11 +189,14 @@ export function planGroundDetail(
       continue;
     }
     if (!detailClear(ex, p.x, p.z) || onMound(p.x, p.z, 0.95)) continue;
+    const ground = field.height(p.x, p.z);
+    if (groundSlope(field, p.x, p.z) > MAX_DETAIL_SLOPE) continue;
     const u = pebbleRng();
     const size = 0.04 + u * u * u * 0.18; // mostly small stones, a few bigger ones
+    if (ground + size * 0.05 + size > eyeCeiling(p.x, p.z)) continue; // a stone is under `size` high, tilt included
     pebbles.push({
       x: p.x,
-      y: field.height(p.x, p.z) + size * 0.05,
+      y: ground + size * 0.05,
       z: p.z,
       size,
       yaw: pebbleRng() * Math.PI * 2,
@@ -194,11 +216,15 @@ export function planGroundDetail(
           ? nearField(tuftRng, shooter, 4, 90, 1.7, 0.1)
           : around(tuftRng, buildings[Math.floor(tuftRng() * buildings.length)], 3, 22, 1);
       if (!detailClear(ex, p.x, p.z) || onMound(p.x, p.z, 1.25)) continue;
+      const ground = field.height(p.x, p.z);
+      if (groundSlope(field, p.x, p.z) > MAX_DETAIL_SLOPE) continue;
+      const size = 0.3 + tuftRng() * 0.3;
+      if (ground - 0.02 + size > eyeCeiling(p.x, p.z)) continue;
       tufts.push({
         x: p.x,
-        y: field.height(p.x, p.z) - 0.02,
+        y: ground - 0.02,
         z: p.z,
-        size: 0.3 + tuftRng() * 0.3,
+        size,
         yaw: tuftRng() * Math.PI,
         shade: tuftRng(),
       });

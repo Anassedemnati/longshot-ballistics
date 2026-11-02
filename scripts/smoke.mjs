@@ -1736,6 +1736,18 @@ async function run() {
     log(`largest mission with everything on: ${st.render.calls} draw calls, ${st.render.triangles} triangles`);
     check(st.snipers.length === 3 && st.targetsLeft === 16, 'the largest mission with everything on has 3 snipers and 16 targets');
     check(st.render.calls > 100 && st.render.calls <= MAX_DRAW_CALLS, `with everything on it stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
+    // The worst view is not always the opening one: scoped on every target in turn (the sun-shadow box follows the crosshair, so each view
+    // draws other casters), with the rifle off and the trajectory line on.
+    const everyPoint = [...st.soldiers.map((k) => k.upperTorso), ...st.vehicles.map((v) => v.engine), ...st.snipers.map((k) => k.upperTorso)];
+    await everything.evaluate(() => window.__game.toggleScope());
+    let worstCalls = 0;
+    for (const point of everyPoint) {
+      await everything.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [point.x, point.y, point.z]);
+      await animationFrames(everything, 4);
+      worstCalls = Math.max(worstCalls, (await gameState(everything)).render.calls);
+    }
+    log(`largest mission with everything on, scoped on each of its ${everyPoint.length} targets: at most ${worstCalls} draw calls`);
+    check(everyPoint.length === 16 && worstCalls <= MAX_DRAW_CALLS, `scoped on any target with everything on it stays within the draw-call budget (${worstCalls} <= ${MAX_DRAW_CALLS})`);
     await everything.close();
 
     // 13. A failed start and a failed frame leave a way out. These pages break on purpose, so they log errors the

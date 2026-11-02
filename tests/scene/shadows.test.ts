@@ -10,7 +10,11 @@ import {
   shadowFocus,
   snapToTexelGrid,
 } from '../../src/scene/shadows';
+import { rangeUnderCrosshair } from '../../src/game/rangefinder';
+import { sniperAimPoints } from '../../src/mission/sniperDims';
 import { SKY_LOOKS, createSky, sunDirectionOf } from '../../src/scene/sky';
+import { createSniper } from '../../src/scene/sniper';
+import { createTerrainField } from '../../src/scene/terrainField';
 
 const THEMES: ThemeId[] = ['desert', 'arctic', 'valley'];
 const eye: Vec3 = { x: 0, y: 12.4, z: 0 };
@@ -20,6 +24,21 @@ const unit = (v: Vec3): Vec3 => {
   const l = Math.hypot(v.x, v.y, v.z);
   return { x: v.x / l, y: v.y / l, z: v.z / l };
 };
+
+describe('shadowFocus on an enemy sniper', () => {
+  it('scoped on him, the rangefinder reads his range (he is a live target), so the shadow box is centred on him', () => {
+    const field = createTerrainField('desert', 1);
+    const pose = { x: 12, y: 3.4, z: -300, yaw: 0 }; // lying on a roof 300 m out
+    const sniper = createSniper(pose, pose.yaw, 'sniper-0');
+    const aim = sniperAimPoints(pose).upperTorso;
+    const forward = unit({ x: aim.x - field.shooter.x, y: aim.y - field.shooter.y, z: aim.z - field.shooter.z });
+    const rangeM = rangeUnderCrosshair(field.shooter, forward, field, [], [sniper.hitTarget]);
+    expect(rangeM).not.toBeNull();
+    const f = shadowFocus({ scoped: true, eye: field.shooter, forward, rangeM, ground: field.height });
+    // His own shadow and the roof's fall inside the 60 m box around the focus.
+    expect(Math.hypot(f.x - aim.x, f.y - aim.y, f.z - aim.z)).toBeLessThan(SHADOW_HALF_EXTENT / 3);
+  });
+});
 
 describe('shadowFocus', () => {
   it('scoped with a rangefinder reading: the point under the crosshair', () => {
