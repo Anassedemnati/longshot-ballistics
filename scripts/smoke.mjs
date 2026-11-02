@@ -95,7 +95,11 @@ const MISSION_SNIPERS_ASSISTS = 'v2.d.300.300.1.0.45.9.308.m.n.2.r.0.2.1';
 /** The largest mission with everything on: mountain, suppressor, 3 enemy snipers, aim assists. */
 const MISSION_MAX_ALL = 'v2.d.100.1500.10.3.120.3.338.m.m.1.m.1.3.1';
 /** The longest the threat line gets (3 snipers, a bombardment coming, pointer free). */
-const LONGEST_THREAT = 'EXPOSED · Health 100 · Detection 100 % · 3 snipers left · INCOMING BOMBARDMENT 3.0 s — C: COVER · PAUSED — click to resume';
+const LONGEST_THREAT = 'EXPOSED · Health 100 · Detection 100 % · 3 snipers left · INCOMING BOMBARDMENT 3.0 s — C: COVER · PAUSED';
+/** A small mission (1 soldier, 1 enemy sniper, some cover) for each firing position in each theme: `v2.<theme>.300.600.1.0.0.12.308.n.n.<seed>.<position>.0.1.0`. */
+const SMALL_POSITIONS = [['v', 'valley'], ['r', 'ridge'], ['m', 'mountain']];
+const SMALL_THEMES = [['d', 'desert'], ['a', 'arctic'], ['v', 'valley']];
+const smallMission = (theme, position) => `v2.${theme}.300.600.1.0.0.12.308.n.n.5.${position}.0.1.0`;
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
 function log(message) {
@@ -837,6 +841,8 @@ async function run() {
       'the toggles read T / A / P and start OFF',
     );
     check(!(await assisted.locator('.aim-marker').isVisible()) && !(await assisted.locator('.assist-spotter').isVisible()), 'with every assist off there is no marker and no spotter text');
+    const assistedHint = (await assisted.locator('.hud-hint').textContent()) ?? '';
+    check(/T\/A\/P assists/.test(assistedHint) && !/ C cover/.test(assistedHint), `the hint of a mission with assists and no snipers lists T/A/P but not C (${assistedHint})`);
     check(!st.stats.assistsUsed, 'no assist used yet');
     // The panel stays clear of the scope lens.
     const lens = await assisted.locator('.scope-lens').boundingBox();
@@ -1066,6 +1072,25 @@ async function run() {
       check(themedPng.distinctAll >= 6, `the ${name} mission canvas is not one colour (${themedPng.distinctAll} distinct sampled colours)`);
       log(`${name} mission draw calls ${(await gameState(themed)).render.calls}`);
       await themed.close();
+    }
+
+    // 10b. Every firing position in every theme (3 x 3 small missions with 1 soldier and 1 enemy sniper): each builds without a console
+    // error, draws something that is not one colour, and stays inside the draw-call budget (the reading covers the world pass and the rifle).
+    for (const [themeCode, themeName] of SMALL_THEMES) {
+      for (const [positionCode, positionName] of SMALL_POSITIONS) {
+        const label = `${themeName} from the ${positionName}`;
+        const problemsBefore = problems.length;
+        const small = await openPage();
+        await startGame(small, `m=${smallMission(themeCode, positionCode)}&debug=1`);
+        await animationFrames(small, 6);
+        st = await gameState(small);
+        check(st.targetsLeft === 2 && st.soldiers.length === 1 && st.snipers.length === 1, `${label}: 1 soldier and 1 enemy sniper stand`);
+        check(st.render.calls > 20 && st.render.calls <= MAX_DRAW_CALLS, `${label}: ${st.render.calls} draw calls (within 20..${MAX_DRAW_CALLS})`);
+        const smallPng = await analyzePng(small, await shoot(small, { hideHud: true, path: join(OUT_DIR, `small-${themeName}-${positionName}.png`) }));
+        check(smallPng.distinctAll >= 6, `${label}: the canvas is not blank (${smallPng.distinctAll} distinct sampled colours)`);
+        check(problems.length === problemsBefore, `${label}: no console errors${problems.length > problemsBefore ? `: ${problems.slice(problemsBefore).join(' | ')}` : ''}`);
+        await small.close();
+      }
     }
 
     // 11. The start menu. First without ?debug=1: it shows, fits 1280x720, exposes no hook and starts the defaults.
@@ -1457,6 +1482,15 @@ async function run() {
     await fight.evaluate(() => window.__game.unlockAudio());
     st = await gameState(fight);
     check(st.snipers.length === 2 && st.snipersLeft === 2 && st.soldiers.length === 1, 'the sniper mission has 1 soldier and 2 enemy snipers');
+    // The two cheats are part of the hook with ?debug=1 (a plain page has no hook at all, a dev server's plain URL has the hook without them).
+    check(
+      (await fight.evaluate(() => [typeof window.__game.setDetection, typeof window.__game.setHealth])).join() === 'function,function',
+      'with ?debug=1 the hook has the setDetection and setHealth cheats',
+    );
+    // The hint lists C (cover) because there are snipers, and no T/A/P because the assists are off; on one line.
+    const fightHint = (await fight.locator('.hud-hint').textContent()) ?? '';
+    check(/ C cover/.test(fightHint) && !/T\/A\/P/.test(fightHint), `the hint of a sniper mission lists C (cover) but not T/A/P (${fightHint})`);
+    check((await fight.locator('.hud-hint').boundingBox()).height < 24, 'the hint is a single line');
     check(st.targetsLeft === 3, 'the snipers are targets: 3 targets standing');
     check((await fight.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
     check(st.snipers.every((k) => k.site === 'roof'), `both snipers lie on rooftops (${st.snipers.map((k) => k.site).join(', ')})`);
@@ -1664,6 +1698,9 @@ async function run() {
     await animationFrames(combo, 4);
 
     // Cover: no rifle (fewer draw calls), the mask between the picture and the HUD, the threat line on top.
+    check(await combo.locator('.assist-spotter').isVisible(), 'before ducking the spotter text is shown');
+    const markerBeforeCover = await combo.locator('.aim-marker').isVisible();
+    log(`before ducking the aim marker is ${markerBeforeCover ? 'shown' : 'not shown (the view is off its point)'}`);
     await combo.keyboard.press('KeyC');
     await animationFrames(combo, 4);
     st = await gameState(combo);
@@ -1677,11 +1714,13 @@ async function run() {
     check(stacking.mask > stacking.scope && stacking.mask > stacking.marker, `the cover mask is above the scope overlay and the aim marker (z ${stacking.mask} > ${stacking.scope}, ${stacking.marker})`);
     check(stacking.mask < stacking.hud && stacking.mask < stacking.assist && stacking.mask < stacking.threat && stacking.mask < stacking.flash, `the cover mask is below the HUD, the assist panel, the damage flash and the threat line (z ${stacking.mask} < ${stacking.hud}, ${stacking.assist}, ${stacking.flash}, ${stacking.threat})`);
     check((await combo.locator('.cover-mask').isVisible()) && (await combo.locator('.hud-panel').isVisible()) && (await combo.locator('.threat-panel').isVisible()), 'in cover the mask, the status panel and the threat line show together');
+    check(!(await combo.locator('.assist-spotter').isVisible()) && !(await combo.locator('.aim-marker').isVisible()), 'in cover the spotter text and the aim marker are hidden');
     await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-cover.png') });
     await combo.keyboard.press('KeyC');
     await animationFrames(combo, 4);
     st = await gameState(combo);
     check(!st.covered && st.render.calls >= callsUnscoped - 2, `back up from cover the rifle is drawn again (${st.render.calls} draw calls)`);
+    check(await combo.locator('.assist-spotter').isVisible(), 'back up from cover the spotter text is shown again');
 
     // The assists aim at enemy snipers: scoped on the nearer one, the marker is on the crosshair's neighbourhood and the spotter calls him.
     const prey = [...st.snipers].sort((a, b) => Math.hypot(a.upperTorso.x, a.upperTorso.z) - Math.hypot(b.upperTorso.x, b.upperTorso.z))[0];
@@ -1707,6 +1746,16 @@ async function run() {
     const nearPx = Math.min(Math.max(lensCx, comboAssist.x), comboAssist.x + comboAssist.width);
     const nearPy = Math.min(Math.max(lensCy, comboAssist.y), comboAssist.y + comboAssist.height);
     check(Math.hypot(nearPx - lensCx, nearPy - lensCy) > comboLens.width / 2, 'with the spotter on, the assist panel does not cover the scope lens');
+    // The longest threat line stays on one line and clear of the lens (the circle, not just its box) at 1280x720 scoped.
+    const lensRadius = comboLens.width / 2;
+    const longest = (await panelRects(combo, LONGEST_THREAT)).threat;
+    const nearTx = Math.min(Math.max(lensCx, longest.left), longest.right);
+    const nearTy = Math.min(Math.max(lensCy, longest.top), longest.bottom);
+    check(longest.bottom - longest.top < 26, `the longest threat line is one line (${(longest.bottom - longest.top).toFixed(1)} px tall)`);
+    check(Math.hypot(nearTx - lensCx, nearTy - lensCy) > lensRadius, `the longest threat line does not touch the scope lens (nearest point ${Math.hypot(nearTx - lensCx, nearTy - lensCy).toFixed(1)} px from its centre, radius ${lensRadius.toFixed(1)})`);
+    const comboHint = await combo.locator('.hud-hint').boundingBox();
+    check(comboHint.height < 24 && comboHint.y >= comboLens.y + comboLens.height, `the hint with C and T/A/P is one line below the lens (top ${comboHint.y.toFixed(0)}, ${comboHint.height.toFixed(0)} px tall)`);
+    check(/ C cover.*T\/A\/P assists/.test((await combo.locator('.hud-hint').textContent()) ?? ''), 'the hint lists both C (cover) and T/A/P');
     await combo.screenshot({ path: join(OUT_DIR, 'snipers-assists-scoped.png') });
     // Follow the call: the crosshair that far above (and beside) the upper torso puts the marker on it, and the shot takes him out.
     const preyBearing = Math.atan2(prey.upperTorso.x, -prey.upperTorso.z);
