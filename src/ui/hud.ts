@@ -39,8 +39,9 @@ export function rangeText(rangeM: number | null): string {
 
 /**
  * Easy-style HUD: targets left, rangefinder, wind, magnification, rounds, the sound on/off indicator and
- * the last shot's result, plus a centre dot for the naked eye and the click-to-start hint. All DOM;
- * styled in index.html.
+ * the last shot's result, plus a centre dot for the naked eye and the click-to-start hint. While the mouse
+ * is free the hint also holds a "Menu" link (to `menuHref`), the only way out of a mission that keeps its
+ * settings. All DOM; styled in index.html.
  */
 export class Hud {
   private readonly targets: HTMLElement;
@@ -52,7 +53,7 @@ export class Hud {
   private readonly dot: HTMLElement;
   private readonly hint: HTMLElement;
 
-  constructor(parent: HTMLElement, wind: { windSpeedMps: number; windClock: number }, targetsTotal: number) {
+  constructor(parent: HTMLElement, wind: { windSpeedMps: number; windClock: number }, targetsTotal: number, menuHref: string) {
     const root = el(parent, 'div', 'hud');
     const panel = el(root, 'div', 'hud-panel');
     this.targets = el(panel, 'div', 'hud-line', targetsText(targetsTotal, targetsTotal));
@@ -72,12 +73,15 @@ export class Hud {
     this.sound = el(panel, 'div', 'hud-line');
     this.result = el(root, 'div', 'hud-result');
     this.dot = el(root, 'div', 'hud-dot');
-    this.hint = el(
-      root,
-      'div',
-      'hud-hint',
+    this.hint = el(root, 'div', 'hud-hint');
+    this.hint.append(
       'Click to take aim  ·  Left click fire  ·  Right click scope  ·  Wheel zoom  ·  R reload  ·  M mute  ·  Esc release mouse',
     );
+    const menu = el(this.hint, 'a', 'hud-menu', 'Menu') as HTMLAnchorElement;
+    menu.href = menuHref;
+    // The HUD lets the mouse through to the canvas; this link is the exception. Its press must not reach the
+    // document handler that grabs the pointer (the page is about to navigate).
+    menu.addEventListener('mousedown', (e) => e.stopPropagation());
     this.setMagnification(1);
     this.setSound(false, false);
   }
@@ -116,7 +120,7 @@ export class Hud {
     return this.result.textContent ?? '';
   }
 
-  /** Show the "click to take aim" hint while the mouse is not captured. */
+  /** Show the "click to take aim" hint (and the Menu link in it) while the mouse is not captured. */
   setHintVisible(visible: boolean): void {
     this.hint.hidden = !visible;
   }

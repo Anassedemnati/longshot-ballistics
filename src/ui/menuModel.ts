@@ -108,3 +108,13 @@ export function seedFromBits(bits: number): number {
 export function startSearch(config: Partial<MissionConfig>, seed: number, debug: boolean): string {
   return `?m=${encodeMission(clampMission({ ...config, seed }))}${debug ? '&debug=1' : ''}`;
 }
+
+/**
+ * `location.search` of the menu pre-filled with `config` (read back through `?last=`), keeping `debug=1`
+ * when the page had it. Used wherever the player leaves for the menu without losing the settings:
+ * Back from a mission (the menu rewrites its own history entry with it), the results screen's Menu
+ * button and the mission HUD's Menu link.
+ */
+export function menuSearch(config: Partial<MissionConfig>, debug: boolean): string {
+  return `?last=${encodeMission(clampMission(config))}${debug ? '&debug=1' : ''}`;
+}

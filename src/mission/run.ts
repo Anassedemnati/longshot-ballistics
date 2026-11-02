@@ -34,8 +34,9 @@ import { createTerrainField } from '../scene/terrainField';
 import { createVehicleTarget } from '../scene/vehicleTarget';
 import type { VehicleTarget } from '../scene/vehicleTarget';
 import { Hud } from '../ui/hud';
+import { menuSearch } from '../ui/menuModel';
 import { showResults } from '../ui/results';
-import { encodeMission, windVector } from './config';
+import { windVector } from './config';
 import type { MissionConfig } from './config';
 import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
 import type { SoldierPlacement, VehicleTargetPlacement } from './layout';
@@ -245,7 +246,12 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
   if (nearest) lookAtPoint(nearest.point.x, nearest.point.y, nearest.point.z);
   view.look(input.yaw, input.pitch);
 
-  const hud = new Hud(document.body, config, targetsTotal);
+  // Both ways back to the menu (the HUD's link and the results button) carry the mission's settings, and
+  // `debug=1` when the page had it. The legacy practice URL goes there too: its config (one soldier at the
+  // range, no props, desert) is a valid menu setup, so the menu opens on what the player was practising.
+  const menuHref = `${import.meta.env.BASE_URL}${menuSearch(config, opts.debug)}`;
+
+  const hud = new Hud(document.body, config, targetsTotal, menuHref);
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
 
@@ -399,7 +405,7 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
     showResults(document.body, stats, {
       onRestart: () => window.location.reload(),
       onMenu: () => {
-        window.location.href = `${import.meta.env.BASE_URL}?last=${encodeMission(config)}`;
+        window.location.href = menuHref;
       },
     });
   }

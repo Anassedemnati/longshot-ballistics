@@ -7,6 +7,7 @@ import {
   clockPoint,
   densityNote,
   linkRange,
+  menuSearch,
   mpsToMph,
   rangeLabel,
   rifleNote,
@@ -200,6 +201,35 @@ describe('starting a mission', () => {
       const back = routeFromSearch(`?last=${code}`);
       expect(back.kind).toBe('menu');
       expect(back.kind === 'menu' && back.last).toEqual({ ...cfg, seed: 99 });
+    }
+  });
+
+  it('menuSearch gives a ?last= URL the router reads back as the menu holding that mission', () => {
+    const cfg = { ...DEFAULT_MISSION, theme: 'valley' as const, soldiers: 8, rangeMin: 250, rangeMax: 250, seed: 777 };
+    const search = menuSearch(cfg, false);
+    expect(search.startsWith('?last=v1.')).toBe(true);
+    expect(search).not.toContain('debug');
+    const route = routeFromSearch(search);
+    expect(route.kind).toBe('menu');
+    expect(route.kind === 'menu' && route.last).toEqual(cfg);
+  });
+
+  it('menuSearch keeps debug=1 when asked, and the router still finds the menu', () => {
+    const search = menuSearch(DEFAULT_MISSION, true);
+    expect(search.endsWith('&debug=1')).toBe(true);
+    const route = routeFromSearch(search);
+    expect(route.kind === 'menu' && route.last).toEqual(DEFAULT_MISSION);
+    expect(new URLSearchParams(search).get('debug')).toBe('1');
+  });
+
+  it('menuSearch clamps like every mission, and a random mission survives it unchanged', () => {
+    const clamped = routeFromSearch(menuSearch({ ...DEFAULT_MISSION, soldiers: 99, windSpeedMps: 50 }, false));
+    expect(clamped.kind === 'menu' && clamped.last).toMatchObject({ soldiers: 10, windSpeedMps: 12 });
+    const rng = createRng(31);
+    for (let i = 0; i < 25; i++) {
+      const cfg = randomMission(rng);
+      const back = routeFromSearch(menuSearch(cfg, false));
+      expect(back.kind === 'menu' && back.last).toEqual(cfg);
     }
   });
 });

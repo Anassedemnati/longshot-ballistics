@@ -10,6 +10,7 @@ import {
   clockPoint,
   densityNote,
   linkRange,
+  menuSearch,
   rangeLabel,
   rifleNote,
   seedFromBits,
@@ -166,6 +167,9 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   }
 
   function start(): void {
+    // This history entry becomes the menu holding these settings, so the browser's Back from the mission
+    // returns to a pre-filled menu instead of the defaults the page was opened with.
+    history.replaceState(null, '', menuSearch(cfg, opts.debug));
     window.location.search = startSearch(cfg, newSeed(), opts.debug);
   }
 
