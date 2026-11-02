@@ -12,13 +12,29 @@ export interface MissionStats {
   targetsTotal: number;
   /** Farthest distance, m, at which a bullet struck a target. */
   longestHitM: number;
-  /** Mission clock start and end, ms (`performance.now()`); `endMs` is null until the last target goes down. */
-  startMs: number;
+  /**
+   * Mission clock start and end, ms (`performance.now()`). The clock starts with the player's first move
+   * (see `startClock`), so time spent on the loading screen or idle before the first aim does not count:
+   * `startMs` is null until then, `endMs` until the last target goes down.
+   */
+  startMs: number | null;
   endMs: number | null;
 }
 
-export function newStats(targetsTotal: number, nowMs: number): MissionStats {
+/** Fresh stats. The clock is stopped (`startMs` null) unless `nowMs` is given. */
+export function newStats(targetsTotal: number, nowMs: number | null = null): MissionStats {
   return { shots: 0, hits: 0, headshots: 0, targetsDown: 0, targetsTotal, longestHitM: 0, startMs: nowMs, endMs: null };
+}
+
+/** Start the mission clock at `nowMs` if it is not running yet; a running clock keeps its start. */
+export function startClock(s: MissionStats, nowMs: number): MissionStats {
+  return s.startMs === null ? { ...s, startMs: nowMs } : s;
+}
+
+/** Mission time so far, ms: from the clock start to the end (0 while the clock has not started or the end is missing). */
+export function elapsedMs(s: MissionStats): number {
+  if (s.startMs === null) return 0;
+  return Math.max(0, (s.endMs ?? s.startMs) - s.startMs);
 }
 
 /** One more round fired. */

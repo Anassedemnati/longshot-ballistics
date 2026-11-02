@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ImpactEvent } from '../../src/game/bullets';
 import type { ZoneName } from '../../src/game/hit';
-import { accuracy, isComplete, newStats, recordImpact, recordShot } from '../../src/mission/stats';
+import { accuracy, elapsedMs, isComplete, newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
 import type { MissionStats } from '../../src/mission/stats';
 
 const P = { x: 0, y: 0, z: -500 };
@@ -29,6 +29,47 @@ describe('newStats', () => {
       startMs: 1000,
       endMs: null,
     });
+  });
+});
+
+describe('the mission clock', () => {
+  it('is stopped until started: newStats without a time has no start', () => {
+    const s = newStats(3);
+    expect(s.startMs).toBeNull();
+    expect(elapsedMs(s)).toBe(0);
+  });
+
+  it('startClock starts it once; a second call keeps the first start', () => {
+    const s = newStats(3);
+    const started = startClock(s, 5000);
+    expect(started.startMs).toBe(5000);
+    expect(s.startMs).toBeNull(); // immutable
+    expect(startClock(started, 9000)).toBe(started);
+    expect(startClock(started, 9000).startMs).toBe(5000);
+  });
+
+  it('startClock accepts 0 as a real start time', () => {
+    expect(startClock(startClock(newStats(1), 0), 700).startMs).toBe(0);
+  });
+
+  it('time is counted from the start, not from when the stats were created (idle time is not mission time)', () => {
+    let s = newStats(1); // created at 0 ms, e.g. when the page finished loading
+    s = startClock(s, 40_000); // the player's first shot, 40 s later
+    s = recordShot(s);
+    s = recordImpact(s, target('head'), true, 500, 47_500);
+    expect(s.endMs).toBe(47_500);
+    expect(elapsedMs(s)).toBe(7_500);
+  });
+
+  it('is the time so far (0) while no target has gone down, and never negative', () => {
+    expect(elapsedMs(startClock(newStats(2), 1234))).toBe(0);
+    expect(elapsedMs({ ...newStats(1, 5000), endMs: 4000 })).toBe(0);
+  });
+
+  it('a completed mission whose clock never started reports 0, not NaN', () => {
+    const s = recordImpact(newStats(1), target('head'), true, 100, 3000);
+    expect(s.endMs).toBe(3000);
+    expect(elapsedMs(s)).toBe(0);
   });
 });
 

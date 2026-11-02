@@ -40,7 +40,7 @@ import type { MissionConfig } from './config';
 import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
 import type { SoldierPlacement, VehicleTargetPlacement } from './layout';
 import { propColliders, vehicleEngineObstacle } from './props';
-import { isComplete, newStats, recordImpact, recordShot } from './stats';
+import { isComplete, newStats, recordImpact, recordShot, startClock } from './stats';
 import type { MissionStats } from './stats';
 import { themeAtmosphere } from './themes';
 
@@ -210,9 +210,10 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
     obstacles: () => obstacles,
   });
   const weapon = new Weapon(rifle.magazine);
-  let stats = newStats(targetsTotal, performance.now());
+  // The mission clock is stopped until the player's first pointer lock or first shot (whichever comes first).
+  let stats = newStats(targetsTotal);
   /** Timestamp of the frame being processed, ms (impacts are stamped with it). */
-  let frameNowMs = stats.startMs;
+  let frameNowMs = performance.now();
   let resultsShown = false;
 
   // Player
@@ -297,7 +298,7 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
       }
       return;
     }
-    stats = recordShot(stats);
+    stats = recordShot(startClock(stats, performance.now()));
     hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(shooter, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
@@ -382,7 +383,10 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
       userGesture: unlockAudio,
       toggleMute,
     },
-    (locked) => hud.setHintVisible(!locked),
+    (locked) => {
+      hud.setHintVisible(!locked);
+      if (locked) stats = startClock(stats, performance.now());
+    },
   );
 
   function showResultsScreen(): void {

@@ -1,4 +1,4 @@
-import { accuracy } from '../mission/stats';
+import { accuracy, elapsedMs } from '../mission/stats';
 import type { MissionStats } from '../mission/stats';
 
 /** What the two buttons do (the mission wires them to `location.reload()` and the menu URL). */
@@ -17,14 +17,13 @@ export function missionTimeText(ms: number): string {
 
 /** The result lines in display order: label and value text. */
 export function resultRows(s: MissionStats): Array<[string, string]> {
-  const elapsed = (s.endMs ?? s.startMs) - s.startMs;
   return [
     ['Shots fired', String(s.shots)],
     ['Hits', String(s.hits)],
     ['Accuracy', `${Math.round(accuracy(s) * 100)} %`],
     ['Headshots', String(s.headshots)],
     ['Longest hit', s.longestHitM > 0 ? `${Math.round(s.longestHitM)} m` : '—'],
-    ['Mission time', missionTimeText(elapsed)],
+    ['Mission time', missionTimeText(elapsedMs(s))],
   ];
 }
 

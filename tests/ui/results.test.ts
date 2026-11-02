@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newStats, recordImpact, recordShot } from '../../src/mission/stats';
+import { newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
 import { missionTimeText, resultRows } from '../../src/ui/results';
 
 describe('missionTimeText', () => {
@@ -35,6 +35,19 @@ describe('resultRows', () => {
       ['Longest hit', '734 m'],
       ['Mission time', '01:05'],
     ]);
+  });
+
+  it('counts the mission time from the clock start (first lock or shot), not from loading', () => {
+    let s = startClock(newStats(1), 30_000);
+    s = recordShot(s);
+    s = recordImpact(
+      s,
+      { bulletId: 1, kind: 'target', targetId: 'soldier-0', zone: 'upperTorso', point: { x: 0, y: 0, z: -300 }, time: 0.4 },
+      true,
+      300,
+      30_000 + 187_000,
+    );
+    expect(resultRows(s)).toContainEqual(['Mission time', '03:07']);
   });
 
   it('copes with a mission that has no hit yet', () => {
