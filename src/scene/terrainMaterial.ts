@@ -56,7 +56,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'sand',
     rock: 'rock',
     cap: null,
-    tileM: [3.2, 2.3, 11, 83],
+    tileM: [3.2, 2.3, 11, 150],
     fallbackColor: 0xcfb083,
     roughness: 0.94,
     bumpScale: 0.045,
@@ -76,13 +76,13 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'snow',
     rock: 'rock',
     cap: null, // the ground is snow already: caps simply keep the rock off the high gentle ground
-    tileM: [4, 2.9, 12, 90],
+    tileM: [4, 2.9, 12, 160],
     fallbackColor: 0xd3dae3,
     roughness: 0.82,
     bumpScale: 0.05,
     bumpTileM: 5,
     groundTint: [1.7, 1.75, 1.9],
-    rockTint: [0.85, 0.9, 1.0],
+    rockTint: [1.0, 1.05, 1.15],
     capTint: [1, 1, 1],
     rockDesaturate: 0.8,
     detailFloor: 0.8,
@@ -96,7 +96,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'grass',
     rock: 'rock',
     cap: 'snow',
-    tileM: [3.6, 2.6, 11, 83],
+    tileM: [3.6, 2.6, 11, 150],
     fallbackColor: 0x70793f,
     roughness: 0.96,
     bumpScale: 0.06,
@@ -310,18 +310,29 @@ function colorChunk(look: TerrainMaterialLook): string {
       rough = texture2D(tGroundRough, gp / uTile.x).g;
       shadeN = topNormal(texture2D(tGroundNor, gp / uTile.x).xyz, gN, 0.9 * nFadeG);
 
-      // Rock on the steep ground: triplanar, so cliffs show no stretched texture.
+      // Rock on the steep ground: triplanar, so cliffs show no stretched texture. Each layer is sampled only where it shows (the
+      // explicit gradients make that legal inside a branch): detail near, macro (two scales mixed by a noise, against repetition) far,
+      // and the normal and roughness maps only while the pixel is small enough for their detail to matter.
       if (rockW > 0.004) {
         vec3 w = pow(abs(gN), vec3(4.0));
         w /= w.x + w.y + w.z;
-        float farR = smoothstep(uTile.z / 40.0, uTile.z / 12.0, pixelM);
-        vec3 rDetail = triSample(tRockDiff, vGround, dpx, dpy, w, uTile.z, vec3(0.0)).rgb;
-        vec3 rMacro = triSample(tRockDiff, vGround, dpx, dpy, w, uTile.w, vec3(0.37, 0.61, 0.23)).rgb;
-        vec3 rock = mix(rDetail, rMacro, farR);
+        float farR = smoothstep(uTile.z / 100.0, uTile.z / 30.0, pixelM);
+        vec3 rock = vec3(0.0);
+        if (farR < 0.995) rock += (1.0 - farR) * triSample(tRockDiff, vGround, dpx, dpy, w, uTile.z, vec3(0.0)).rgb;
+        if (farR > 0.005) {
+          float pickR = smoothstep(0.3, 0.7, vnoise(vec2(vGround.x + vGround.z, vGround.y * 1.7) / 70.0));
+          vec3 macro = mix(triSample(tRockDiff, vGround, dpx, dpy, w, uTile.w, vec3(0.37, 0.61, 0.23)).rgb,
+                           triSample(tRockDiff, vGround, dpx, dpy, w, uTile.w * 0.67, vec3(0.71, 0.13, 0.52)).rgb, pickR);
+          rock += farR * macro;
+        }
         rock = mix(rock, vec3(dot(rock, vec3(0.3, 0.59, 0.11))), uRockDesaturate) * uRockTint;
         float nFadeR = 1.0 - smoothstep(uTile.z / 60.0, uTile.z / 16.0, pixelM);
-        vec3 rockN = triNormal(tRockNor, vGround, dpx, dpy, w, uTile.z, gN, 1.0 * nFadeR);
-        float rockRough = triSample(tRockRough, vGround, dpx, dpy, w, uTile.z, vec3(0.0)).g;
+        vec3 rockN = gN;
+        float rockRough = 0.85;
+        if (nFadeR > 0.01) {
+          rockN = triNormal(tRockNor, vGround, dpx, dpy, w, uTile.z, gN, nFadeR);
+          rockRough = triSample(tRockRough, vGround, dpx, dpy, w, uTile.z, vec3(0.0)).g;
+        }
         albedo = mix(albedo, rock, rockW);
         rough = mix(rough, rockRough, rockW);
         shadeN = normalize(mix(shadeN, rockN, rockW));
