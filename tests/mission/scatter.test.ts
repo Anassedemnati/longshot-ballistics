@@ -23,6 +23,7 @@ import {
 import type { ScatterItem, ScatterPlan } from '../../src/mission/scatter';
 import { NEST_AREA_RADIUS } from '../../src/mission/nestPlan';
 import type { MissionLayout } from '../../src/mission/layout';
+import { SNOW_LINES } from '../../src/scene/snowLine';
 import { buildTerrainGeometry, terrainGridAxes } from '../../src/scene/terrain';
 import { createTerrainField, sectorDistance } from '../../src/scene/terrainField';
 import type { TerrainField } from '../../src/scene/terrainField';
@@ -95,6 +96,7 @@ describe('planScatter', () => {
         const ground = makeMeshGround(terrainGridAxes(), m.field.height);
         const p = plan(m, ground);
         const heights = p.firs.map((f) => ground(f.x, f.z));
+        expect(TREE_LINE_M[theme], theme).toBe(SNOW_LINES[theme].line); // the trees stop where the terrain's snow begins
         expect(Math.max(...heights), `${theme} ${seed}`).toBeLessThanOrEqual(TREE_LINE_M[theme]);
         // most of the stands are well up the walls, hardly any on the flat floor
         expect(heights.filter((h) => h >= 10).length / heights.length).toBeGreaterThan(0.6);

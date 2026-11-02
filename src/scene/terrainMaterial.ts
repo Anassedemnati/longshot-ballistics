@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { ThemeId } from '../mission/themes';
 import { groundRelief } from './detail';
+import { SNOW_LINES } from './snowLine';
 
 // The terrain's material: MeshStandardMaterial patched with onBeforeCompile. Two looks share one program per theme:
 //  - the FALLBACK look (flat theme colour, procedural bump relief, world-space mottling, slope rock tint): what the
@@ -89,7 +90,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     rockColor: 0x4a4d53,
     rockMask: { slopeFrom: 0.3, slopeTo: 0.55, heightFrom: 999, heightTo: 1000 },
     fallbackRock: { slopeFrom: 0.24, slopeTo: 0.55, heightFrom: 40, heightTo: 130, strength: 0.88 },
-    snow: { line: 65, band: 45, slopeFrom: 0.38, slopeTo: 0.62 },
+    snow: { ...SNOW_LINES.arctic, slopeFrom: 0.38, slopeTo: 0.62 },
     mottle: { broad: 0.07, grain: 0.02, tintA: [0.93, 0.97, 1.07], tintB: [1.02, 1.0, 0.97] },
   },
   valley: {
@@ -109,7 +110,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     rockColor: 0x6a6256,
     rockMask: { slopeFrom: 0.3, slopeTo: 0.55, heightFrom: 999, heightTo: 1000 },
     fallbackRock: { slopeFrom: 0.32, slopeTo: 0.7, heightFrom: 30, heightTo: 110, strength: 0.85 },
-    snow: { line: 100, band: 50, slopeFrom: 0.34, slopeTo: 0.58 },
+    snow: { ...SNOW_LINES.valley, slopeFrom: 0.34, slopeTo: 0.58 },
     mottle: { broad: 0.14, grain: 0.05, tintA: [0.88, 1.0, 0.8], tintB: [1.1, 1.02, 0.78] },
   },
 };

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ThemeId } from '../../src/mission/themes';
+import { SNOW_LINES } from '../../src/scene/snowLine';
 import {
   TERRAIN_MATERIAL_LOOKS,
   applyTerrainTextures,
@@ -63,6 +64,9 @@ describe('createTerrainMaterial', () => {
     // Snow lies on high ground, not on the plain: the lines are well above the valley floor and the spur's foot.
     expect(TERRAIN_MATERIAL_LOOKS.arctic.snow!.line).toBeGreaterThanOrEqual(60);
     expect(TERRAIN_MATERIAL_LOOKS.valley.snow!.line).toBeGreaterThanOrEqual(60);
+    // One source for the shader's snow lines and the trees' (mission/scatter.ts TREE_LINE_M).
+    expect(TERRAIN_MATERIAL_LOOKS.arctic.snow).toMatchObject(SNOW_LINES.arctic);
+    expect(TERRAIN_MATERIAL_LOOKS.valley.snow).toMatchObject(SNOW_LINES.valley);
   });
 
   it('has one program per theme (cache key) and per-theme tints, so each still matches its theme', () => {

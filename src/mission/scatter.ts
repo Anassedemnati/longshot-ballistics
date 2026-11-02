@@ -1,4 +1,5 @@
 import type { Obstacle } from '../game/hit';
+import { SNOW_LINES } from '../scene/snowLine';
 import { sectorDistance } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import type { FiringPosition } from './config';
@@ -35,8 +36,11 @@ export const MAX_NEAR_BOULDERS = 60;
 /** Boulders nearer than this (m) to the shooter get the detailed model. */
 export const NEAR_BOULDER_RANGE = 140;
 
-/** The height above which no firs grow, m (the snow line sits above it; named here because the terrain colours it). */
-export const TREE_LINE_M: Readonly<Record<'arctic' | 'valley', number>> = { arctic: 90, valley: 105 };
+/**
+ * The height above which no firs grow, m: the terrain's snow line (scene/snowLine.ts, the one the shader lays its snow caps
+ * from), so the trees thin out below the snow and none stands in it.
+ */
+export const TREE_LINE_M: Readonly<Record<'arctic' | 'valley', number>> = { arctic: SNOW_LINES.arctic.line, valley: SNOW_LINES.valley.line };
 
 /** Half-width of the clear corridor along every shooter -> target ground line, beyond the item's own radius, m. */
 export const LANE_MARGIN = 2.5;
