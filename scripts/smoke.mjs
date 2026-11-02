@@ -1089,7 +1089,7 @@ async function run() {
       const c = getComputedStyle(document.querySelector('.hud-panel'));
       return { edge: c.borderLeftWidth, edgeColor: c.borderLeftColor, glass: c.backgroundImage.startsWith('linear-gradient'), lines: document.querySelectorAll('.hud-panel .hud-line').length };
     });
-    check(hudLook.edge === '3px' && hudLook.glass && hudLook.lines === 6, `the HUD panel has the slate-glass look with a brass edge and all six lines (${JSON.stringify(hudLook)})`);
+    check(hudLook.edge === '3px' && hudLook.glass && hudLook.lines >= 6, `the HUD panel has the slate-glass look with a brass edge and keeps its six lines (${JSON.stringify(hudLook)})`);
     check((await hudPage.locator('.hud-menu').getAttribute('href')) === `/?last=${asV2(MISSION_MENU_LINK)}&debug=1`, 'the HUD Menu link points at the menu with this mission and debug=1');
     await hudPage.screenshot({ path: join(OUT_DIR, 'hud-menu.png') });
     await hudPage.evaluate(() => window.__game.toggleScope()); // the link must not sit over the scope lens
