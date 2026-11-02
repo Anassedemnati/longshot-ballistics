@@ -146,11 +146,11 @@ describe('planGroundDetail', () => {
     expect(nearOutcrop.length).toBeGreaterThan(0);
   });
 
-  it('stones are small: 4 to 26 cm', () => {
+  it('stones are small: 4 to 22 cm', () => {
     const { field, layout } = setup(big('arctic', 4));
     for (const p of planGroundDetail(field, layout, 4).pebbles) {
       expect(p.size).toBeGreaterThanOrEqual(0.04);
-      expect(p.size).toBeLessThanOrEqual(0.26);
+      expect(p.size).toBeLessThanOrEqual(0.22);
     }
   });
 });

@@ -171,7 +171,7 @@ export function planGroundDetail(
     }
     if (!detailClear(ex, p.x, p.z) || onMound(p.x, p.z, 0.95)) continue;
     const u = pebbleRng();
-    const size = 0.04 + u * u * u * 0.22; // mostly small stones, a few bigger ones
+    const size = 0.04 + u * u * u * 0.18; // mostly small stones, a few bigger ones
     pebbles.push({
       x: p.x,
       y: field.height(p.x, p.z) + size * 0.05,
