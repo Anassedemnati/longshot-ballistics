@@ -163,6 +163,36 @@ export interface TargetDummy {
 /** The broad-phase sphere of a dummy is this much bigger than the farthest zone edge, m (a grazing hit must never be rejected). */
 const BOUNDS_MARGIN = 0.05;
 
+// Meshes of all dummies share their geometries and materials (ten soldiers would otherwise build a
+// hundred of each); nothing changes them after creation. They live as long as the page.
+const dummyMaterials = new Map<number, THREE.MeshLambertMaterial>();
+const dummyBoxGeometries = new Map<string, THREE.BoxGeometry>();
+let dummyHeadGeometry: THREE.IcosahedronGeometry | null = null;
+
+function dummyMaterial(color: number): THREE.MeshLambertMaterial {
+  let m = dummyMaterials.get(color);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color, flatShading: true });
+    dummyMaterials.set(color, m);
+  }
+  return m;
+}
+
+function boxGeometry(w: number, h: number, d: number): THREE.BoxGeometry {
+  const key = `${w}x${h}x${d}`;
+  let g = dummyBoxGeometries.get(key);
+  if (!g) {
+    g = new THREE.BoxGeometry(w, h, d);
+    dummyBoxGeometries.set(key, g);
+  }
+  return g;
+}
+
+function headGeometry(): THREE.IcosahedronGeometry {
+  dummyHeadGeometry ??= new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1);
+  return dummyHeadGeometry;
+}
+
 /**
  * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
  * `yaw` about +Y like three.js `rotation.y`: its front (+Z) points at (sin yaw, cos yaw), so
@@ -186,13 +216,11 @@ export function createTargetDummy(
   group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
-  const material = (color: number): THREE.MeshLambertMaterial =>
-    new THREE.MeshLambertMaterial({ color, flatShading: true });
-  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1), material(DUMMY_KHAKI));
+  const head = new THREE.Mesh(headGeometry(), dummyMaterial(DUMMY_KHAKI));
   head.position.set(0, DUMMY_HEAD.cy, 0);
   group.add(head);
   for (const b of DUMMY_BOXES) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), material(b.color));
+    const mesh = new THREE.Mesh(boxGeometry(b.w, b.h, b.d), dummyMaterial(b.color));
     mesh.position.set(b.cx, b.cy, b.cz);
     mesh.name = b.name;
     group.add(mesh);

@@ -270,4 +270,18 @@ describe('dummy fall and reset', () => {
     dummy.update(FALL_DURATION + RESET_DELAY);
     expect(dummy.down).toBe(false);
   });
+
+  it('dummies share their geometries and materials', () => {
+    const a = createTargetDummy({ x: 0, y: 0, z: -100 }, 0, 'a');
+    const b = createTargetDummy({ x: 5, y: 0, z: -100 }, 0.3, 'b');
+    const parts = (g: ReturnType<typeof createTargetDummy>['group']) =>
+      g.children.map((c) => c as unknown as { geometry: unknown; material: unknown });
+    const pa = parts(a.group);
+    const pb = parts(b.group);
+    expect(pa.length).toBe(pb.length);
+    pa.forEach((part, i) => {
+      expect(part.geometry).toBe(pb[i].geometry);
+      expect(part.material).toBe(pb[i].material);
+    });
+  });
 });
