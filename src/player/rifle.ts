@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Rifle } from '../ballistics/types';
 import { BOLT_TIME_S, RELOAD_TIME_S } from '../game/weapon';
+import { SKY_OBJECT_NAMES } from '../scene/sky';
 import { rifleEnvironment } from './rifleEnvironment';
 import { addHands } from './rifleHands';
 import { type MaterialKey, PartSet, type PartStyle } from './rifleParts';
@@ -9,9 +10,10 @@ import { rifleTextures } from './rifleTextures';
 // The visible rifle (spec B.3, C.5): a camera-local model with its own scene and camera, drawn after the world with
 // the depth buffer cleared so it never sinks into terrain. Modelled after public/references/rifle-concept.png.
 // PBR finish: anodised / cerakote metal (roughness and metalness maps, edge wear in the vertex colours), stippled
-// polymer, rubber, a coated glass scope lens, camo-tan gloves; lit by a small environment of its own (the world's sky
-// is not in this scene). All parts are baked into one mesh per material (7 draw calls at most) and built once;
-// nothing here allocates per frame.
+// polymer, rubber, a coated glass scope lens, camo-tan gloves. Lit by the world's own light once `lightFrom` has taken
+// it (the HDRI environment and the sun, turned with the view, so the rifle is in the same sky as the terrain); until
+// then, and for good without the HDRI, by a small environment of its own (the sky stand-in of rifleEnvironment.ts).
+// All parts are baked into one mesh per material (7 draw calls at most) and built once; nothing here allocates per frame.
 
 /** Barrel length by rifle, m: the .338 is the longer rifle. */
 export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47 };
@@ -43,6 +45,10 @@ const HOLD_YAW_RAD = 0.3;
 const HOLD_ROLL_RAD = -0.06;
 /** The rifle's own field of view, deg (independent of the world camera's scope zoom). */
 const VIEW_FOV_DEG = 58;
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+/** In the world's light the fill from the right is this share of the sun's strength, and the key sits this far out, m. */
+const FILL_WORLD_SHARE = 0.08;
+const KEY_DISTANCE_M = 5;
 /** Strength of the rifle's own environment light (the sky stand-in, see rifleEnvironment.ts). */
 const ENVIRONMENT_INTENSITY = 0.9;
 
@@ -70,6 +76,11 @@ const FLASH_TIME_S = 0.085;
 const FLASH_LIGHT_INTENSITY = 3;
 const FLASH_LIGHT_RANGE_M = 2;
 const FLASH_LIGHT_COLOR = 0xffa344;
+/**
+ * Colour gain of the flash sprites when the rifle is drawn into the post chain's HDR target (the world's light units, where a
+ * sunlit surface is about 1-3): far above the bloom threshold, so the flash glows. Drawn straight to the canvas it stays 1.
+ */
+export const FLASH_HDR_GAIN = 14;
 /** Sprite sizes, m: the flame and the hot core in front of it. */
 const FLAME_SIZE_M = 0.23;
 const CORE_SIZE_M = 0.12;
@@ -395,6 +406,15 @@ class MuzzleFlash {
     this.light.position.set(0, BARREL_Y + 0.05, muzzleZ + 0.05);
   }
 
+  /** Brightness multiplier of the sprites' colour (above 1 only where the target holds HDR values). */
+  setGain(gain: number): void {
+    this.material.color.setScalar(gain);
+  }
+
+  get gain(): number {
+    return this.material.color.r;
+  }
+
   trigger(): void {
     this.remaining = FLASH_TIME_S;
     this.fresh = true;
@@ -429,6 +449,15 @@ export class FirstPersonRifle {
   private readonly sway: Sway = { x: 0, y: 0, pitch: 0, roll: 0 };
   /** The rifle's own environment is set up on the first `render` (it needs the renderer); this is true from then on. */
   private environmentTried = false;
+  private readonly hemisphere = new THREE.HemisphereLight(0xeeeadf, 0x8d7654, 0.5);
+  private readonly key = new THREE.DirectionalLight(0xffdfad, 2.4);
+  private readonly fill = new THREE.DirectionalLight(0xe6eef5, 0.7);
+  /** Set by `lightFrom`: the rifle is lit by the world's sun and sky, which `orient` turns with the view. */
+  private worldLit = false;
+  private readonly sunWorld = new THREE.Vector3();
+  private readonly environmentYaw = new THREE.Quaternion();
+  private readonly viewInverse = new THREE.Quaternion();
+  private readonly environmentTurn = new THREE.Quaternion();
   private readonly bolt: THREE.Group;
   /** Null when suppressed: a suppressed shot has no flash at all. */
   private readonly flash: MuzzleFlash | null;
@@ -453,13 +482,67 @@ export class FirstPersonRifle {
     this.holder.add(this.model);
     this.scene.add(this.holder);
     // A touch of ambient for the frame before the environment map exists, then a key and a fill: the map does the rest.
-    this.scene.add(new THREE.HemisphereLight(0xeeeadf, 0x8d7654, 0.5));
-    const key = new THREE.DirectionalLight(0xffdfad, 2.4);
-    key.position.set(-3, 4, 2);
-    const fill = new THREE.DirectionalLight(0xe6eef5, 0.7);
-    fill.position.set(3, 1, -2);
-    this.scene.add(key, fill);
+    this.key.position.set(-3, 4, 2);
+    this.fill.position.set(3, 1, -2);
+    this.scene.add(this.hemisphere, this.key, this.fill);
     this.update(0); // settle into the hold pose
+  }
+
+  /**
+   * Light the rifle with `world`'s sky and sun instead of its own stand-in: the world's image-based light (the PMREM of the
+   * HDRI, shared, not copied), the sun's colour and strength, the hemisphere's. Call it when the world has its HDRI
+   * (`applyHdriSky`), and only when the rifle is then drawn into the same HDR post chain (so the exposure is the world's and the
+   * muzzle flash, given an HDR colour, can bloom). Returns false, leaving the stand-in, when the world has no environment.
+   * `orient` must then follow the view every frame.
+   */
+  lightFrom(world: THREE.Scene): boolean {
+    const environment = world.environment;
+    if (!environment) return false;
+    this.scene.environment = environment;
+    this.scene.environmentIntensity = world.environmentIntensity;
+    this.environmentYaw.setFromAxisAngle(Y_AXIS, world.environmentRotation.y);
+    this.environmentTried = true; // no stand-in to bake
+    const sun = world.getObjectByName(SKY_OBJECT_NAMES.sun) as THREE.DirectionalLight | undefined;
+    if (sun) {
+      this.key.color.copy(sun.color);
+      this.key.intensity = sun.intensity;
+      this.sunWorld.copy(sun.position).normalize();
+    }
+    const hemisphere = world.getObjectByName(SKY_OBJECT_NAMES.hemisphere) as THREE.HemisphereLight | undefined;
+    if (hemisphere) {
+      this.hemisphere.color.copy(hemisphere.color);
+      this.hemisphere.groundColor.copy(hemisphere.groundColor);
+      this.hemisphere.intensity = hemisphere.intensity;
+    }
+    this.fill.intensity = FILL_WORLD_SHARE * (sun ? sun.intensity : 1);
+    this.flash?.setGain(FLASH_HDR_GAIN);
+    this.worldLit = true;
+    this.orient(this.viewInverse.identity());
+    return true;
+  }
+
+  /** The muzzle flash's colour gain (1 on the direct path, `FLASH_HDR_GAIN` in the post chain; 0 for a suppressed rifle, which has no flash). */
+  get flashGain(): number {
+    return this.flash ? this.flash.gain : 0;
+  }
+
+  /** Whether `lightFrom` took the world's light. */
+  get litByWorld(): boolean {
+    return this.worldLit;
+  }
+
+  /**
+   * Turn the rifle's light with the world camera's orientation `view` (a unit quaternion): the rifle scene's camera is fixed,
+   * so the world's sun and sky, which stay put as the player turns, are rotated the opposite way. Allocation-free; does nothing
+   * until `lightFrom` has taken the world's light.
+   */
+  orient(view: THREE.Quaternion): void {
+    if (!this.worldLit) return;
+    this.viewInverse.copy(view).invert();
+    // A direction r of the rifle scene is the world direction q r, which the HDRI (turned by yaw) has at yaw^-1 q r: the
+    // environment's rotation is q^-1 * yaw.
+    this.scene.environmentRotation.setFromQuaternion(this.environmentTurn.copy(this.viewInverse).multiply(this.environmentYaw));
+    this.key.position.copy(this.sunWorld).applyQuaternion(this.viewInverse).multiplyScalar(KEY_DISTANCE_M);
   }
 
   /** True while the muzzle flash is on screen (never for a suppressed rifle). */

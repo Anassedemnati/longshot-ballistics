@@ -9,13 +9,13 @@ import {
   BLOOM_MARGIN_DEG,
   GRADES,
   NEUTRAL_GRADE,
+  OverlayPass,
   POST_SAMPLES,
   applyGrade,
   createPostFx,
   postQualityFromSearch,
   sunNearView,
 } from '../../src/scene/postfx';
-import { LEGACY_EXPOSURE } from '../../src/scene/renderer';
 
 const THEMES: ThemeId[] = ['desert', 'arctic', 'valley'];
 
@@ -216,18 +216,52 @@ describe('createPostFx (built without WebGL)', () => {
     expect(post.bloom!.enabled).toBe(true);
   });
 
-  it('the overlay (the rifle) is drawn after the composer, at the stage-1 exposure, only when asked, and the exposure comes back', () => {
+  it('the overlay (the rifle) is its own pass between the world and the bloom, drawn into the composer\'s picture at the world\'s exposure, only when asked', () => {
     const renderer = stubRenderer();
-    const seen: number[] = [];
-    const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high', overlay: () => seen.push(renderer.toneMappingExposure) });
-    const order: string[] = [];
-    post.composer!.render = () => void order.push(`composer@${renderer.toneMappingExposure}`);
+    const seen: Array<[number, unknown]> = [];
+    const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high', overlay: () => seen.push([renderer.toneMappingExposure, target.current]) });
+    const target: { current: unknown } = { current: null };
+    (renderer as unknown as { setRenderTarget: (t: unknown) => void }).setRenderTarget = (t) => void (target.current = t);
+    expect(post.passes).toHaveLength(4);
+    const [render, overlay, bloom, output] = post.passes;
+    expect(render).toBeInstanceOf(RenderPass);
+    expect(overlay).toBeInstanceOf(OverlayPass);
+    expect(bloom).toBe(post.bloom);
+    expect(output).toBe(post.output);
+    // the pass draws into the read buffer and leaves the buffers where they are (no swap)
+    const read = new THREE.WebGLRenderTarget(4, 4);
+    (overlay as OverlayPass).render(renderer, new THREE.WebGLRenderTarget(4, 4), read);
+    expect((overlay as OverlayPass).needsSwap).toBe(false);
+    expect(seen).toEqual([[0.55, read]]); // the exposure is the world's: nothing is overridden any more
+    // enabled only on the frames the rifle is shown
+    post.composer!.render = () => void 0;
     post.render(true);
+    expect((overlay as OverlayPass).enabled).toBe(true);
     post.render(false);
-    expect(seen).toEqual([LEGACY_EXPOSURE]);
+    expect((overlay as OverlayPass).enabled).toBe(false);
     expect(renderer.toneMappingExposure).toBe(0.55);
     expect(renderer.info.reset).toHaveBeenCalledTimes(2); // once per frame, so the counts cover every pass
-    expect(order).toEqual(['composer@0.55', 'composer@0.55']);
+  });
+
+  it('without an overlay there is no overlay pass', () => {
+    const post = createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'desert', quality: 'high' });
+    expect(post.passes.some((p) => p instanceof OverlayPass)).toBe(false);
+  });
+
+  it('the bloom also runs while the overlay glows (the muzzle flash), with the sun out of view, and only when the overlay is drawn', () => {
+    const renderer = stubRenderer();
+    const cam = new THREE.PerspectiveCamera(60, 16 / 9);
+    cam.updateMatrixWorld(true); // looking along -Z: the desert sun is behind
+    let glowing = false;
+    const post = createPostFx({ renderer, scene, camera: cam, theme: 'desert', quality: 'high', overlay: () => void 0, glow: () => glowing });
+    post.composer!.render = () => void 0;
+    post.render(true);
+    expect(post.bloom!.enabled).toBe(false);
+    glowing = true;
+    post.render(true);
+    expect(post.bloom!.enabled).toBe(true);
+    post.render(false); // scoped or ducked: no rifle, no flash
+    expect(post.bloom!.enabled).toBe(false);
   });
 
   it('off: no composer, the world is rendered straight to the canvas and the overlay follows', () => {

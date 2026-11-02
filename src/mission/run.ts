@@ -150,7 +150,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     theme: config.theme,
     quality: hdri ? postQuality : 'off',
     overlay: () => rifleModel.render(renderer),
+    glow: () => rifleModel.flashVisible,
   });
+  // Drawn into the post chain, the rifle is lit by the world's own sky and sun (its muzzle flash then blooms); on the direct path it keeps its stand-in light.
+  if (post.composer) rifleModel.lightFrom(scene);
   prep.remove(); // the canvas is in; the rest of the build runs before the next paint
 
   /** Turn the view at a world point (also used by the debug hook). */
@@ -505,6 +508,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
 
     // The rifle is in front of the player's face: not through the scope, and not while he is ducked behind cover.
+    rifleModel.orient(view.camera.quaternion); // the world's sun and sky stay put as he turns
     post.render(!view.isScoped && !combat?.covered);
   }
   function frame(nowMs: number): void {

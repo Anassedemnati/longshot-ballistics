@@ -1,21 +1,23 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { ThemeId } from '../mission/themes';
-import { LEGACY_EXPOSURE } from './renderer';
 import { SKY_LOOKS, sunDirectionOf } from './sky';
 
 // Post-processing: the world is drawn into a half-float, multisampled target (so lighting is linear HDR; the canvas's
 // own antialiasing does not reach a render target), a subtle bloom picks up what is far brighter than a lit surface
 // (the sun, glints), and the output pass tone maps (per-theme exposure), encodes sRGB and, in the same shader, applies
 // a per-theme lift/gamma/gain + saturation grade and a sliver of dither (the smooth HDRI sky would otherwise band in
-// 8 bits). The first-person rifle is NOT part of the composer: it keeps its own render (its own scene, depth cleared,
-// its own tone mapping, additive flash with `toneMapped: false`) and is drawn on top of the finished picture, exactly
-// as before; so its muzzle flash does not bloom (it would need an HDR flash colour in `rifle.ts`). The scope overlay
-// and the reticle are DOM and untouched. The logarithmic depth buffer works in the composer: the render target has
-// its own depth buffer and the materials' log-depth shader code is the same.
+// 8 bits). The first-person rifle (its own scene and camera, depth cleared first) is drawn into the same HDR target
+// right after the world, by `OverlayPass`: it is tone mapped and graded with the world (same exposure), lit by the same
+// sky and sun (rifle.ts `lightFrom`), and its muzzle flash, given an HDR colour, clears the bloom threshold: the bloom
+// pass is switched on while the flash is up. Without the composer (`?post=off`, or no HDRI) the rifle is drawn straight
+// onto the canvas after the world as before. The scope overlay and the reticle are DOM and untouched. The logarithmic
+// depth buffer works in the composer: the render target has its own depth buffer and the materials' log-depth shader
+// code is the same.
 
 /** `high` (the default): 2x multisampling, bloom and grade; `low`: no multisampling, no bloom, grade only; `off`: no composer at all (today's direct render and sky, no grade). */
 export type PostQuality = 'high' | 'low' | 'off';
@@ -144,19 +146,40 @@ export function sunNearView(
   return Math.acos(Math.max(-1, Math.min(1, cos))) <= halfDiagonal + marginDeg * DEG;
 }
 
+/**
+ * Draws `draw` into the composer's current picture (its read buffer) without swapping buffers: a second `RenderPass` for
+ * something with a scene of its own (the first-person rifle clears the depth itself). Disabled, it costs nothing.
+ */
+export class OverlayPass extends Pass {
+  constructor(private readonly draw: () => void) {
+    super();
+    this.needsSwap = false;
+  }
+
+  override render(renderer: THREE.WebGLRenderer, _writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget): void {
+    renderer.setRenderTarget(readBuffer);
+    this.draw();
+  }
+}
+
 export interface PostFxOptions {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   theme: ThemeId;
   quality: PostQuality;
-  /** Draws what goes over the finished picture (the first-person rifle); it clears the depth itself. */
+  /**
+   * Draws what goes over the world (the first-person rifle); it clears the depth itself. Into the composer's HDR picture
+   * (an `OverlayPass` after the world), or straight onto the canvas after the world when there is no composer.
+   */
   overlay?: () => void;
+  /** True while the overlay shows something that should bloom (the muzzle flash): the bloom pass then runs even with the sun out of view. */
+  glow?: () => boolean;
 }
 
 export interface PostFx {
   quality: PostQuality;
-  /** The passes in drawing order (empty when `quality` is `off`): render, bloom (high only), output (with the grade). */
+  /** The passes in drawing order (empty when `quality` is `off`): render, overlay (when there is one), bloom (high only), output (with the grade). */
   passes: readonly object[];
   /** Null when `quality` is `off`. */
   composer: EffectComposer | null;
@@ -164,7 +187,7 @@ export interface PostFx {
   bloom: UnrealBloomPass | null;
   /** The output pass, whose `gradeLift`, `gradeGain`, ... uniforms hold the theme's grade; null when `quality` is `off`. */
   output: OutputPass | null;
-  /** Draw one frame; `withOverlay`: draw the overlay (the rifle) on top. Resets `renderer.info` first, so its counts cover every pass of the frame. */
+  /** Draw one frame; `withOverlay`: draw the overlay (the rifle) over the world. Resets `renderer.info` first, so its counts cover every pass of the frame. */
   render(withOverlay: boolean): void;
   /** CSS size of the canvas; call after `resizeRenderer`. */
   setSize(width: number, height: number): void;
@@ -177,7 +200,7 @@ export interface PostFx {
  * Builds without WebGL (only `render` needs it), so it is unit-tested in Node with a stub renderer.
  */
 export function createPostFx(opts: PostFxOptions): PostFx {
-  const { renderer, scene, camera, theme, quality, overlay } = opts;
+  const { renderer, scene, camera, theme, quality, overlay, glow } = opts;
   // The composer renders several times a frame; `info` is reset by hand once per frame so it counts all of them.
   renderer.info.autoReset = false;
 
@@ -217,6 +240,7 @@ export function createPostFx(opts: PostFxOptions): PostFx {
   };
 
   add(new RenderPass(scene, camera));
+  const overlayPass = overlay ? add(new OverlayPass(overlay)) : null;
 
   let bloom: UnrealBloomPass | null = null;
   if (quality === 'high') {
@@ -239,18 +263,12 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     output,
     render(withOverlay) {
       renderer.info.reset();
+      if (overlayPass) overlayPass.enabled = withOverlay;
       if (bloom) {
         camera.getWorldDirection(forward);
-        bloom.enabled = sunNearView(forward, sun, camera.fov, camera.aspect, BLOOM_MARGIN_DEG);
+        bloom.enabled = sunNearView(forward, sun, camera.fov, camera.aspect, BLOOM_MARGIN_DEG) || (withOverlay && glow?.() === true);
       }
       composer.render();
-      if (withOverlay && overlay) {
-        // The rifle has its own lighting, tuned for the stage-1 exposure: it keeps it whatever the sky's exposure is.
-        const exposure = renderer.toneMappingExposure;
-        renderer.toneMappingExposure = LEGACY_EXPOSURE;
-        overlay();
-        renderer.toneMappingExposure = exposure;
-      }
     },
     setSize(width, height) {
       composer.setPixelRatio(renderer.getPixelRatio());

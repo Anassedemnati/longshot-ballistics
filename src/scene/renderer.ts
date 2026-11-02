@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-/** Tone mapping exposure of the stage-1 look. The first-person rifle (its own lighting is tuned for it) is always drawn with it; the world's is per theme (`SKY_LOOKS[theme].hdri.exposure`). */
+/** Tone mapping exposure of the stage-1 look: the renderer's default, which the direct render without the post chain (`?post=off`, or the procedural sky) keeps, rifle included. With the HDRI sky the world's is per theme (`SKY_LOOKS[theme].hdri.exposure`), the rifle's too. */
 export const LEGACY_EXPOSURE = 0.9;
 
 /** Pixel ratio cap: beyond 2x the extra pixels cost frame rate and add nothing visible. */
