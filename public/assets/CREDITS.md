@@ -16,6 +16,5 @@ All assets from https://polyhaven.com, licensed CC0 (public domain). Credited an
 | hdri/arctic.hdr | https://polyhaven.com/a/snow_field_2_puresky |
 | hdri/valley.hdr | https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky |
 | models/dead_tree.glb (simplified, textures 512, meshopt) | https://polyhaven.com/a/dead_tree_trunk |
-| models/boulder.glb (simplified, textures 512, meshopt) | https://polyhaven.com/a/boulder_01 |
 | models/boulder2.glb (simplified, textures 512, meshopt) | https://polyhaven.com/a/namaqualand_boulder_02 |
 | models/grass_clump.glb (simplified, textures 512, meshopt) | https://polyhaven.com/a/grass_medium_01 |
