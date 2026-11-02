@@ -143,11 +143,12 @@ function leftHand(parts: PartSet): void {
     { length: 0.03, radius: 0.0105, bend: -0.1 },
   ]);
 
-  // The forearm leaves toward the lower left (not across the grip, which the right hand holds).
+  // The forearm drops away under the fore-end, back towards the shooter's body: from the game camera it is a short
+  // foreshortened cuff that leaves the picture at the bottom, not a long diagonal sleeve across the lower left.
   const wrist = v(-0.012, -0.068, -0.262);
-  const away = v(-0.62, -0.43, 0.62).normalize();
+  const away = v(0.0, -0.6, 0.8).normalize();
   const cuffEnd = wrist.clone().addScaledVector(away, 0.075);
-  const elbow = wrist.clone().addScaledVector(away, 0.62);
+  const elbow = wrist.clone().addScaledVector(away, 0.3);
   sleeve(parts, 'glove', wrist, cuffEnd, 0.029, 0.035, GLOVE);
   parts.place('rubber', new THREE.TorusGeometry(0.0365, 0.0045, 8, 24), ringMatrix(cuffEnd, cuffEnd.clone().sub(wrist)));
   sleeve(parts, 'glove', cuffEnd, elbow, 0.049, 0.069, SLEEVE);

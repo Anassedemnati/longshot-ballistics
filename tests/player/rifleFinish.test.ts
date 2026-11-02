@@ -311,6 +311,29 @@ describe('rifle finish: where it sits on screen', () => {
     return { minX, maxX, minY, maxY, box: ((maxX - minX) * (maxY - minY)) / 4 };
   }
 
+  it('the support arm does not sweep across the lower left: the glove mesh stays right of the muzzle and its sleeve leaves through the bottom', () => {
+    for (const id of IDS) {
+      const rifle = new FirstPersonRifle(id);
+      rifle.resize(1280, 720);
+      for (let i = 0; i < 10; i++) rifle.update(1 / 60);
+      rifle.scene.updateMatrixWorld(true);
+      rifle.camera.updateMatrixWorld(true);
+      const glove = named(rifle.model, 'glove');
+      const p = glove.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      let minX = Infinity;
+      let minY = Infinity;
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i).applyMatrix4(glove.matrixWorld).project(rifle.camera);
+        if (v.z > 1) continue; // behind the camera
+        minX = Math.min(minX, v.x);
+        minY = Math.min(minY, v.y);
+      }
+      expect(minX, id).toBeGreaterThan(0.05); // the old long sleeve reached x = 0 and left of it
+      expect(minY, id).toBeLessThan(-1); // and it runs off the bottom edge
+    }
+  });
+
   for (const id of IDS) {
     for (const suppressed of [false, true]) {
       for (const [w, h] of [
