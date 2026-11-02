@@ -66,11 +66,29 @@ export interface PredictOptions {
   maxTime?: number;
   /** Integration step, s. Default 1 ms, the live bullets' own step; a drawn line can take a coarser one (5 ms is within millimetres, 5x cheaper). */
   dt?: number;
+  /**
+   * Where to keep the points of the path instead of a new array of new vectors (see `createPathBuffer`): the
+   * preview is flown ten times a second and must not allocate for every point. Points that do not fit are dropped.
+   */
+  buffer?: PathBuffer;
+}
+
+/** Preallocated storage for the points of a path; `predictPath` fills it in place. */
+export interface PathBuffer {
+  /** `capacity` vectors, written over by every flight. */
+  points: Vec3[];
+}
+
+/** A buffer for paths of up to `capacity` points. */
+export function createPathBuffer(capacity: number): PathBuffer {
+  return { points: Array.from({ length: capacity }, () => ({ x: 0, y: 0, z: 0 })) };
 }
 
 export interface PathPrediction {
-  /** The path from the bore to its end, in order. */
+  /** The path from the bore to its end, in order. With a buffer: the buffer's own array, of which only the first `count` points are this path. */
   points: Vec3[];
+  /** How many entries of `points` belong to the path. */
+  count: number;
   /** Where the flight met the ground, or null when it ended in the air (range reached, time up). */
   impact: Vec3 | null;
   /** Flight time to the end of the path, s. */
@@ -117,12 +135,30 @@ export function predictPath(
 
   const launch = muzzleLaunch(eye, forward, up, rifle, zero);
   let s: BulletState = { pos: launch.origin, vel: launch.velocity, t: 0 };
-  const points: Vec3[] = [s.pos];
-  if (!(horizontal > 1e-9)) return { points, impact: null, time: 0, atRange: null };
+  const buffer = opts.buffer;
+  const points: Vec3[] = buffer ? buffer.points : [];
+  let count = 0;
+  /** Keep a point of the path: pushed as it is, or copied into the next vector of the buffer. */
+  const keep = (p: Vec3): void => {
+    if (buffer === undefined) {
+      points.push(p);
+    } else if (count < points.length) {
+      const q = points[count];
+      q.x = p.x;
+      q.y = p.y;
+      q.z = p.z;
+    } else {
+      return;
+    }
+    count++;
+  };
+  keep(s.pos);
+  if (!(horizontal > 1e-9)) return { points, count, impact: null, time: 0, atRange: null };
   const bx = dirSource.x / horizontal;
   const bz = dirSource.z / horizontal;
   const along = (p: Vec3): number => (p.x - eye.x) * bx + (p.z - eye.z) * bz;
 
+  let last = s.pos; // the last point offered (kept or not), to close the path with the final position
   const steps = Math.ceil(maxTime / dt - 1e-9);
   for (let i = 1; i <= steps; i++) {
     const prev = s;
@@ -130,21 +166,24 @@ export function predictPath(
     if (ground !== undefined && s.pos.y < ground(s.pos.x, s.pos.z)) {
       const u = groundCrossing(prev.pos, s.pos, ground);
       const impact = lerp(prev.pos, s.pos, u);
-      points.push(impact);
-      return { points, impact, time: prev.t + u * dt, atRange: null };
+      keep(impact);
+      return { points, count, impact, time: prev.t + u * dt, atRange: null };
     }
     const a1 = along(s.pos);
     if (a1 >= maxRange) {
       const a0 = along(prev.pos);
       const u = a1 > a0 ? Math.min(1, Math.max(0, (maxRange - a0) / (a1 - a0))) : 1;
       const end = lerp(prev.pos, s.pos, u);
-      points.push(end);
-      return { points, impact: null, time: prev.t + u * dt, atRange: end };
+      keep(end);
+      return { points, count, impact: null, time: prev.t + u * dt, atRange: end };
     }
-    if (i % every === 0) points.push(s.pos);
+    if (i % every === 0) {
+      keep(s.pos);
+      last = s.pos;
+    }
   }
-  if (points[points.length - 1] !== s.pos) points.push(s.pos);
-  return { points, impact: null, time: s.t, atRange: null };
+  if (last !== s.pos) keep(s.pos);
+  return { points, count, impact: null, time: s.t, atRange: null };
 }
 
 /**
