@@ -1,5 +1,6 @@
 import type { TerrainField } from '../scene/terrainField';
 import type { MissionLayout } from './layout';
+import { NEST_AREA_RADIUS } from './nestPlan';
 import { propFootprintRadius } from './props';
 import { createRng } from './random';
 import type { Rng } from './random';
@@ -9,7 +10,7 @@ import type { ThemeId } from './themes';
 // pebbles and stones in every theme, grass tufts in the valley. Seeded and deterministic. Detail is
 // visual only: it has no colliders, so it keeps off everything the player must see or shoot past:
 //   - the lane: a corridor around the line of sight from the shooter to every target;
-//   - the prone shooter's own spot (the eye is only 0.4 m above the ground);
+//   - the prone shooter's own spot, the whole firing nest's area (the eye is only 0.4 m above the ground);
 //   - 2 m around every target, and every prop's footprint.
 //   - ground that is too steep (the valley walls, the mountain spur, the flanks of an outcrop): a stone or a tuft stands
 //     flat on its instance, so on a cliff face it would float edge-on;
@@ -24,8 +25,8 @@ export const MAX_TUFTS = 1500;
 export const TARGET_CLEARANCE = 2.5;
 /** Half-width of the clear corridor along each shooter -> target line of sight, m. */
 export const LANE_HALF_WIDTH = 2.5;
-/** No detail within this distance of the shooter, m. */
-export const SHOOTER_CLEARANCE = 3;
+/** No detail within this distance of the shooter, m: the firing nest's area (nestPlan.ts), which the sandbags and rocks own. */
+export const SHOOTER_CLEARANCE = NEST_AREA_RADIUS;
 /** Extra clearance around a prop's footprint circle, m. */
 const PROP_MARGIN = 0.6;
 /** Detail stays off ground steeper than this (rise over run, about 27 degrees): wall faces, the mountain spur, outcrop flanks. */

@@ -16,6 +16,7 @@ import {
 } from '../../src/mission/groundDetail';
 import type { GroundDetailPlan } from '../../src/mission/groundDetail';
 import { generateLayout, legacyLayout } from '../../src/mission/layout';
+import { NEST_AREA_RADIUS } from '../../src/mission/nestPlan';
 import type { MissionLayout } from '../../src/mission/layout';
 import { propColliders, vehicleTargetColliders } from '../../src/mission/props';
 import type { ThemeId } from '../../src/mission/themes';
@@ -105,6 +106,21 @@ describe('planGroundDetail', () => {
       }
     });
   }
+
+  it('no pebble or tuft stands in the firing nest\'s area (the sandbags and rocks own it)', () => {
+    expect(SHOOTER_CLEARANCE).toBeGreaterThanOrEqual(NEST_AREA_RADIUS);
+    for (const theme of THEMES) {
+      for (const position of ['valley', 'ridge', 'mountain'] as const) {
+        const config = { ...big(theme, 7), position };
+        const field = createTerrainField(theme, 7, position);
+        const plan = planGroundDetail(field, generateLayout(config, field), 7);
+        expect(plan.pebbles.length).toBeGreaterThan(100);
+        for (const it of [...plan.pebbles, ...plan.tufts]) {
+          expect(Math.hypot(it.x - field.shooter.x, it.z - field.shooter.z), `${theme}/${position}`).toBeGreaterThanOrEqual(NEST_AREA_RADIUS);
+        }
+      }
+    }
+  });
 
   it('grass tufts only in the valley', () => {
     for (const theme of THEMES) {
