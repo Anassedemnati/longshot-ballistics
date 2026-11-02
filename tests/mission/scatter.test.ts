@@ -245,9 +245,16 @@ describe('makeMeshGround', () => {
     expect(worst).toBeGreaterThan(0.05); // the coarse grid really does differ from the field (that is why the scatter uses the mesh)
   });
 
-  it('on the mountain the mesh tip lies metres below the field apex (the nest platform covers it)', () => {
-    const field = createTerrainField('valley', 2, 'mountain');
-    const ground = makeMeshGround(terrainGridAxes(), field.height);
-    expect(field.height(0, 0) - ground(0, 0)).toBeGreaterThan(2);
+  it('on the mountain the mesh tip is the field apex (the grid has lines on x = 0 and z = 0) and stays within a metre of the field round it', () => {
+    for (const theme of ['desert', 'arctic', 'valley'] as const) {
+      const field = createTerrainField(theme, 2, 'mountain');
+      const ground = makeMeshGround(terrainGridAxes(), field.height);
+      expect(ground(0, 0)).toBeCloseTo(field.height(0, 0), 9);
+      let worst = 0;
+      for (let r = 0; r < 8; r += 0.25) {
+        for (let k = 0; k < 24; k++) worst = Math.max(worst, Math.abs(ground(r * Math.cos(k), r * Math.sin(k)) - field.height(r * Math.cos(k), r * Math.sin(k))));
+      }
+      expect(worst, theme).toBeLessThan(1);
+    }
   });
 });

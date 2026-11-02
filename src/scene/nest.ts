@@ -74,9 +74,9 @@ export function sandbagGeometry(): THREE.BufferGeometry {
   return g;
 }
 
-/** The mountain platform as a polar grid following `surface`, a few cm above the terrain mesh so it covers its cut tip. */
+/** The mountain platform as a polar grid following `surface` (outside its edge: the exact ground, a few cm above the terrain mesh so it covers the mesh's facets round the tip). */
 export function padGeometry(plan: NestPlan): THREE.BufferGeometry {
-  const rings = [0, 0.7, 1.4, 2.1, 2.9, 3.4, 3.9, PAD_EDGE_RADIUS, 5.2, 6.2];
+  const rings = [0, 0.6, 1.2, 1.8, 2.3, PAD_EDGE_RADIUS, 3.6, 4.6, 6.2];
   const segments = 40;
   const positions: number[] = [];
   const uvs: number[] = [];

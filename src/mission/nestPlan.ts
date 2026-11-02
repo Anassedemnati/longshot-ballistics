@@ -32,9 +32,14 @@ export const CRESCENT_FROM_DEG = { ground: 62, platform: 95 } as const;
 /** Rocks stand at bearings of at least this many degrees. */
 export const ROCK_BEARING_MIN_DEG = 95;
 
-/** The mountain platform: flat to this radius from the eye, m, then falling to the natural ground by `PAD_EDGE_RADIUS`. */
-export const PAD_FLAT_RADIUS = 2.9;
-export const PAD_EDGE_RADIUS = 4.4;
+/**
+ * The mountain platform: flat to this radius from the eye, m, then falling to the natural ground by `PAD_EDGE_RADIUS`.
+ * The summit is a 62 degree cone (the ground falls 1.9 m per metre), so any flat top holding the sandbag ring (1.35 m) is
+ * a pedestal above the collider behind and beside the shooter: no wider than the bags need (they reach 1.55 m out).
+ * The terrain mesh itself now has a vertex on the apex and 1.5 m cells round it, so the surface in front IS the collider.
+ */
+export const PAD_FLAT_RADIUS = 1.8;
+export const PAD_EDGE_RADIUS = 2.8;
 /** The platform is natural ground (no raised surface) within this many degrees of downrange, and fully raised from `PAD_FULL_DEG`. */
 export const PAD_OPEN_DEG = 62;
 export const PAD_FULL_DEG = 95;
@@ -175,8 +180,10 @@ export function planNest(inputs: NestInputs): NestPlan {
     }
   }
 
-  // ---- the rocks: two to four, to the sides and behind
-  const count = mountain ? 2 + Math.floor(rng() * 2) : 2 + Math.floor(rng() * 3);
+  // ---- the rocks: two to four, to the sides and behind. None on the mountain: its summit is a 62 degree cone, and a rock
+  // beyond the (small) platform would hang on the slope or sink out of sight; the spur's own crags are the rocks there.
+  const roll = rng(); // drawn on every position, so the other positions' nests are what they were
+  const count = mountain ? 0 : 2 + Math.floor(roll * 3);
   const slots: Array<[number, number]> = [
     [ROCK_BEARING_MIN_DEG, 130], // right
     [230, 360 - ROCK_BEARING_MIN_DEG], // left
@@ -186,13 +193,13 @@ export function planNest(inputs: NestInputs): NestPlan {
   for (let i = 0; i < count; i++) {
     const [lo, hi] = slots[i];
     const a = (lo + (hi - lo) * rng()) * DEG;
-    const s = mountain ? 0.3 + 0.12 * rng() : 0.34 + 0.36 * rng();
+    const s = 0.34 + 0.36 * rng();
     const sx = s * (0.9 + 0.2 * rng());
     const sy = s * (0.85 + 0.3 * rng());
     const sz = s * (0.9 + 0.2 * rng());
     const circum = 0.5 * Math.hypot(BOULDER_UNIT.lx * sx, BOULDER_UNIT.lz * sz) * 1.08;
-    // Clear of the bags (their outer edge is 1.5 m out), and on the platform when there is one.
-    const distance = Math.max(2.2, BAG_RING_RADIUS + BAG_HALF.z + circum + 0.1) + rng() * (mountain ? 0.3 : 0.9);
+    // Clear of the bags (their outer edge is 1.5 m out).
+    const distance = Math.max(2.2, BAG_RING_RADIUS + BAG_HALF.z + circum + 0.1) + rng() * 0.9;
     const p = at(eye, a, distance);
     let base = -Infinity;
     for (const [ox, oz] of [[0, 0], [circum * 0.6, 0], [-circum * 0.6, 0], [0, circum * 0.6], [0, -circum * 0.6]] as const) {

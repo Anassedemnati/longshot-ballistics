@@ -63,7 +63,7 @@ describe('planNest', () => {
 
   for (const theme of THEMES) {
     for (const position of POSITIONS) {
-      it(`${theme} / ${position}: a crescent of two courses and two to four rocks, round the eye and open to the front`, () => {
+      it(`${theme} / ${position}: a crescent of two courses and ${position === 'mountain' ? 'no' : 'two to four'} rocks, round the eye and open to the front`, () => {
         for (const seed of SEEDS) {
           const m = bigMission(theme, seed, position);
           const nest = nestFor(m);
@@ -71,8 +71,9 @@ describe('planNest', () => {
           expect(nest.bags.length).toBeGreaterThanOrEqual(15);
           expect(nest.bags.length).toBeLessThanOrEqual(40);
           expect(new Set(nest.bags.map((b) => b.course))).toEqual(new Set([0, 1]));
-          expect(nest.rocks.length).toBeGreaterThanOrEqual(2);
-          expect(nest.rocks.length).toBeLessThanOrEqual(position === 'mountain' ? 3 : 4);
+          // The mountain's summit is a 62 degree cone: a rock off the small platform would hang on the slope, so it has none.
+          expect(nest.rocks.length).toBeGreaterThanOrEqual(position === 'mountain' ? 0 : 2);
+          expect(nest.rocks.length).toBeLessThanOrEqual(position === 'mountain' ? 0 : 4);
           const from = (position === 'mountain' ? CRESCENT_FROM_DEG.platform : CRESCENT_FROM_DEG.ground) * DEG;
           for (const b of nest.bags) {
             const bearing = Math.abs(bearingOf(b.x - eye.x, b.z - eye.z));
@@ -145,7 +146,7 @@ describe('planNest', () => {
             expect(y).toBeGreaterThanOrEqual(natural - 1e-9); // fill only ever adds
             if (Math.min(a, 360 - a) <= 55 && r >= 0.5) expect(y).toBeCloseTo(natural, 6); // the natural ground in front
             if (Math.min(a, 360 - a) >= 100 && r <= PAD_FLAT_RADIUS - 0.1) expect(y).toBeCloseTo(top, 6); // level behind and beside
-            if (r >= 7) expect(y).toBeCloseTo(natural, 6); // gone by the foot of the platform
+            if (r >= PAD_EDGE_RADIUS) expect(y).toBeCloseTo(natural, 6); // gone beyond the platform's edge: the surface is the collider
           }
         }
         // every line of sight from the eye runs above the platform (checked along its first 8 m)
@@ -159,6 +160,30 @@ describe('planNest', () => {
           }
         }
       }
+    }
+  });
+
+  it('the mountain platform is small: it stands above the collider (the field) only within its edge radius, by a few metres at most, and only behind and beside the eye', () => {
+    for (const theme of THEMES) {
+      const m = bigMission(theme, 3, 'mountain');
+      const nest = nestFor(m);
+      const { eye } = nest;
+      let most = 0;
+      let mostBearing = 0;
+      for (let a = 0; a < 360; a += 3) {
+        for (let r = 0.1; r < 9; r += 0.1) {
+          const x = eye.x + r * Math.sin(a * DEG);
+          const z = eye.z - r * Math.cos(a * DEG);
+          const over = nest.surface(x, z) - m.field.height(x, z);
+          if (r > PAD_EDGE_RADIUS) expect(over, `${theme} r ${r}`).toBeLessThan(1e-9);
+          if (over > most) {
+            most = over;
+            mostBearing = Math.min(a, 360 - a);
+          }
+        }
+      }
+      expect(most, theme).toBeLessThan(4); // the old 2.9 / 4.4 m platform stood 5.5 m proud
+      expect(mostBearing, theme).toBeGreaterThanOrEqual(95); // not in front of the shooter
     }
   });
 

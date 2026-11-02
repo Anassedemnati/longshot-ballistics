@@ -30,22 +30,37 @@ const FINE_STEP = 4;
 /** Extra-fine ring around the origin: the prone view sits right over the rise, and the mountain's 90 m spur needs it to read as crags. */
 const NEAR_HALF = 100;
 const NEAR_STEP = 3;
+/** Finer still round the origin: the mountain's summit is a cone, and the shooter's own view (and nest) sits on its tip. */
+const TIP_HALF = 10;
+const TIP_STEP = 1.5;
 const COARSE_STEP = 25;
 const FALLOFF_DISTANCE = 250;
 
-/** Grid line positions from min to max; step grows linearly from FINE_STEP inside [focusMin, focusMax] to COARSE_STEP, FALLOFF_DISTANCE beyond it. */
+/**
+ * Grid line positions from min to max, with a line exactly on 0 (min < 0 < max): the shooter's feet, and the mountain's
+ * summit, a 62 degree spike whose rendered tip would otherwise lie metres below the height field's apex. Built outward
+ * from 0 in both directions; the step grows linearly from FINE_STEP inside [focusMin, focusMax] to COARSE_STEP,
+ * FALLOFF_DISTANCE beyond it (and is at most NEAR_STEP within NEAR_HALF of the origin, TIP_STEP within TIP_HALF).
+ */
 function gridAxis(min: number, max: number, focusMin: number, focusMax: number): number[] {
-  const lines = [min];
-  let p = min;
-  while (p < max) {
+  const stepAt = (p: number): number => {
     const outside = Math.max(focusMin - p, p - focusMax, 0);
     const t = Math.min(1, outside / FALLOFF_DISTANCE);
-    let step = FINE_STEP + (COARSE_STEP - FINE_STEP) * t;
-    if (Math.abs(p) < NEAR_HALF) step = Math.min(step, NEAR_STEP);
-    p = Math.min(max, p + step);
-    lines.push(p);
+    const step = FINE_STEP + (COARSE_STEP - FINE_STEP) * t;
+    if (Math.abs(p) < TIP_HALF) return Math.min(step, TIP_STEP);
+    return Math.abs(p) < NEAR_HALF ? Math.min(step, NEAR_STEP) : step;
+  };
+  const up = [0];
+  for (let p = 0; p < max; ) {
+    p = Math.min(max, p + stepAt(p));
+    up.push(p);
   }
-  return lines;
+  const down: number[] = [];
+  for (let p = 0; p > min; ) {
+    p = Math.max(min, p - stepAt(p));
+    down.push(p);
+  }
+  return [...down.reverse(), ...up];
 }
 
 /** The x and z grid lines of the terrain mesh (vertex k = j * xs.length + i sits at xs[i], zs[j]). */

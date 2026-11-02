@@ -55,13 +55,26 @@ describe('terrain mesh grid', () => {
     expect(zs[zs.length - 1]).toBeGreaterThanOrEqual(1000);
   });
 
-  it('spaces vertices at most 3 m apart around the origin (the mountain spur) and at most 25 m apart anywhere', () => {
+  it('spaces vertices at most 3 m apart around the origin (the mountain spur), 1.5 m at its tip, and at most 25 m apart anywhere', () => {
     for (const lines of [xs, zs]) {
       for (let k = 0; k + 1 < lines.length; k++) {
         const step = lines[k + 1] - lines[k];
+        expect(step).toBeGreaterThan(0);
         expect(step).toBeLessThanOrEqual(25 + 1e-9);
         if (lines[k] >= -100 && lines[k + 1] <= 100) expect(step).toBeLessThanOrEqual(3 + 1e-9);
+        if (lines[k] >= -10 && lines[k + 1] <= 10) expect(step).toBeLessThanOrEqual(1.5 + 1e-9);
       }
+    }
+  });
+
+  it('has a grid line exactly on x = 0 and on z = 0, so the mountain apex is a vertex and the rendered tip is the height field\'s', () => {
+    expect(xs).toContain(0);
+    expect(zs).toContain(0);
+    for (const theme of THEME_IDS) {
+      const field = createTerrainField(theme, 1, 'mountain');
+      const geometry = buildTerrainGeometry(field);
+      const k = zs.indexOf(0) * xs.length + xs.indexOf(0);
+      expect(geometry.getAttribute('position').getY(k)).toBeCloseTo(field.height(0, 0), 4); // float32 buffer
     }
   });
 
