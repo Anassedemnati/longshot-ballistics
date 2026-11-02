@@ -37,7 +37,7 @@ const RESULTS_GAME_S = 1.5;
 const HOLD_300M = 0.45;
 /** Missions of the smoke (URL codec in src/mission/config.ts: v1.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>). */
 const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
-const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier straight ahead
+const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier, no cover (placed like any mission: within 10 degrees of straight ahead)
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
 /** The menu's defaults (DEFAULT_MISSION) as a mission code: the menu starts them with a fresh seed, so any seed matches. */
 const MISSION_DEFAULT_RE = /^v1\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+$/;

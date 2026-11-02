@@ -148,7 +148,11 @@ export function layoutColliders(layout: MissionLayout, field: TerrainField): Obs
   return out;
 }
 
-/** The mission a legacy URL stands for: one soldier straight downrange at the range, no props. */
+/**
+ * The practice range of a legacy URL (`?range=...`): one soldier straight downrange at the range, no props.
+ * Only the legacy route uses it (src/mission/run.ts picks it by route, never by the shape of the config):
+ * a menu mission with one soldier and no props is a normal mission and goes through `generateLayout`.
+ */
 export function legacyLayout(config: MissionConfig): MissionLayout {
   const range = config.rangeMin;
   return {
@@ -156,21 +160,6 @@ export function legacyLayout(config: MissionConfig): MissionLayout {
     vehicleTargets: [],
     props: [],
   };
-}
-
-/**
- * The legacy route (`?range=...`) is exactly: one soldier, no vehicle targets, no buildings or
- * vehicles, a single range. Such a mission always puts the soldier at (0, -range) so the old URL and
- * the smoke test keep aiming at a dummy that is straight ahead.
- */
-function isLegacyShape(c: MissionConfig): boolean {
-  return (
-    c.soldiers === 1 &&
-    c.vehicleTargets === 0 &&
-    c.buildings === 'none' &&
-    c.vehicles === 'none' &&
-    c.rangeMin === c.rangeMax
-  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -677,8 +666,6 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
  * 8000 soldiers) this throws a descriptive Error instead of returning an invalid layout.
  */
 export function generateLayout(config: MissionConfig, field: TerrainField): MissionLayout {
-  if (isLegacyShape(config)) return legacyLayout(config);
-
   const rng = createRng((Math.imul(config.seed, 0x9e3779b1) ^ 0x4c41594f) >>> 0);
   const props = planProps(config, rng);
   const keeps = [props.length, Math.floor((props.length * 2) / 3), Math.floor(props.length / 3), 0];

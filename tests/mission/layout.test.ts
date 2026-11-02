@@ -343,22 +343,39 @@ describe('generateLayout', () => {
     }
   });
 
-  it('with no props there is no cover; legacy config gives one soldier straight downrange', () => {
+  it('with no props there is no cover', () => {
     const none = setup(base({ buildings: 'none', vehicles: 'none', soldiers: 6, seed: 9 })).layout;
     expect(none.props).toEqual([]);
     expect(none.soldiers.every((s) => !s.behindCover)).toBe(true);
+  });
 
+  it('legacyLayout is one soldier straight downrange at the range, no props', () => {
     const legacy = base({ theme: 'desert', rangeMin: 800, rangeMax: 800, soldiers: 1, vehicleTargets: 0, buildings: 'none', vehicles: 'none', seed: 1 });
-    const { layout } = setup(legacy);
+    const layout = legacyLayout(legacy);
     expect(layout.props).toEqual([]);
     expect(layout.vehicleTargets).toEqual([]);
-    expect(layout.soldiers).toHaveLength(1);
-    expect(layout.soldiers[0].x).toBe(0);
-    expect(layout.soldiers[0].z).toBe(-800);
-    expect(layout.soldiers[0].yaw).toBe(0);
-    expect(layout.soldiers[0].range).toBe(800);
-    expect(layout.soldiers[0].behindCover).toBe(false);
-    expect(legacyLayout(legacy)).toEqual(layout);
+    expect(layout.soldiers).toEqual([{ id: 'soldier-0', x: 0, z: -800, yaw: 0, range: 800, behindCover: false }]);
+  });
+
+  it('a menu mission shaped like the legacy one (1 soldier, no props, one range) uses its seed and the normal placement', () => {
+    const shape = { soldiers: 1, vehicleTargets: 0, buildings: 'none', vehicles: 'none', rangeMin: 800, rangeMax: 800 } as const;
+    const positions = new Set<string>();
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const config = base({ ...shape, seed });
+      const { field, layout } = setup(config);
+      checkLayout(config, field, layout); // range, bearing and head / upper-torso line of sight, from scratch
+      const [soldier] = layout.soldiers;
+      expect(soldier.range).toBeGreaterThanOrEqual(799);
+      expect(soldier.range).toBeLessThanOrEqual(801);
+      positions.add(`${soldier.x.toFixed(3)},${soldier.z.toFixed(3)}`);
+      // Same config and seed: same layout.
+      expect(generateLayout(config, field)).toEqual(layout);
+    }
+    expect(positions.size).toBeGreaterThan(1);
+    const a = setup(base({ ...shape, seed: 1 })).layout.soldiers[0];
+    const b = setup(base({ ...shape, seed: 2 })).layout.soldiers[0];
+    expect([a.x, a.z]).not.toEqual([b.x, b.z]);
+    expect([a.x, a.z]).not.toEqual([0, -800]); // not the straight-ahead practice spot
   });
 
   it('layoutColliders returns the props plus the vehicle-target bodies (what the bullets must stop on)', () => {
