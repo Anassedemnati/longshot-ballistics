@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { soundLabel } from '../../src/ui/hud';
+import { rangeText, soundLabel, targetsText, windText } from '../../src/ui/hud';
 
 describe('soundLabel', () => {
   it('asks for a click until the audio context is running', () => {
@@ -15,5 +15,37 @@ describe('soundLabel', () => {
   it('says so when the browser has no usable audio', () => {
     expect(soundLabel(false, false, false)).toBe('Sound unavailable');
     expect(soundLabel(false, true, false)).toBe('Sound unavailable');
+  });
+});
+
+describe('windText', () => {
+  it('gives the speed and the clock direction', () => {
+    expect(windText(4.5, 9)).toBe("Wind 4.5 m/s from 9 o'clock (left)");
+    expect(windText(12, 3)).toBe("Wind 12.0 m/s from 3 o'clock (right)");
+    expect(windText(0.1, 12)).toBe("Wind 0.1 m/s from 12 o'clock (downrange)");
+  });
+
+  it('says calm when there is no wind', () => {
+    expect(windText(0, 9)).toBe('Wind calm');
+    expect(windText(0.04, 9)).toBe('Wind calm');
+  });
+});
+
+describe('targetsText', () => {
+  it('shows the targets left out of the total', () => {
+    expect(targetsText(3, 5)).toBe('Targets 3/5');
+    expect(targetsText(0, 1)).toBe('Targets 0/1');
+  });
+});
+
+describe('rangeText', () => {
+  it('rounds the rangefinder reading to whole metres', () => {
+    expect(rangeText(733.6)).toBe('Range 734 m');
+    expect(rangeText(57.4)).toBe('Range 57 m');
+  });
+
+  it('shows a dash when nothing is under the crosshair', () => {
+    expect(rangeText(null)).toBe('Range —');
+    expect(rangeText(NaN)).toBe('Range —');
   });
 });

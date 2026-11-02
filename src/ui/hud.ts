@@ -1,6 +1,7 @@
-import type { StageConfig } from '../game/config';
+import { windClockLabel, windVector } from '../mission/config';
 
-const MPS_TO_MPH = 2.2369362920544;
+/** Wind speed below which the HUD says "calm", m/s. */
+const CALM_MPS = 0.05;
 
 function el(parent: HTMLElement, tag: string, className: string, text = ''): HTMLElement {
   const node = document.createElement(tag);
@@ -20,12 +21,30 @@ export function soundLabel(running: boolean, muted: boolean, available = true): 
   return muted ? 'Muted (M)' : 'Sound on (M)';
 }
 
+/** "Wind 4.5 m/s from 9 o'clock (left)", or "Wind calm". */
+export function windText(speedMps: number, clock: number): string {
+  if (!(Math.abs(speedMps) >= CALM_MPS)) return 'Wind calm';
+  return `Wind ${Math.abs(speedMps).toFixed(1)} m/s ${windClockLabel(clock)}`;
+}
+
+/** "Targets 3/5": targets still standing out of the total. */
+export function targetsText(left: number, total: number): string {
+  return `Targets ${left}/${total}`;
+}
+
+/** Rangefinder line: "Range 734 m", or "Range —" when nothing is under the crosshair. */
+export function rangeText(rangeM: number | null): string {
+  return rangeM === null || !Number.isFinite(rangeM) ? 'Range —' : `Range ${Math.round(rangeM)} m`;
+}
+
 /**
- * Easy-style stage-1 HUD: range, wind, magnification, rounds, the sound on/off indicator and the last
- * shot's result, plus a centre dot for the naked eye and the click-to-start hint. All DOM; styled in
- * index.html.
+ * Easy-style HUD: targets left, rangefinder, wind, magnification, rounds, the sound on/off indicator and
+ * the last shot's result, plus a centre dot for the naked eye and the click-to-start hint. All DOM;
+ * styled in index.html.
  */
 export class Hud {
+  private readonly targets: HTMLElement;
+  private readonly range: HTMLElement;
   private readonly magnification: HTMLElement;
   private readonly rounds: HTMLElement;
   private readonly sound: HTMLElement;
@@ -33,22 +52,20 @@ export class Hud {
   private readonly dot: HTMLElement;
   private readonly hint: HTMLElement;
 
-  constructor(parent: HTMLElement, config: StageConfig) {
+  constructor(parent: HTMLElement, wind: { windSpeedMps: number; windClock: number }, targetsTotal: number) {
     const root = el(parent, 'div', 'hud');
     const panel = el(root, 'div', 'hud-panel');
-    el(panel, 'div', 'hud-line', `Range ${Math.round(config.range)} m`);
+    this.targets = el(panel, 'div', 'hud-line', targetsText(targetsTotal, targetsTotal));
+    this.range = el(panel, 'div', 'hud-line', rangeText(null));
 
-    const wind = el(panel, 'div', 'hud-line');
-    const speed = Math.abs(config.windFromLeftMps);
-    const arrow = el(wind, 'span', 'hud-wind-arrow', speed < 0.05 ? '·' : '➜');
-    // The arrow shows where the wind blows to: right when it comes from the left, else left.
-    if (config.windFromLeftMps < 0) arrow.style.transform = 'rotate(180deg)';
-    const side = config.windFromLeftMps < 0 ? 'right' : 'left';
-    wind.append(
-      speed < 0.05
-        ? ' Wind calm'
-        : ` Wind ${speed.toFixed(1)} m/s (${(speed * MPS_TO_MPH).toFixed(0)} mph) from ${side}`,
-    );
+    const windLine = el(panel, 'div', 'hud-line');
+    const calm = !(Math.abs(wind.windSpeedMps) >= CALM_MPS);
+    const arrow = el(windLine, 'span', 'hud-wind-arrow', calm ? '·' : '➜');
+    // The arrow points where the air moves to, seen from above with downrange up: right for wind from
+    // the left (9), down toward the shooter for a headwind (12).
+    const v = windVector(1, wind.windClock);
+    if (!calm) arrow.style.transform = `rotate(${(Math.atan2(v.z, v.x) * 180) / Math.PI}deg)`;
+    windLine.append(' ' + windText(wind.windSpeedMps, wind.windClock));
 
     this.magnification = el(panel, 'div', 'hud-line');
     this.rounds = el(panel, 'div', 'hud-line');
@@ -63,6 +80,16 @@ export class Hud {
     );
     this.setMagnification(1);
     this.setSound(false, false);
+  }
+
+  setTargets(left: number, total: number): void {
+    this.targets.textContent = targetsText(left, total);
+  }
+
+  /** Rangefinder reading; cheap to call often: the DOM is only touched on change. */
+  setRange(rangeM: number | null): void {
+    const text = rangeText(rangeM);
+    if (this.range.textContent !== text) this.range.textContent = text;
   }
 
   setMagnification(mag: number): void {
