@@ -252,3 +252,36 @@ Terrain textures (snow, grass) are generated with Codex like the sand texture. E
 ## A.6 Non-goals for this step
 
 Difficulty levels, moving/alerting enemies, high-value-target objectives, mobile controls, more themes.
+
+---
+
+# Addendum B — Merge of the ChatGPT branch (stage 1c)
+
+Date: 2026-11-02. The user developed a parallel version with ChatGPT (commit 497a2b3 on `stage-1`) and asked to merge both. Base = stage 1b (menu, themes, multi-target layout, cover, results); every ChatGPT feature is ported into it. Source for each feature: `git show 497a2b3:<path>`.
+
+## B.1 Realistic look (from ChatGPT, extended to all themes)
+- Real-time sun shadows (`renderer.shadowMap`, PCF) from a directional light whose shadow box follows where the player is looking (aim point when scoped, near field otherwise).
+- Terrain material: `MeshStandardMaterial` with a procedural bump relief, slope/height-based rock tint, and world-space geological mottling (ChatGPT's `onBeforeCompile` shader) — tuned per theme (sand / snow / grass).
+- High valley walls: eroded ridgelines (55–250 m) enclosing the battlefield on both sides — kept strictly OUTSIDE the engagement sector so no line of sight to any target is ever blocked.
+- Instanced ground detail (pebbles/stones; per-theme colours; grass tufts in the valley theme) off the target lane.
+- Smoother soldier dummies (rounded boxes, capsules, goggles, scarf); hit spheres unchanged.
+
+## B.2 Firing positions
+Menu choice: **Valley floor** (eye ≈ 1.5 m + 0.4), **Rocky ridge** (12 m, current), **Mountain overlook** (85 m — a steep rocky spur, pronounced downhill shots). The terrain field builds the chosen landform; all line-of-sight and cover guarantees hold for every position.
+
+## B.3 First-person rifle and suppressor
+- Visible first-person rifle model (ChatGPT `FirstPersonRifle`: .308 olive stock / .338 sand chassis), hidden in the scope; recoil kick, muzzle flash, bolt/reload motion.
+- Menu option **Suppressor**: quieter, filtered shot sound, no flash, and enemies detect you more slowly.
+
+## B.4 Enemy snipers (fights back)
+- Menu: **Enemy snipers 0–3** (0 = training, no incoming fire). Snipers are extra targets placed by the seeded layout — prone on rooftops, on ridges at the band, or in the open — always with a clear line of sight to the player (they must be findable).
+- Each sniper sweeps a scope; its **glint** is visible when it looks toward you and steady once you are detected.
+- **Detection** (0–100 %): rises a lot with each unsuppressed shot (+35), a little with suppressed shots (+9), slowly while exposed, and falls while in cover. At ≥ 65 % snipers fire at you every 4 s (−18 health when exposed) and a bombardment is called every 12 s with a 4 s warning (−45 exposed / −5 in cover).
+- **Cover (C)**: duck behind your position (screen shows cover; you can't shoot). **Health 100**; at 0 the mission fails (results screen "Mission failed").
+- Mission complete = all targets (soldiers, vehicle targets, snipers) down.
+
+## B.5 Aim assists (training aids)
+Menu option **Aim assists** (off by default). When enabled, HUD buttons: **T** trajectory preview line, **A** assisted-aim marker (where to aim to hit the selected target, computed from the real trajectory), **P** spotter calls ("hold 1.2 mil high, 0.4 right"). Results show "assists used" when any was on.
+
+## B.6 Menu & HUD
+Our menu gains the new controls (firing position, suppressor, enemy snipers, aim assists); ChatGPT's rifle concept art is used in the rifle panel. HUD adopts ChatGPT's panel styling; threat panel (exposed/cover, health, detection, snipers left, incoming fire countdown), damage flash, cover mask.
