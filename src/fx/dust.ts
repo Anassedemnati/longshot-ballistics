@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Vec3 } from '../ballistics/types';
+import { makeBlobTexture } from './blob';
 
 /** A puff is this many overlapping sprites. */
 const SPRITES_PER_PUFF = 10;
@@ -22,30 +23,10 @@ interface Puff {
   particles: Particle[];
 }
 
-/** Soft round blob: white centre fading to transparent. */
-function makeBlobTexture(): THREE.CanvasTexture {
-  const size = 64;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    gradient.addColorStop(0, 'rgba(255,255,255,1)');
-    gradient.addColorStop(0.45, 'rgba(255,255,255,0.55)');
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, size, size);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
 /** Dust puffs kicked up by bullets that hit the ground. */
 export class DustSystem {
   readonly group = new THREE.Group();
-  private readonly texture = makeBlobTexture();
+  private readonly texture: THREE.Texture = makeBlobTexture();
   private readonly puffs: Puff[] = [];
 
   /** Start a puff at a world position (the ground impact point). */

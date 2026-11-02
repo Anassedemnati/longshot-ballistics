@@ -5,7 +5,7 @@ import {
   FALL_DURATION,
   MAX_OVERHANG,
   RESET_DELAY,
-  createTargetDummy,
+  createTargetDummyAtRange,
   dummyHitSpheres,
 } from '../../src/scene/target';
 import { terrainHeight } from '../../src/scene/terrainHeight';
@@ -23,7 +23,7 @@ function shotAt(x: number, height: number): { kind: string; zone?: string } {
 
 describe('dummy hit zones match the visible dummy', () => {
   it('uses only the four zone names, with the specified sphere first for each', () => {
-    const zones = createTargetDummy(RANGE).hitTarget.zones;
+    const zones = createTargetDummyAtRange(RANGE).hitTarget.zones;
     expect(new Set(zones.map((z) => z.name))).toEqual(
       new Set(['head', 'upperTorso', 'lowerTorso', 'limbs']),
     );
@@ -129,7 +129,7 @@ describe('dummy fall and reset', () => {
   const groundY = terrainHeight(0, -RANGE);
 
   function standing() {
-    const dummy = createTargetDummy(RANGE);
+    const dummy = createTargetDummyAtRange(RANGE);
     expect(dummy.down).toBe(false);
     return dummy;
   }

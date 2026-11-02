@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTargetDummy } from '../../src/scene/target';
+import { createTargetDummyAtRange } from '../../src/scene/target';
 import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
 
@@ -26,7 +26,7 @@ describe('range lane end to end', () => {
   });
 
   it('a knocked-down dummy tips backwards (away from the shooter) and rests near the ground', () => {
-    const dummy = createTargetDummy(500);
+    const dummy = createTargetDummyAtRange(500);
     expect(dummy.down).toBe(false);
     dummy.knockDown();
     expect(dummy.down).toBe(true);
@@ -36,7 +36,7 @@ describe('range lane end to end', () => {
   });
 
   it('the dummy stands on the ground at the target range, about 1.8 m tall, with the specified hit spheres', () => {
-    const dummy = createTargetDummy(650);
+    const dummy = createTargetDummyAtRange(650);
     const ground = terrainHeight(0, -650);
     expect(dummy.group.position.z).toBe(-650);
     expect(dummy.group.position.y).toBe(ground);

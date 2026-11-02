@@ -24,7 +24,7 @@ import { InputState, bindInput } from './player/input';
 import { PlayerView } from './player/view';
 import { createRenderer, resizeRenderer } from './scene/renderer';
 import { createSky } from './scene/sky';
-import { createTargetDummy } from './scene/target';
+import { createTargetDummyAtRange } from './scene/target';
 import { DESERT_FIELD, SHOOTER_POS, createRocks, createTerrainMesh, terrainHeight } from './scene/terrain';
 import { Hud } from './ui/hud';
 
@@ -67,10 +67,10 @@ function start(): void {
   // Scene
   const renderer = createRenderer(app);
   const scene = new THREE.Scene();
-  createSky(scene);
+  createSky(scene, 'desert');
   scene.add(createTerrainMesh(DESERT_FIELD, renderer.capabilities.getMaxAnisotropy()));
   scene.add(createRocks(DESERT_FIELD));
-  const dummy = createTargetDummy(config.range);
+  const dummy = createTargetDummyAtRange(config.range);
   scene.add(dummy.group);
   const dust = new DustSystem();
   scene.add(dust.group);

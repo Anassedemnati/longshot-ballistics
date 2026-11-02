@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Vec3 } from '../ballistics/types';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
 import {
   DUMMY_BOXES,
@@ -159,12 +160,23 @@ export interface TargetDummy {
   update(frameDt: number): void;
 }
 
-/** A ~1.8 m low-poly humanoid standing on the ground at (0, *, -range). */
-export function createTargetDummy(range: number): TargetDummy {
-  const groundY = terrainHeight(0, -range);
+/** The broad-phase sphere of a dummy is this much bigger than the farthest zone edge, m (a grazing hit must never be rejected). */
+const BOUNDS_MARGIN = 0.05;
+
+/**
+ * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
+ * `yaw` about +Y like three.js `rotation.y`: its front (+Z) points at (sin yaw, cos yaw), so
+ * `yaw = facingYaw(x, z)` makes it look at a shooter at the origin. The hit spheres turn with it.
+ * `id` is the HitTarget id the bullets report.
+ */
+export function createTargetDummy(position: Vec3, yaw: number, id = 'dummy'): TargetDummy {
+  const groundY = position.y;
   const group = new THREE.Group();
   group.name = 'target-dummy';
-  group.position.set(0, groundY, -range);
+  group.position.set(position.x, groundY, position.z);
+  // Yaw first, then the fall about the dummy's own X axis: it tips over backwards whichever way it faces.
+  group.rotation.order = 'YXZ';
+  group.rotation.y = yaw;
 
   const material = (color: number): THREE.MeshLambertMaterial =>
     new THREE.MeshLambertMaterial({ color, flatShading: true });
@@ -178,13 +190,22 @@ export function createTargetDummy(range: number): TargetDummy {
     group.add(mesh);
   }
 
-  // Hit spheres in world space.
+  // Hit spheres in world space: the dummy's own (x, y) turned by the yaw about the feet.
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
   const zones: HitZone[] = dummyHitSpheres().map((s) => ({
     name: s.name,
     radius: s.radius,
-    center: { x: s.x, y: groundY + s.y, z: -range },
+    center: { x: position.x + cos * s.x, y: groundY + s.y, z: position.z - sin * s.x },
   }));
-  const hitTarget: HitTarget = { id: 'dummy', zones };
+  // Broad phase: a sphere around the standing body that holds every zone.
+  const boundsCenter = { x: position.x, y: groundY + 0.9, z: position.z };
+  let boundsRadius = 0;
+  for (const zone of zones) {
+    const d = Math.hypot(zone.center.x - boundsCenter.x, zone.center.y - boundsCenter.y, zone.center.z - boundsCenter.z);
+    boundsRadius = Math.max(boundsRadius, d + zone.radius);
+  }
+  const hitTarget: HitTarget = { id, zones, bounds: { center: boundsCenter, radius: boundsRadius + BOUNDS_MARGIN } };
 
   let down = false;
   let fallTime = 0;
@@ -230,4 +251,9 @@ export function createTargetDummy(range: number): TargetDummy {
       }
     },
   };
+}
+
+/** The stage-1 dummy: standing at (0, ground, -range), facing +Z (straight at the shooter). */
+export function createTargetDummyAtRange(range: number): TargetDummy {
+  return createTargetDummy({ x: 0, y: terrainHeight(0, -range), z: -range }, 0);
 }

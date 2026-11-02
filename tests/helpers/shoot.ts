@@ -1,11 +1,12 @@
 import { DESERT_ATMO } from '../../src/ballistics/atmosphere';
 import { RIFLES } from '../../src/ballistics/rifles';
 import { findZeroElevation, simulateToRanges } from '../../src/ballistics/trajectory';
-import type { WindField } from '../../src/ballistics/types';
+import type { Vec3, WindField } from '../../src/ballistics/types';
 import { muzzleLaunch } from '../../src/game/aim';
 import { BulletSystem } from '../../src/game/bullets';
 import type { ImpactEvent } from '../../src/game/bullets';
-import { createTargetDummy } from '../../src/scene/target';
+import type { HitTarget, Obstacle } from '../../src/game/hit';
+import { createTargetDummyAtRange } from '../../src/scene/target';
 import { SHOOTER_POS, terrainHeight } from '../../src/scene/terrainHeight';
 
 const NO_WIND: WindField = () => ({ x: 0, y: 0, z: 0 });
@@ -31,7 +32,7 @@ function elevationFor(range: number, dy: number): number {
  * feet, in the plane of the dummy at `range`. Returns the first impact event.
  */
 export function shootAtDummy(range: number, x: number, height: number): ImpactEvent[] {
-  const dummy = createTargetDummy(range);
+  const dummy = createTargetDummyAtRange(range);
   const bullets = new BulletSystem({
     atmo: DESERT_ATMO,
     wind: NO_WIND,
@@ -45,6 +46,29 @@ export function shootAtDummy(range: number, x: number, height: number): ImpactEv
   const [sp, cp, sa, ca] = [Math.sin(pitch), Math.cos(pitch), Math.sin(azimuth), Math.cos(azimuth)];
   const forward = { x: sa * cp, y: sp, z: -ca * cp };
   const up = { x: -sa * sp, y: cp, z: ca * sp }; // unit and perpendicular to forward, no roll
+  const { origin, velocity } = muzzleLaunch(SHOOTER_POS, forward, up, RIFLE, ZERO);
+  bullets.fire(origin, velocity, RIFLE.bcG7);
+  const events: ImpactEvent[] = [];
+  for (let i = 0; i < 400 && events.length === 0; i++) events.push(...bullets.update(0.016));
+  return events;
+}
+
+/**
+ * Fire the .308 from the shooter's eye (no wind, desert air, desert terrain) so the bullet passes through
+ * the world point `point`, with the given hit targets and obstacles in the world. Returns the first
+ * impact event, whatever it is (a target zone, an obstacle, the ground, or expiry).
+ */
+export function shootAtPoint(point: Vec3, targets: HitTarget[], obstacles: Obstacle[] = []): ImpactEvent[] {
+  const bullets = new BulletSystem({ atmo: DESERT_ATMO, wind: NO_WIND, terrainHeight, targets: () => targets, obstacles: () => obstacles });
+  const dx = point.x - SHOOTER_POS.x;
+  const dz = point.z - SHOOTER_POS.z;
+  const range = Math.hypot(dx, dz);
+  const elevation = elevationFor(range, point.y - SHOOTER_POS.y);
+  const pitch = elevation - ZERO;
+  const azimuth = Math.atan2(dx, -dz); // clockwise from straight downrange (-Z)
+  const [sp, cp, sa, ca] = [Math.sin(pitch), Math.cos(pitch), Math.sin(azimuth), Math.cos(azimuth)];
+  const forward = { x: sa * cp, y: sp, z: -ca * cp };
+  const up = { x: -sa * sp, y: cp, z: ca * sp };
   const { origin, velocity } = muzzleLaunch(SHOOTER_POS, forward, up, RIFLE, ZERO);
   bullets.fire(origin, velocity, RIFLE.bcG7);
   const events: ImpactEvent[] = [];
