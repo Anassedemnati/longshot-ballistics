@@ -46,6 +46,7 @@ export class SmokeColumn {
   private readonly texture: THREE.Texture;
   private driftX = 0;
   private driftZ = 0;
+  private disposed = false;
 
   constructor(opts: { wind?: Vec3; rng?: () => number } = {}) {
     this.rng = opts.rng ?? Math.random;
@@ -91,7 +92,7 @@ export class SmokeColumn {
   }
 
   update(frameDt: number): void {
-    if (!Number.isFinite(frameDt) || frameDt <= 0) return;
+    if (this.disposed || !Number.isFinite(frameDt) || frameDt <= 0) return;
     for (const p of this.puffs) {
       p.age += frameDt;
       if (p.age >= p.life) this.release(p);
@@ -115,9 +116,12 @@ export class SmokeColumn {
     }
   }
 
-  /** Free the sprite materials (the owner calls this when the mission is torn down). */
+  /** Free the sprite materials and the texture and empty the group (the owner calls this when the mission is torn down). Safe to repeat. */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     for (const p of this.puffs) p.material.dispose();
     this.texture.dispose();
+    this.group.clear();
   }
 }

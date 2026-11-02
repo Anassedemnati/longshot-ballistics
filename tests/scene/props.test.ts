@@ -203,57 +203,72 @@ describe('vehicle targets', () => {
         }
       });
 
-      it('covers the front, the two sides and the top of the engine block: every point 3 cm in from the edges is inside a zone', () => {
+      it('covers the front, the two sides and the top of the engine block completely: every face point, every edge line and every corner is inside a zone', () => {
         const zones = target.hitTarget.zones;
         const e = engine;
         const miss: string[] = [];
-        const inset = 0.03;
-        const n = 24;
+        const n = 48;
         const inside = (lx: number, ly: number, lz: number): boolean => {
           const c = Math.cos(v.yaw);
           const s = Math.sin(v.yaw);
           const w = { x: v.x + c * lx + s * lz, y: groundY + ly, z: v.z - s * lx + c * lz };
           return zones.some((z) => dist(z.center, w) <= z.radius);
         };
+        const { x: hx, y: hy, z: hz } = e.halfSize;
+        const lo = { x: e.center.x - hx, y: e.center.y - hy, z: e.center.z - hz };
+        const front = e.center.z + hz;
+        const top = e.center.y + hy;
+        // Whole faces, borders included (no inset).
         for (let i = 0; i <= n; i++) {
           for (let j = 0; j <= n; j++) {
-            const u = i / n;
-            const t = j / n;
-            const x = e.center.x - e.halfSize.x + inset + u * (2 * e.halfSize.x - 2 * inset);
-            const y = e.center.y - e.halfSize.y + inset + t * (2 * e.halfSize.y - 2 * inset);
-            const z = e.center.z - e.halfSize.z + inset + t * (2 * e.halfSize.z - 2 * inset);
-            const front = e.center.z + e.halfSize.z;
-            const top = e.center.y + e.halfSize.y;
-            if (!inside(x, y, front)) miss.push(`front ${x.toFixed(2)},${y.toFixed(2)}`);
-            if (!inside(e.center.x + e.halfSize.x, y, z)) miss.push(`+x side ${y.toFixed(2)},${z.toFixed(2)}`);
-            if (!inside(e.center.x - e.halfSize.x, y, z)) miss.push(`-x side ${y.toFixed(2)},${z.toFixed(2)}`);
-            if (!inside(x, top, z)) miss.push(`top ${x.toFixed(2)},${z.toFixed(2)}`);
+            const x = lo.x + (i / n) * 2 * hx;
+            const y = lo.y + (j / n) * 2 * hy;
+            const z = lo.z + (j / n) * 2 * hz;
+            if (!inside(x, y, front)) miss.push(`front ${x.toFixed(3)},${y.toFixed(3)}`);
+            if (!inside(e.center.x + hx, y, z)) miss.push(`+x side ${y.toFixed(3)},${z.toFixed(3)}`);
+            if (!inside(e.center.x - hx, y, z)) miss.push(`-x side ${y.toFixed(3)},${z.toFixed(3)}`);
+            if (!inside(x, top, z)) miss.push(`top ${x.toFixed(3)},${z.toFixed(3)}`);
+          }
+        }
+        // Every box edge that borders a covered face (all but the back-bottom one), every 2 mm along its length.
+        const covered = (axis: 'x' | 'y' | 'z', sign: number): boolean => axis === 'x' || sign > 0; // +Z front, +Y top, both sides
+        const axes = ['x', 'y', 'z'] as const;
+        for (const w of axes) {
+          const [u, t] = axes.filter((a) => a !== w);
+          for (const su of [-1, 1]) {
+            for (const st of [-1, 1]) {
+              if (!covered(u, su) && !covered(t, st)) continue;
+              const steps = Math.round((2 * e.halfSize[w]) / 0.002);
+              for (let k = 0; k <= steps; k++) {
+                const p = { x: 0, y: 0, z: 0 };
+                p[u] = e.center[u] + su * e.halfSize[u];
+                p[t] = e.center[t] + st * e.halfSize[t];
+                p[w] = e.center[w] - e.halfSize[w] + (k / steps) * 2 * e.halfSize[w];
+                if (!inside(p.x, p.y, p.z)) miss.push(`edge ${w} (${su},${st}) at ${p[w].toFixed(3)}`);
+              }
+            }
+          }
+        }
+        // All eight corners.
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              if (!inside(e.center.x + sx * hx, e.center.y + sy * hy, e.center.z + sz * hz)) miss.push(`corner ${sx},${sy},${sz}`);
+            }
           }
         }
         expect(miss).toEqual([]);
       });
 
-      it('a segment entering the engine block through the front, a side or the top always touches a zone at the entry', () => {
+      it('a segment entering the engine block through the front, a side or the top (edges and corners included) always touches a zone at the entry', () => {
         const rng = createRng(77);
         const { zones } = target.hitTarget;
         const worldBox = toWorldBox(engine, v.x, v.z, v.yaw, groundY);
         let checked = 0;
-        for (let k = 0; k < 600; k++) {
-          // From a random direction in the upper half-space, aimed at a random point inside the block.
-          const az = rng() * 2 * Math.PI;
-          const el = (rng() * 70 + 2) * DEG;
-          const aim = {
-            x: worldBox.center.x + (rng() * 2 - 1) * engine.halfSize.x * 0.8,
-            y: worldBox.center.y + (rng() * 2 - 1) * engine.halfSize.y * 0.8,
-            z: worldBox.center.z + (rng() * 2 - 1) * engine.halfSize.z * 0.8,
-          };
-          const from = {
-            x: aim.x + 6 * Math.cos(el) * Math.sin(az),
-            y: aim.y + 6 * Math.sin(el),
-            z: aim.z + 6 * Math.cos(el) * Math.cos(az),
-          };
+        let nearEdge = 0;
+        const check = (from: Vec3, aim: Vec3, label: string): void => {
           const u0 = segmentBox(from, aim, worldBox);
-          if (u0 === null || u0 === 0) continue;
+          if (u0 === null || u0 === 0) return;
           const entry = { x: from.x + (aim.x - from.x) * u0, y: from.y + (aim.y - from.y) * u0, z: from.z + (aim.z - from.z) * u0 };
           const l = localOf(v, groundY, entry);
           const rx = l.x - engine.center.x;
@@ -263,23 +278,51 @@ describe('vehicle targets', () => {
           const onFront = Math.abs(rz - engine.halfSize.z) < eps;
           const onSide = Math.abs(Math.abs(rx) - engine.halfSize.x) < eps;
           const onTop = Math.abs(ry - engine.halfSize.y) < eps;
-          // Entry faces that must be covered (the back and the bottom are not), at least 3 cm from the face's edges.
-          const away = (a: number, h: number): boolean => Math.abs(a) <= h - 0.03;
-          const ok =
-            (onFront && away(rx, engine.halfSize.x) && away(ry, engine.halfSize.y)) ||
-            (onSide && away(ry, engine.halfSize.y) && away(rz, engine.halfSize.z)) ||
-            (onTop && away(rx, engine.halfSize.x) && away(rz, engine.halfSize.z));
-          if (!ok) continue;
+          // The entry point lies on a covered face: the front, a side or the top (the back and the bottom are not covered).
+          if (!(onFront || onSide || onTop)) return;
           checked++;
+          const margin = Math.min(engine.halfSize.x - Math.abs(rx), engine.halfSize.y - Math.abs(ry), engine.halfSize.z - Math.abs(rz));
+          if (margin < 0.03) nearEdge++;
           let uMin: number | null = null;
           for (const z of zones) {
             const u = segmentSphere(from, aim, z.center, z.radius);
             if (u !== null && (uMin === null || u < uMin)) uMin = u;
           }
-          expect(uMin, `ray ${k} slipped through`).not.toBeNull();
+          expect(uMin, `${label} slipped through`).not.toBeNull();
           expect(uMin as number).toBeLessThanOrEqual(u0 + 1e-9);
+        };
+        const fromAbove = (aim: Vec3, az: number, el: number): Vec3 => ({
+          x: aim.x + 6 * Math.cos(el) * Math.sin(az),
+          y: aim.y + 6 * Math.sin(el),
+          z: aim.z + 6 * Math.cos(el) * Math.cos(az),
+        });
+        for (let k = 0; k < 600; k++) {
+          // From a random direction in the upper half-space, aimed at a random point inside the block.
+          const az = rng() * 2 * Math.PI;
+          const el = (rng() * 70 + 2) * DEG;
+          const aim = {
+            x: worldBox.center.x + (rng() * 2 - 1) * engine.halfSize.x * 0.8,
+            y: worldBox.center.y + (rng() * 2 - 1) * engine.halfSize.y * 0.8,
+            z: worldBox.center.z + (rng() * 2 - 1) * engine.halfSize.z * 0.8,
+          };
+          check(fromAbove(aim, az, el), aim, `ray ${k}`);
         }
-        expect(checked).toBeGreaterThan(150);
+        // Aimed just inside an edge or a corner (0 to 3 cm in, on two or three axes): entries land in the edge bands.
+        for (let k = 0; k < 1500; k++) {
+          const az = rng() * 2 * Math.PI;
+          const el = (rng() * 70 + 2) * DEG;
+          const local = { x: 0, y: 0, z: 0 };
+          const bandAxes = 2 + (rng() < 0.3 ? 1 : 0);
+          const order = (['x', 'y', 'z'] as const).slice().sort(() => rng() - 0.5);
+          order.forEach((axis, i) => {
+            const half = engine.halfSize[axis];
+            local[axis] = i < bandAxes ? (rng() < 0.5 ? -1 : 1) * (half - rng() * 0.03) : (rng() * 2 - 1) * half * 0.9;
+          });
+          const aim = toWorldBox({ center: { x: engine.center.x + local.x, y: engine.center.y + local.y, z: engine.center.z + local.z }, halfSize: { x: 0, y: 0, z: 0 }, part: 'engine' }, v.x, v.z, v.yaw, groundY).center;
+          check(fromAbove(aim, az, el), aim, `edge ray ${k}`);
+        }
+        expect(checked).toBeGreaterThan(900);
+        expect(nearEdge).toBeGreaterThan(300); // the edge bands really were exercised
       });
 
       it('disable() is idempotent: the engine burns out and a smoke column appears', () => {
@@ -335,6 +378,58 @@ describe('vehicle targets', () => {
       }
     }
 
+    // Regression: bullets used to slip through the 1-2.5 cm bands along the edges of the engine faces.
+    describe('shots at the edge bands of the engine block register the engine', () => {
+      const expectEngine = (v: VehicleTargetPlacement, local: Vec3, label: string): void => {
+        const g = groundAt(v.x, v.z);
+        const t = createVehicleTarget(v, g, 'desert');
+        const events = shootAtPoint(worldOf(v, g, local.x, local.y, local.z), [t.hitTarget], t.obstacles);
+        expect(events, label).toHaveLength(1);
+        const e = events[0];
+        expect(e.kind, label).toBe('target');
+        if (e.kind === 'target') expect(e.zone, label).toBe('engine');
+      };
+
+      it('jeep at 44 degrees yaw: the front face 1 cm (and 0.2 to 2.5 cm) from the side edge', () => {
+        const { engine } = vehicleTargetBoxes('jeep');
+        const front = engine.center.z + engine.halfSize.z;
+        for (const yawDeg of [44, -44]) {
+          for (const side of [-1, 1]) {
+            for (const inset of [0.002, 0.01, 0.012, 0.025]) {
+              const v = place('jeep', 0, -300, yawDeg * DEG);
+              expectEngine(v, { x: side * (engine.halfSize.x - inset), y: engine.center.y, z: front }, `yaw ${yawDeg} side ${side} inset ${inset}`);
+            }
+          }
+        }
+      });
+
+      it('jeep: the front-top edge and the front corners', () => {
+        const { engine } = vehicleTargetBoxes('jeep');
+        const front = engine.center.z + engine.halfSize.z;
+        const top = engine.center.y + engine.halfSize.y;
+        const v = place('jeep', 0, -300, 0.2);
+        expectEngine(v, { x: 0.1, y: top - 0.004, z: front }, 'front-top edge');
+        expectEngine(v, { x: engine.halfSize.x - 0.005, y: top - 0.005, z: front }, 'front-top corner');
+        expectEngine(v, { x: -(engine.halfSize.x - 0.005), y: top - 0.005, z: front }, 'front-top corner, other side');
+      });
+
+      it('truck: the back edge of a side face (next to the cab), shot obliquely from the front side', () => {
+        const { engine } = vehicleTargetBoxes('truck');
+        const back = engine.center.z - engine.halfSize.z;
+        for (const [yawDeg, side] of [
+          [-60, 1],
+          [-45, 1],
+          [60, -1],
+          [45, -1],
+        ] as const) {
+          for (const inset of [0, 0.005, 0.01, 0.02]) {
+            const v = place('truck', 0, -300, yawDeg * DEG);
+            expectEngine(v, { x: side * engine.halfSize.x, y: engine.center.y, z: back + inset }, `yaw ${yawDeg} inset ${inset}`);
+          }
+        }
+      });
+    });
+
     it('truck: a shot at the cab (above the engine) is an obstacle hit on metal', () => {
       const v = place('truck', 0, -300, 0);
       const g = groundAt(0, -300);
@@ -360,6 +455,111 @@ describe('vehicle targets', () => {
         if (events[0].kind === 'obstacle') expect(events[0].material).toBe('metal');
       }
     });
+  });
+});
+
+describe('dispose', () => {
+  const placement: VehicleTargetPlacement = { id: 'v-d', kind: 'truck', x: 0, z: -300, yaw: 0.3, range: 300 };
+  const ground = terrainHeight(0, -300);
+
+  /** Counts 'dispose' events of a material or texture. */
+  const watch = (target: THREE.EventDispatcher<{ dispose: object }>, counter: { n: number }): void => {
+    target.addEventListener('dispose', () => counter.n++);
+  };
+  const sharedMaterials = (group: THREE.Group): THREE.Material[] => {
+    const out = new Set<THREE.Material>();
+    group.traverse((o) => {
+      if (!(o as THREE.Mesh).isMesh) return; // the smoke sprites are the vehicle's own, not shared
+      out.add((o as THREE.Mesh).material as THREE.Material);
+    });
+    return [...out];
+  };
+
+  it('VehicleTarget.dispose() frees the smoke (sprite materials and texture) but not the shared geometry and materials', () => {
+    const t = createVehicleTarget(placement, ground, 'desert');
+    t.disable();
+    const anchor = t.group.children.find((c) => c.name === 'smoke-anchor') as THREE.Group;
+    expect(anchor).toBeDefined();
+    const sprites = [...anchor.children[0].children] as THREE.Sprite[];
+    expect(sprites.length).toBeGreaterThan(0);
+    const spriteCount = { n: 0 };
+    const textureCount = { n: 0 };
+    for (const s of sprites) watch((s.material as THREE.SpriteMaterial) as unknown as THREE.EventDispatcher<{ dispose: object }>, spriteCount);
+    watch(((sprites[0].material as THREE.SpriteMaterial).map as THREE.Texture) as unknown as THREE.EventDispatcher<{ dispose: object }>, textureCount);
+    const sharedCount = { n: 0 };
+    const geometryCount = { n: 0 };
+    for (const m of sharedMaterials(t.group)) watch(m as unknown as THREE.EventDispatcher<{ dispose: object }>, sharedCount);
+    t.group.traverse((o) => {
+      const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+      if (g) watch(g as unknown as THREE.EventDispatcher<{ dispose: object }>, geometryCount);
+    });
+
+    t.dispose();
+    expect(spriteCount.n).toBe(sprites.length);
+    expect(textureCount.n).toBe(1);
+    expect(sharedCount.n).toBe(0);
+    expect(geometryCount.n).toBe(0);
+    expect(t.group.children.some((c) => c.name === 'smoke-anchor')).toBe(false);
+    // Still usable and harmless afterwards: no smoke comes back, nothing throws.
+    t.update(0.1);
+    t.disable();
+    expect(t.disabled).toBe(true);
+    expect(t.group.children.some((c) => c.name === 'smoke-anchor')).toBe(false);
+    expect(t.hitTarget.zones.length).toBeGreaterThan(0);
+  });
+
+  it('can be called twice, and before disable(), without throwing or freeing anything twice', () => {
+    const early = createVehicleTarget(placement, ground, 'arctic');
+    expect(() => {
+      early.dispose();
+      early.dispose();
+    }).not.toThrow();
+    expect(() => early.update(0.1)).not.toThrow();
+
+    const t = createVehicleTarget(placement, ground, 'valley');
+    t.disable();
+    const sprite = (t.group.children.find((c) => c.name === 'smoke-anchor') as THREE.Group).children[0].children[0] as THREE.Sprite;
+    const count = { n: 0 };
+    watch(sprite.material as unknown as THREE.EventDispatcher<{ dispose: object }>, count);
+    t.dispose();
+    t.dispose();
+    expect(count.n).toBe(1);
+  });
+
+  it('SmokeColumn.dispose() is idempotent and stops the column', () => {
+    const smoke = new SmokeColumn({ rng: createRng(1) });
+    const sprites = smoke.group.children as THREE.Sprite[];
+    expect(sprites.length).toBeGreaterThan(0);
+    smoke.dispose();
+    smoke.dispose();
+    expect(() => smoke.update(0.1)).not.toThrow();
+  });
+
+  it('SparkSystem.dispose() frees the buffers, material and texture once and is safe to repeat; later spawns do nothing', () => {
+    const sparks = new SparkSystem(createRng(2));
+    const points = sparks.group.children[0] as THREE.Points;
+    const material = points.material as THREE.PointsMaterial;
+    const geometryCount = { n: 0 };
+    const materialCount = { n: 0 };
+    const textureCount = { n: 0 };
+    watch(points.geometry as unknown as THREE.EventDispatcher<{ dispose: object }>, geometryCount);
+    watch(material as unknown as THREE.EventDispatcher<{ dispose: object }>, materialCount);
+    watch(material.map as unknown as THREE.EventDispatcher<{ dispose: object }>, textureCount);
+    sparks.dispose();
+    sparks.dispose();
+    expect(geometryCount.n).toBe(1);
+    expect(materialCount.n).toBe(1);
+    expect(textureCount.n).toBe(1);
+    expect(() => {
+      sparks.spawn({ x: 0, y: 1, z: -50 });
+      sparks.update(0.1);
+    }).not.toThrow();
+
+    const early = new SparkSystem();
+    expect(() => {
+      early.dispose();
+      early.dispose();
+    }).not.toThrow();
   });
 });
 

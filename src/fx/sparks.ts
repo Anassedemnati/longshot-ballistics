@@ -32,8 +32,12 @@ export class SparkSystem {
   private readonly lifetimes = new Float32Array(MAX_SPARKS);
   private readonly positionAttribute: THREE.BufferAttribute;
   private readonly colorAttribute: THREE.BufferAttribute;
+  private readonly points: THREE.Points;
+  private readonly material: THREE.PointsMaterial;
+  private readonly texture: THREE.Texture;
   private next = 0;
   private alive = 0;
+  private disposed = false;
 
   constructor(private readonly rng: () => number = Math.random) {
     this.positionAttribute = new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage);
@@ -41,24 +45,27 @@ export class SparkSystem {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', this.positionAttribute);
     geometry.setAttribute('color', this.colorAttribute);
+    this.texture = makeBlobTexture();
     const material = new THREE.PointsMaterial({
       size: POINT_SIZE_PX,
       sizeAttenuation: false,
-      map: makeBlobTexture(),
+      map: this.texture,
       vertexColors: true,
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       fog: false, // haze would swallow a spark at 1.5 km
     });
-    const points = new THREE.Points(geometry, material);
-    points.frustumCulled = false; // the buffer is rewritten every frame; its bounding sphere is never valid
-    points.name = 'sparks';
-    this.group.add(points);
+    this.material = material;
+    this.points = new THREE.Points(geometry, material);
+    this.points.frustumCulled = false; // the buffer is rewritten every frame; its bounding sphere is never valid
+    this.points.name = 'sparks';
+    this.group.add(this.points);
   }
 
   /** Throw a burst of sparks from a world position (the impact point). */
   spawn(p: Vec3): void {
+    if (this.disposed) return;
     const rng = this.rng;
     for (let n = 0; n < SPARKS_PER_HIT; n++) {
       const i = this.next;
@@ -88,7 +95,7 @@ export class SparkSystem {
 
   /** Advance every spark by frameDt seconds. */
   update(frameDt: number): void {
-    if (this.alive === 0 || !Number.isFinite(frameDt) || frameDt <= 0) return;
+    if (this.disposed || this.alive === 0 || !Number.isFinite(frameDt) || frameDt <= 0) return;
     for (let i = 0; i < MAX_SPARKS; i++) {
       const life = this.lifetimes[i];
       if (life === 0) continue;
@@ -115,5 +122,15 @@ export class SparkSystem {
     }
     this.positionAttribute.needsUpdate = true;
     this.colorAttribute.needsUpdate = true;
+  }
+
+  /** Free the geometry, material and texture and empty the group (the owner calls this when the mission is torn down). Safe to repeat; spawn and update do nothing afterwards. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.points.geometry.dispose();
+    this.material.dispose();
+    this.texture.dispose();
+    this.group.clear();
   }
 }
