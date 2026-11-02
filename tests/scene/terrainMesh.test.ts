@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ThemeId } from '../../src/mission/themes';
+import { SKY_LOOKS, sunDirectionOf } from '../../src/scene/sky';
 import { buildTerrainGeometry, terrainGridAxes } from '../../src/scene/terrain';
 import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE, createTerrainField, sectorDistance } from '../../src/scene/terrainField';
 import type { TerrainField } from '../../src/scene/terrainField';
@@ -135,27 +136,56 @@ describe('terrain mesh baked lighting', () => {
     return { bake, sunMin, sunMax, aoMin, aoMax, shadedShare: shaded / bake.count };
   };
 
+  /** The sun of the sky and the shadow light: the bake must be cast for this one. */
+  const realSun = (theme: ThemeId) => sunDirectionOf(SKY_LOOKS[theme]);
+
   for (const theme of THEME_IDS) {
-    it(`${theme}: stores sun visibility and ambient occlusion per vertex, in 0..1, with the walls casting shadows`, { timeout: 30_000 }, () => {
+    it(`${theme}: stores sun visibility and ambient occlusion per vertex, in 0..1, for the theme's own sun`, { timeout: 30_000 }, () => {
       const { xs, zs } = terrainGridAxes();
-      const geometry = buildTerrainGeometry(createTerrainField(theme, 1));
-      const { bake, sunMin, sunMax, aoMin, aoMax, shadedShare } = stats(geometry);
+      const geometry = buildTerrainGeometry(createTerrainField(theme, 1), realSun(theme));
+      const { bake, sunMin, sunMax, aoMin, aoMax } = stats(geometry);
       expect(bake.itemSize).toBe(2);
       expect(bake.count).toBe(xs.length * zs.length);
       expect(sunMin).toBeGreaterThanOrEqual(0);
       expect(sunMax).toBeLessThanOrEqual(1);
       expect(aoMin).toBeGreaterThanOrEqual(0);
       expect(aoMax).toBeLessThanOrEqual(1);
-      // Both the walls' shade and the open sun are there; the valley's floor is mostly in the sun for the clear-sky valley sun.
-      expect(sunMin).toBeLessThan(0.05);
-      expect(sunMax).toBeGreaterThan(0.99);
-      expect(shadedShare).toBeGreaterThan(0.02);
-      expect(shadedShare).toBeLessThan(0.7);
       // Gullies and wall feet are occluded, open ground and ridges are not.
       expect(aoMin).toBeLessThan(0.75);
       expect(aoMax).toBeGreaterThan(0.99);
     });
+
+    it(`${theme}: the default bake is the sky's sun`, { timeout: 30_000 }, () => {
+      const field = createTerrainField(theme, 1);
+      const byDefault = buildTerrainGeometry(field).getAttribute('bake');
+      const explicit = buildTerrainGeometry(field, realSun(theme)).getAttribute('bake');
+      for (let k = 0; k < byDefault.count; k += 313) expect(byDefault.getX(k)).toBe(explicit.getX(k));
+    });
   }
+
+  for (const theme of ['desert', 'arctic'] as const) {
+    it(`${theme}: a low sun (${SKY_LOOKS[theme].sunElevationDeg} deg) has the walls throw their shade across the floor, and the open ground stays sunlit`, { timeout: 30_000 }, () => {
+      const { sunMin, sunMax, shadedShare } = stats(buildTerrainGeometry(createTerrainField(theme, 1), realSun(theme)));
+      expect(sunMin).toBeLessThan(0.05);
+      expect(sunMax).toBeGreaterThan(0.99);
+      expect(shadedShare).toBeGreaterThan(0.02);
+      expect(shadedShare).toBeLessThan(0.7);
+    });
+  }
+
+  it('valley: the 48 degree sun stands above the steepest wall slope, so the walls cast none; the same walls shade the floor under a sun at 24 degrees (the earlier valley sun) or lower', { timeout: 60_000 }, () => {
+    const field = createTerrainField('valley', 1);
+    const look = SKY_LOOKS.valley;
+    expect(look.sunElevationDeg).toBeGreaterThanOrEqual(45); // the picture's sun: if this moves, the expectations below must follow
+    const high = stats(buildTerrainGeometry(field, realSun('valley')));
+    expect(high.sunMin).toBeGreaterThan(0.95); // lit everywhere: the valley carries the baked occlusion only
+    expect(high.aoMin).toBeLessThan(0.75);
+    const low = stats(buildTerrainGeometry(field, sunDirectionOf({ ...look, sunElevationDeg: 24 })));
+    expect(low.sunMin).toBeLessThan(0.05);
+    expect(low.sunMax).toBeGreaterThan(0.99);
+    expect(low.shadedShare).toBeGreaterThan(0.02);
+    expect(low.shadedShare).toBeLessThan(0.7);
+  });
 
   it('follows the sun it is given: an overhead sun shades nothing, a sun below the horizon everything outside the sector (inside it the shade is softened), and the AO does not depend on it', { timeout: 30_000 }, () => {
     const field = createTerrainField('desert', 1);

@@ -120,9 +120,10 @@ export function buildWorld(
 ): World {
   const { field, layout } = plan;
   const scene = new THREE.Scene();
-  const { sun } = createSky(scene, config.theme);
+  const { sun, sunDirection } = createSky(scene, config.theme);
   const shadow = createShadowLight(scene, config.theme, sun);
-  scene.add(createTerrainMesh(field, opts.maxAnisotropy));
+  // The terrain's baked wall shadows are cast for the very sun the sky and the shadow light use (the HDRI is turned to match it).
+  scene.add(createTerrainMesh(field, opts.maxAnisotropy, sunDirection));
   scene.add(createRocks(field));
   // Pebbles (and grass in the valley): visual only, kept off the lanes, the props and every target, enemy snipers included.
   scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers).group);
