@@ -480,6 +480,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     world.shadow.setEvery(settings.shadowEvery);
     post.dispose();
     post = buildPost();
+    rifleModel.setFlashBloom(post.bloom !== null); // an HDR flash needs a bloom pass to take it
     applyResolution();
   }
 

@@ -83,6 +83,19 @@ describe('the rifle lit by the world', () => {
     expect(quiet.flashGain).toBe(0);
   });
 
+  it('setFlashBloom follows a rebuilt chain: the HDR gain back on with a bloom pass, off without; nothing before the world\'s light is taken', () => {
+    const rifle = new FirstPersonRifle('308');
+    rifle.setFlashBloom(true);
+    expect(rifle.flashGain).toBe(1); // still the stand-in light on the direct path
+    rifle.lightFrom(hdriWorld('desert').scene);
+    expect(rifle.flashGain).toBe(FLASH_HDR_GAIN);
+    rifle.setFlashBloom(false); // the quality level dropped: no bloom pass any more
+    expect(rifle.flashGain).toBe(1);
+    rifle.setFlashBloom(true);
+    expect(rifle.flashGain).toBe(FLASH_HDR_GAIN);
+    expect(() => new FirstPersonRifle('308', true).setFlashBloom(true)).not.toThrow(); // suppressed: no flash
+  });
+
   it('orient turns the sun and the environment against the view: what the world has in direction d, the rifle scene has in q^-1 d', () => {
     const yaw = 0.7;
     const theme = 'desert';

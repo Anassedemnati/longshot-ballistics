@@ -529,6 +529,14 @@ export class FirstPersonRifle {
     return true;
   }
 
+  /**
+   * The post chain was rebuilt (a quality change): tell the rifle whether the new one has a bloom pass. An HDR flash without
+   * one is a white blob, so the gain drops back to 1; with one it is `FLASH_HDR_GAIN` again. Only in the world's light.
+   */
+  setFlashBloom(bloom: boolean): void {
+    if (this.worldLit) this.flash?.setGain(bloom ? FLASH_HDR_GAIN : 1);
+  }
+
   /** The muzzle flash's colour gain (1 on the direct path, `FLASH_HDR_GAIN` in the post chain; 0 for a suppressed rifle, which has no flash). */
   get flashGain(): number {
     return this.flash ? this.flash.gain : 0;
