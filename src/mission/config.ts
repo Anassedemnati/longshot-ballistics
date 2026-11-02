@@ -5,6 +5,9 @@ import type { ThemeId } from './themes';
 
 export type Density = 'none' | 'few' | 'many';
 
+/** Where the shooter lies (spec B.2): the valley floor, a rocky ridge or a mountain overlook. */
+export type FiringPosition = 'valley' | 'ridge' | 'mountain';
+
 /** Everything the start menu configures for one mission (spec A.2), plus the layout seed. */
 export interface MissionConfig {
   theme: ThemeId;
@@ -23,6 +26,14 @@ export interface MissionConfig {
   vehicles: Density;
   /** Unsigned 32-bit integer; the same config + seed gives the same layout. */
   seed: number;
+  /** Where the shooter lies. */
+  position: FiringPosition;
+  /** A suppressor on the rifle: quieter shots, no flash, slower detection. */
+  suppressed: boolean;
+  /** Enemy snipers that fight back, 0 (training, no incoming fire) to 3. */
+  enemySnipers: number;
+  /** Aim assists (trajectory preview, aim marker, spotter calls) are available. */
+  assists: boolean;
 }
 
 export const MISSION_LIMITS = {
@@ -32,6 +43,7 @@ export const MISSION_LIMITS = {
   soldiersMax: 10,
   vehicleTargetsMax: 3,
   windMaxMps: 12,
+  enemySnipers: { min: 0, max: 3 },
 } as const;
 
 export const DEFAULT_MISSION: MissionConfig = {
@@ -46,11 +58,16 @@ export const DEFAULT_MISSION: MissionConfig = {
   buildings: 'few',
   vehicles: 'few',
   seed: 1,
+  position: 'ridge',
+  suppressed: false,
+  enemySnipers: 1,
+  assists: false,
 };
 
 const THEME_IDS: readonly ThemeId[] = ['desert', 'arctic', 'valley'];
 const RIFLES: readonly MissionConfig['rifle'][] = ['308', '338'];
 const DENSITIES: readonly Density[] = ['none', 'few', 'many'];
+const POSITIONS: readonly FiringPosition[] = ['valley', 'ridge', 'mountain'];
 
 /** The value if it is a finite number, otherwise the fallback. */
 function num(v: unknown, fallback: number): number {
@@ -62,6 +79,11 @@ function oneOf<T extends string>(v: unknown, options: readonly T[], fallback: T)
   return options.find((o) => o === v) ?? fallback;
 }
 
+/** The value if it is a boolean, otherwise the fallback. */
+function bool(v: unknown, fallback: boolean): boolean {
+  return typeof v === 'boolean' ? v : fallback;
+}
+
 /** Wrap any integer clock position into 1..12. */
 function wrapClock(n: number): number {
   return ((((n - 1) % 12) + 12) % 12) + 1;
@@ -69,7 +91,7 @@ function wrapClock(n: number): number {
 
 /**
  * Fill defaults, clamp to the menu limits and quantise (integer metres and counts, 0.1 m/s wind,
- * integer clock wrapped into 1..12, uint32 seed). Bad values fall back to the defaults, never NaN.
+ * integer clock wrapped into 1..12, uint32 seed, 0..3 enemy snipers). Bad values fall back to the defaults, never NaN.
  * Idempotent: clampMission(clampMission(x)) equals clampMission(x).
  */
 export function clampMission(c: Partial<MissionConfig>): MissionConfig {
@@ -92,17 +114,29 @@ export function clampMission(c: Partial<MissionConfig>): MissionConfig {
     buildings: oneOf(c.buildings, DENSITIES, d.buildings),
     vehicles: oneOf(c.vehicles, DENSITIES, d.vehicles),
     seed: Math.floor(num(c.seed, d.seed)) >>> 0,
+    position: oneOf(c.position, POSITIONS, d.position),
+    suppressed: bool(c.suppressed, d.suppressed),
+    enemySnipers: Math.min(
+      L.enemySnipers.max,
+      Math.max(L.enemySnipers.min, Math.round(num(c.enemySnipers, d.enemySnipers))),
+    ),
+    assists: bool(c.assists, d.assists),
   };
 }
 
 // --- URL codec -------------------------------------------------------------------------------
-// Format: `v1.<theme>.<rangeMin>.<rangeMax>.<soldiers>.<vehicleTargets>.<windTenths>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>`
-// e.g. `v1.d.600.1000.3.0.45.9.308.f.f.1`. Letters, digits and dots only, so it is safe in a URL unescaped.
+// Format: `v2.<theme>.<rangeMin>.<rangeMax>.<soldiers>.<vehicleTargets>.<windTenths>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>`
+// e.g. `v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0`. Letters, digits and dots only, so it is safe in a URL unescaped.
+// `v1.` links (the first eleven fields only) still decode: ridge, unsuppressed, no enemy snipers, no assists.
 
-const CODEC_VERSION = 'v1';
+const CODEC_VERSION = 'v2';
+const V1_CODEC_VERSION = 'v1';
 const THEME_CODE: Record<ThemeId, string> = { desert: 'd', arctic: 'a', valley: 'v' };
 const DENSITY_CODE: Record<Density, string> = { none: 'n', few: 'f', many: 'm' };
-const FIELD_COUNT = 11;
+const POSITION_CODE: Record<FiringPosition, string> = { valley: 'v', ridge: 'r', mountain: 'm' };
+/** Fields after the version in a v1 link; a v2 link adds four more. */
+const V1_FIELD_COUNT = 11;
+const V2_FIELD_COUNT = 15;
 
 /** Reverse lookup of a one-letter code; undefined for anything unknown. */
 function fromCode<T extends string>(table: Record<T, string>, code: string): T | undefined {
@@ -114,6 +148,11 @@ function field(raw: string): number | undefined {
   if (raw.trim() === '') return undefined;
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** A 0/1 flag from a field, or undefined for anything else. */
+function flag(raw: string): boolean | undefined {
+  return raw === '1' ? true : raw === '0' ? false : undefined;
 }
 
 /** Compact, URL-safe, versioned text for a mission. */
@@ -132,19 +171,28 @@ export function encodeMission(c: MissionConfig): string {
     DENSITY_CODE[m.buildings],
     DENSITY_CODE[m.vehicles],
     m.seed,
+    POSITION_CODE[m.position],
+    m.suppressed ? 1 : 0,
+    m.enemySnipers,
+    m.assists ? 1 : 0,
   ].join('.');
 }
 
-/** The mission an `encodeMission` string describes (clamped), or null if it cannot be read. Never throws. */
+/**
+ * The mission an `encodeMission` string describes (clamped), or null if it cannot be read. Never throws.
+ * Reads the current `v2.` codec and the older `v1.` one (which has no position, suppressor, snipers or assists).
+ */
 export function decodeMission(s: string): MissionConfig | null {
   if (typeof s !== 'string') return null;
   const parts = s.split('.');
-  if (parts.length !== FIELD_COUNT + 1 || parts[0] !== CODEC_VERSION) return null;
-  const [, theme, rangeMin, rangeMax, soldiers, vehicleTargets, windTenths, clock, rifle, buildings, vehicles, seed] =
-    parts as [string, string, string, string, string, string, string, string, string, string, string, string];
+  const isV1 = parts[0] === V1_CODEC_VERSION;
+  if (!isV1 && parts[0] !== CODEC_VERSION) return null;
+  if (parts.length !== (isV1 ? V1_FIELD_COUNT : V2_FIELD_COUNT) + 1) return null;
+  const [, theme, rangeMin, rangeMax, soldiers, vehicleTargets, windTenths, clock, rifle, buildings, vehicles, seed, position, suppressed, snipers, assists] =
+    parts as [string, string, string, string, string, string, string, string, string, string, string, string, string?, string?, string?, string?];
 
   const wind = field(windTenths);
-  return clampMission({
+  const base: Partial<MissionConfig> = {
     theme: fromCode(THEME_CODE, theme),
     rangeMin: field(rangeMin),
     rangeMax: field(rangeMax),
@@ -156,6 +204,17 @@ export function decodeMission(s: string): MissionConfig | null {
     buildings: fromCode(DENSITY_CODE, buildings),
     vehicles: fromCode(DENSITY_CODE, vehicles),
     seed: field(seed),
+  };
+  if (isV1) {
+    // A v1 link predates the new options: they are off, whatever today's menu defaults are.
+    return clampMission({ ...base, position: 'ridge', suppressed: false, enemySnipers: 0, assists: false });
+  }
+  return clampMission({
+    ...base,
+    position: fromCode(POSITION_CODE, position ?? ''),
+    suppressed: flag(suppressed ?? ''),
+    enemySnipers: field(snipers ?? ''),
+    assists: flag(assists ?? ''),
   });
 }
 
@@ -175,6 +234,11 @@ export function randomMission(rng: Rng): MissionConfig {
     buildings: DENSITIES[randInt(rng, 0, DENSITIES.length - 1)],
     vehicles: DENSITIES[randInt(rng, 0, DENSITIES.length - 1)],
     seed: randInt(rng, 1, 0xffffffff),
+    // Drawn after the older fields, so a given rng still yields the same first eleven.
+    position: POSITIONS[randInt(rng, 0, POSITIONS.length - 1)],
+    suppressed: randInt(rng, 0, 1) === 1,
+    enemySnipers: randInt(rng, MISSION_LIMITS.enemySnipers.min, MISSION_LIMITS.enemySnipers.max),
+    assists: randInt(rng, 0, 1) === 1,
   });
 }
 
@@ -221,7 +285,7 @@ export type Route =
 const LEGACY_WIND_MPS = 4.4704;
 const LEGACY_RANGE_M = 800;
 
-/** The mission a legacy `?range=&wind=&rifle=&air=` URL stands for: one soldier, no props, desert. */
+/** The mission a legacy `?range=&wind=&rifle=&air=` URL stands for: one soldier, no props, desert, ridge, no snipers, no assists. */
 function legacyMission(params: URLSearchParams): MissionConfig {
   const range = field(params.get('range') ?? '') ?? LEGACY_RANGE_M;
   const wind = field(params.get('wind') ?? '') ?? LEGACY_WIND_MPS;
@@ -238,6 +302,10 @@ function legacyMission(params: URLSearchParams): MissionConfig {
     buildings: 'none',
     vehicles: 'none',
     seed: 1,
+    position: 'ridge',
+    suppressed: false,
+    enemySnipers: 0,
+    assists: false,
   });
 }
 

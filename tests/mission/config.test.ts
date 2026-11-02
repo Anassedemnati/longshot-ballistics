@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MISSION,
+  MISSION_LIMITS,
   clampMission,
   decodeMission,
   encodeMission,
@@ -36,7 +37,15 @@ describe('DEFAULT_MISSION', () => {
       buildings: 'few',
       vehicles: 'few',
       seed: 1,
+      position: 'ridge',
+      suppressed: false,
+      enemySnipers: 1,
+      assists: false,
     });
+  });
+
+  it('allows 0 to 3 enemy snipers', () => {
+    expect(MISSION_LIMITS.enemySnipers).toEqual({ min: 0, max: 3 });
   });
 });
 
@@ -123,6 +132,28 @@ describe('clampMission', () => {
     expect(clampMission({ vehicleTargets: -2 }).vehicleTargets).toBe(0);
   });
 
+  it('clamps the enemy snipers to 0..3 and rounds them', () => {
+    expect(clampMission({ enemySnipers: -1 }).enemySnipers).toBe(0);
+    expect(clampMission({ enemySnipers: 9 }).enemySnipers).toBe(3);
+    expect(clampMission({ enemySnipers: 0 }).enemySnipers).toBe(0);
+    expect(clampMission({ enemySnipers: 3 }).enemySnipers).toBe(3);
+    expect(clampMission({ enemySnipers: 1.6 }).enemySnipers).toBe(2);
+    expect(clampMission({ enemySnipers: NaN }).enemySnipers).toBe(DEFAULT_MISSION.enemySnipers);
+    expect(clampMission({ enemySnipers: Infinity }).enemySnipers).toBe(DEFAULT_MISSION.enemySnipers);
+    expect(Object.is(clampMission({ enemySnipers: -0.3 }).enemySnipers, 0)).toBe(true);
+  });
+
+  it('keeps the position, suppressor and assists, and falls back to their defaults for bad values', () => {
+    const c = clampMission({ position: 'mountain', suppressed: true, assists: true });
+    expect(c.position).toBe('mountain');
+    expect(c.suppressed).toBe(true);
+    expect(c.assists).toBe(true);
+    const bad = clampMission({ position: 'moon', suppressed: 'yes', assists: 1 } as unknown as Partial<MissionConfig>);
+    expect(bad.position).toBe('ridge');
+    expect(bad.suppressed).toBe(false);
+    expect(bad.assists).toBe(false);
+  });
+
   it('makes the seed an unsigned 32-bit integer', () => {
     expect(clampMission({ seed: 12345.9 }).seed).toBe(12345);
     expect(clampMission({ seed: -1 }).seed).toBe(0xffffffff);
@@ -180,6 +211,26 @@ describe('encodeMission / decodeMission', () => {
     expect(decodeMission(encodeMission(DEFAULT_MISSION))).toEqual(DEFAULT_MISSION);
   });
 
+  it('writes the v2 code: the v1 fields, then position, suppressor, snipers and assists', () => {
+    expect(encodeMission(DEFAULT_MISSION)).toBe('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0');
+    const c: MissionConfig = {
+      ...DEFAULT_MISSION,
+      theme: 'arctic',
+      position: 'mountain',
+      suppressed: true,
+      enemySnipers: 3,
+      assists: true,
+      seed: 77,
+    };
+    expect(encodeMission(c)).toBe('v2.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1');
+    expect(decodeMission('v2.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1')).toEqual(c);
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.v.0.0.0')).toEqual({
+      ...DEFAULT_MISSION,
+      position: 'valley',
+      enemySnipers: 0,
+    });
+  });
+
   it('round-trips 50 random missions', () => {
     const rng = createRng(2024);
     for (let i = 0; i < 50; i++) {
@@ -201,6 +252,10 @@ describe('encodeMission / decodeMission', () => {
       buildings: 'many',
       vehicles: 'none',
       seed: 0xffffffff,
+      position: 'mountain',
+      suppressed: true,
+      enemySnipers: 3,
+      assists: true,
     };
     expect(decodeMission(encodeMission(c))).toEqual(c);
   });
@@ -209,7 +264,7 @@ describe('encodeMission / decodeMission', () => {
     const rng = createRng(5);
     for (let i = 0; i < 50; i++) {
       const s = encodeMission(randomMission(rng));
-      expect(s.startsWith('v1.')).toBe(true);
+      expect(s.startsWith('v2.')).toBe(true);
       expect(s).toMatch(/^[A-Za-z0-9._-]+$/);
       expect(s.length).toBeLessThan(60);
     }
@@ -227,8 +282,12 @@ describe('encodeMission / decodeMission', () => {
       'v1',
       'v1.',
       'v1.d.600',
-      'v2.d.600.1000.3.0.45.9.308.f.f.1',
+      'v2.d.600.1000.3.0.45.9.308.f.f.1', // v2 needs the four new fields too
+      'v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1', // one short
+      'v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.extra',
+      'v1.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0', // v1 never had the new fields
       'v1.d.600.1000.3.0.45.9.308.f.f.1.extra',
+      'v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0',
       '%%%',
       '....',
       'null',
@@ -253,13 +312,56 @@ describe('encodeMission / decodeMission', () => {
       buildings: 'many',
       vehicles: 'none',
       seed: 7,
+      position: 'ridge',
+      suppressed: false,
+      enemySnipers: 0,
+      assists: false,
     });
+  });
+
+  it('clamps the enemy snipers of a v2 code (-1 to 0, 9 to 3)', () => {
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.-1.0')?.enemySnipers).toBe(0);
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.9.0')?.enemySnipers).toBe(3);
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.2.0')?.enemySnipers).toBe(2);
+  });
+
+  it('decodes a known v1 link with the new options off (ridge, unsuppressed, no snipers, no assists)', () => {
+    expect(decodeMission('v1.d.600.1000.3.0.45.9.308.f.f.1')).toEqual({ ...DEFAULT_MISSION, enemySnipers: 0 });
+    expect(decodeMission('v1.v.400.800.4.1.75.3.338.m.n.77')).toEqual({
+      theme: 'valley',
+      rangeMin: 400,
+      rangeMax: 800,
+      soldiers: 4,
+      vehicleTargets: 1,
+      windSpeedMps: 7.5,
+      windClock: 3,
+      rifle: '338',
+      buildings: 'many',
+      vehicles: 'none',
+      seed: 77,
+      position: 'ridge',
+      suppressed: false,
+      enemySnipers: 0,
+      assists: false,
+    });
+  });
+
+  it('turns a v1 link into a v2 code', () => {
+    const c = decodeMission('v1.d.300.300.3.0.0.9.308.n.n.1');
+    expect(c).not.toBeNull();
+    expect(encodeMission(c as MissionConfig)).toBe('v2.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0');
   });
 
   it('uses the default for a missing or unrecognised field', () => {
     // Unknown theme, empty min range / soldiers / seed, non-numeric wind, unknown rifle and densities.
+    // A v1 code has no snipers: its new options are off, not the menu defaults.
     const c = decodeMission('v1.x..900..0.abc.9.999.q.z.');
-    expect(c).toEqual({ ...DEFAULT_MISSION, rangeMax: 900 });
+    expect(c).toEqual({ ...DEFAULT_MISSION, rangeMax: 900, enemySnipers: 0 });
+    // The same for a v2 code, with an unknown position, flags that are not 0/1 and a sniper count out of range.
+    const d = decodeMission('v2.x..900..0.abc.9.999.q.z..q.x.9.2');
+    expect(d).toEqual({ ...DEFAULT_MISSION, rangeMax: 900, enemySnipers: 3 });
+    // Empty new fields fall back to the defaults.
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1....')).toEqual(DEFAULT_MISSION);
   });
 });
 
@@ -278,6 +380,10 @@ describe('randomMission', () => {
     const soldiers = new Set<number>();
     const vehicleTargets = new Set<number>();
     const seeds = new Set<number>();
+    const positions = new Set<string>();
+    const suppressed = new Set<boolean>();
+    const snipers = new Set<number>();
+    const assists = new Set<boolean>();
     for (let i = 0; i < 1000; i++) {
       const c = randomMission(rng);
       themes.add(c.theme);
@@ -288,7 +394,13 @@ describe('randomMission', () => {
       soldiers.add(c.soldiers);
       vehicleTargets.add(c.vehicleTargets);
       seeds.add(c.seed);
+      positions.add(c.position);
+      suppressed.add(c.suppressed);
+      snipers.add(c.enemySnipers);
+      assists.add(c.assists);
 
+      expect(c.enemySnipers).toBeGreaterThanOrEqual(0);
+      expect(c.enemySnipers).toBeLessThanOrEqual(3);
       expect(c.rangeMin).toBeGreaterThanOrEqual(100);
       expect(c.rangeMax).toBeLessThanOrEqual(1500);
       expect(c.rangeMin).toBeLessThanOrEqual(c.rangeMax);
@@ -308,6 +420,10 @@ describe('randomMission', () => {
     expect(soldiers.size).toBe(10);
     expect(vehicleTargets.size).toBe(4);
     expect(seeds.size).toBeGreaterThan(990);
+    expect([...positions].sort()).toEqual(['mountain', 'ridge', 'valley']);
+    expect([...suppressed].sort()).toEqual([false, true]);
+    expect([...snipers].sort()).toEqual([0, 1, 2, 3]);
+    expect([...assists].sort()).toEqual([false, true]);
   });
 
   it('draws a fresh seed each time', () => {
@@ -329,6 +445,14 @@ describe('routeFromSearch', () => {
     expect(r.config).toEqual(DEFAULT_MISSION);
     expect(r.debug).toBe(false);
     expect(r.legacy).toBe(false);
+  });
+
+  it('routes a v1 link to a mission with the new options off', () => {
+    const r = missionRoute(routeFromSearch('?m=v1.d.600.1000.3.0.45.9.308.f.f.1'));
+    expect(r.config).toEqual({ ...DEFAULT_MISSION, enemySnipers: 0 });
+    expect(r.legacy).toBe(false);
+    const menu = menuRoute(routeFromSearch('?last=v1.d.600.1000.3.0.45.9.308.f.f.1'));
+    expect(menu.last).toEqual({ ...DEFAULT_MISSION, enemySnipers: 0 });
   });
 
   it('accepts the query without a leading ?', () => {
@@ -372,6 +496,10 @@ describe('routeFromSearch', () => {
       buildings: 'none',
       vehicles: 'none',
       seed: 1,
+      position: 'ridge',
+      suppressed: false,
+      enemySnipers: 0,
+      assists: false,
     });
   });
 

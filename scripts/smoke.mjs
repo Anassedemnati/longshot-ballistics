@@ -35,13 +35,20 @@ const RESULTS_GAME_S = 1.5;
  * drop there is about 0.45 m. Worked out with the real ballistics for the missions below; a chest aim plus this lands in the vest.
  */
 const HOLD_300M = 0.45;
-/** Missions of the smoke (URL codec in src/mission/config.ts: v1.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>). */
+/**
+ * Missions of the smoke. The URL codec (src/mission/config.ts) writes v2.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>;
+ * the hand-written missions below stay in the older v1 form (the first eleven fields), which must keep working: it decodes
+ * to ridge, unsuppressed, 0 enemy snipers, no assists, and every code the game writes back is v2 (V1_TAIL below).
+ */
 const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
 const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier, no cover (placed like any mission: within 10 degrees of straight ahead)
 const MISSION_MENU_LINK = 'v1.d.300.300.2.0.20.6.308.n.n.7'; // 2 soldiers at 300 m, 2 m/s from behind: settings that differ from the defaults
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
+/** What the game writes for a v1 mission: the same fields, in v2 form, with the new options off. */
+const V1_TAIL = '.r.0.0.0';
+const asV2 = (v1Code) => v1Code.replace(/^v1\./, 'v2.') + V1_TAIL;
 /** The menu's defaults (DEFAULT_MISSION) as a mission code: the menu starts them with a fresh seed, so any seed matches. */
-const MISSION_DEFAULT_RE = /^v1\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+$/;
+const MISSION_DEFAULT_RE = /^v2\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+\.r\.0\.1\.0$/; // ridge, no suppressor, 1 enemy sniper, no assists
 /** The order Tab visits the menu's controls in. */
 const MENU_TAB_ORDER = [
   'radio:theme',
@@ -289,7 +296,7 @@ const missionCode = (page) => new URL(page.url()).searchParams.get('m');
  * the URL, so the debug hook comes up and we wait for it.
  */
 async function clickStart(page, { debug }) {
-  const url = debug ? /\?m=v1\.[^&]+&debug=1$/ : /\?m=v1\.[^&]+$/;
+  const url = debug ? /\?m=v2\.[^&]+&debug=1$/ : /\?m=v2\.[^&]+$/;
   await Promise.all([page.waitForURL(url), page.locator('.menu-start').click()]);
   if (debug) await page.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
   else await page.waitForSelector('.hud');
@@ -393,7 +400,7 @@ async function run() {
     check((await plain.evaluate(() => window.__game)) === undefined, 'window.__game is undefined without ?debug=1');
     // The practice range's HUD Menu link goes to the menu holding the legacy-derived settings; no debug=1 to carry.
     check(
-      (await plain.locator('.hud-menu').getAttribute('href')) === '/?last=v1.d.800.800.1.0.45.9.308.n.n.1',
+      (await plain.locator('.hud-menu').getAttribute('href')) === '/?last=v2.d.800.800.1.0.45.9.308.n.n.1.r.0.0.0',
       'the practice range\'s HUD Menu link points at the menu with its settings (no debug=1)',
     );
     await plain.close();
@@ -551,7 +558,7 @@ async function run() {
     check((await mission.evaluate(() => document.pointerLockElement)) === null, 'the pointer is not locked on the results screen');
     await mission.screenshot({ path: join(OUT_DIR, 'mission-results.png') });
     await mission.waitForLoadState('networkidle'); // leaving while the sound files load would abort them
-    await Promise.all([mission.waitForURL(/\?last=v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1&debug=1$/), mission.locator('.results-menu').click()]);
+    await Promise.all([mission.waitForURL(/\?last=v2\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1\.r\.0\.0\.0&debug=1$/), mission.locator('.results-menu').click()]);
     await mission.waitForSelector('.menu-start');
     await imagesLoaded(mission);
     check((await mission.locator('.menu-start').count()) === 1, 'Menu returns to the start menu with the mission in ?last= (and debug=1 kept)');
@@ -571,8 +578,8 @@ async function run() {
 
     // Start from the pre-filled menu: the same mission with a new seed (debug=1 is carried along, so the hook is up).
     await clickStart(mission, { debug: true });
-    check(/^v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.\d+$/.test(missionCode(mission) ?? ''), `Start runs the pre-filled mission (${missionCode(mission)})`);
-    check(missionCode(mission) !== 'v1.d.300.300.3.0.0.9.308.n.n.1', 'Start rolls a fresh seed');
+    check(/^v2\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.\d+\.r\.0\.0\.0$/.test(missionCode(mission) ?? ''), `Start runs the pre-filled mission (${missionCode(mission)})`);
+    check(missionCode(mission) !== 'v2.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0', 'Start rolls a fresh seed');
     const restartedFrames = await animationFrames(mission, 3);
     check(restartedFrames.frames >= 3, 'the mission started from the menu runs');
     check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'menu start: HUD says "Targets 3/3"');
@@ -716,7 +723,7 @@ async function run() {
 
     // Keyboard only: Enter on the focused Start button starts the default mission (no debug hook without ?debug=1).
     await plainMenu.locator('.menu-start').focus();
-    await Promise.all([plainMenu.waitForURL(/\?m=v1\.[^&]+$/), plainMenu.keyboard.press('Enter')]);
+    await Promise.all([plainMenu.waitForURL(/\?m=v2\.[^&]+$/), plainMenu.keyboard.press('Enter')]);
     await plainMenu.waitForSelector('.hud');
     check(MISSION_DEFAULT_RE.test(missionCode(plainMenu) ?? ''), `Enter on Start runs the default mission (${missionCode(plainMenu)})`);
     const enterFrames = await animationFrames(plainMenu, 3);
@@ -851,7 +858,7 @@ async function run() {
     check(randomLook.distinctAll >= 6, `the random mission canvas is not one colour (${randomLook.distinctAll} distinct sampled colours)`);
 
     const code = missionCode(random);
-    const seed = Number(code.split('.').at(-1));
+    const seed = Number(code.split('.')[11]); // the seed is the eleventh field after the version
     check(Number.isInteger(seed) && seed >= 1 && seed <= 0xffffffff, `Start put a fresh 32-bit seed in the URL (${seed})`);
     await random.goto(`${preview.url}?last=${code}&debug=1`, { waitUntil: 'load' });
     await random.waitForSelector('.menu-start');
@@ -881,7 +888,7 @@ async function run() {
     await backPage.goBack({ waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
     await imagesLoaded(backPage);
-    check(/\?last=v1\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
+    check(/\?last=v2\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+\.r\.0\.1\.0&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
     const { seed: _s2, ...setAfter } = await menuConfig(backPage);
     check(JSON.stringify(setAfter) === JSON.stringify(setBefore), 'Back from the mission: the menu is pre-filled with the settings it started with');
     const afterDom = await menuDom(backPage);
@@ -900,7 +907,7 @@ async function run() {
     await backPlain.goBack({ waitUntil: 'load' });
     await backPlain.waitForSelector('.menu-start');
     await imagesLoaded(backPlain);
-    check(/\?last=v1\.v\.[^&]+$/.test(backPlain.url()), `Back (no debug): ?last= with the valley mission, no debug=1 (${new URL(backPlain.url()).search})`);
+    check(/\?last=v2\.v\.[^&]+$/.test(backPlain.url()), `Back (no debug): ?last= with the valley mission, no debug=1 (${new URL(backPlain.url()).search})`);
     check((await menuDom(backPlain)).theme === 'valley', 'Back (no debug): the menu shows the valley theme the player had picked');
     await backPlain.close();
 
@@ -910,7 +917,7 @@ async function run() {
     await hudPage.waitForSelector('.hud-menu');
     check(await hudPage.locator('.hud-menu').isVisible(), 'the HUD shows a Menu link while the pointer is free');
     check((await hudPage.locator('.hud-menu').textContent()) === 'Menu', 'the HUD link reads "Menu"');
-    check((await hudPage.locator('.hud-menu').getAttribute('href')) === `/?last=${MISSION_MENU_LINK}&debug=1`, 'the HUD Menu link points at the menu with this mission and debug=1');
+    check((await hudPage.locator('.hud-menu').getAttribute('href')) === `/?last=${asV2(MISSION_MENU_LINK)}&debug=1`, 'the HUD Menu link points at the menu with this mission and debug=1');
     await hudPage.screenshot({ path: join(OUT_DIR, 'hud-menu.png') });
     await hudPage.evaluate(() => window.__game.toggleScope()); // the link must not sit over the scope lens
     await animationFrames(hudPage, 3);
@@ -919,7 +926,7 @@ async function run() {
     check(linkBox !== null && scopedLens !== null && linkBox.y >= scopedLens.y + scopedLens.height, 'the Menu link is below the scope lens');
     await hudPage.screenshot({ path: join(OUT_DIR, 'hud-menu-scope.png') });
     await hudPage.waitForLoadState('networkidle');
-    await Promise.all([hudPage.waitForURL(new RegExp(`\\?last=${MISSION_MENU_LINK.replaceAll('.', '\\.')}&debug=1$`)), hudPage.locator('.hud-menu').click()]);
+    await Promise.all([hudPage.waitForURL(new RegExp(`\\?last=${asV2(MISSION_MENU_LINK).replaceAll('.', '\\.')}&debug=1$`)), hudPage.locator('.hud-menu').click()]);
     await hudPage.waitForSelector('.menu-start');
     await imagesLoaded(hudPage);
     const linked = await menuConfig(hudPage);
