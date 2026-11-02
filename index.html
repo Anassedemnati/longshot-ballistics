@@ -28,6 +28,36 @@
         box-shadow: 0 0 0 100vmax #000, inset 0 0 36px 8px rgba(0, 0, 0, 0.55); }
       .scope-reticle { position: absolute; left: 0; top: 0; }
       .hud { z-index: 10; }
+      .hud-panel { padding: 16px 20px; border: 1px solid #e8d4a540; border-left: 3px solid #dfba77; background: linear-gradient(130deg,#182326e8,#18232680); border-radius: 3px; box-shadow: 0 12px 40px #0004; backdrop-filter: blur(12px); }
+      .hud-line { margin: 4px 0; font-weight: 500; letter-spacing: .03em; }
+      .assist-panel { position: fixed; right: 18px; top: 18px; z-index: 12; width: min(300px,40vw); padding: 16px; color: #eaf2ee; background: #152124dd; border: 1px solid #8fb6ad55; border-radius: 4px; font: 12px/1.6 system-ui; backdrop-filter: blur(12px); }
+      .assist-panel small { letter-spacing: .2em; color: #acc7c2; }
+      .mode-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .mode-buttons button { cursor: pointer; background: #ffffff08; border: 1px solid #ffffff30; color: #d5e3df; padding: 7px 9px; border-radius: 3px; text-transform: uppercase; font: 10px system-ui; }
+      .mode-buttons button[aria-pressed="true"] { background: #7debdc; color: #122c29; border-color: #7debdc; }
+      .spotter { margin-bottom: 0; }
+      .aim-marker { position: fixed; z-index: 9; color: #7debdc; transform: translate(-50%,-50%); font: 32px system-ui; text-shadow: 0 0 8px #000; pointer-events: none; }
+      .mission-screen { position: fixed; inset: 0; z-index: 30; display: grid; grid-template-columns: minmax(390px, 1fr) 1fr; overflow: auto; background: #111c20; color: #f3eee3; font: 14px/1.6 system-ui; }
+      .mission-card { padding: clamp(24px,5vw,80px); align-self: center; max-width: 620px; }
+      .mission-card small { color: #ddbd83; letter-spacing: .2em; font-size: 10px; }
+      .mission-card h1 { font-size: clamp(36px,4.8vw,72px); font-weight: 500; line-height: 1.06; letter-spacing: -.045em; margin: 24px 0; }
+      .mission-card p { color: #aeb9b7; max-width: 360px; }
+      .mission-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 32px 0; }
+      .mission-fields label { display: flex; flex-direction: column; gap: 8px; color: #d0d9d4; font-size: 12px; }
+      .mission-fields input, .mission-fields select { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #52605d; border-radius: 3px; padding: 12px; background: #1e2d30; color: #fff; font: 14px system-ui; color-scheme: dark; }
+      .mission-fields span { color: #93a49f; font-size: 10px; }
+      .mission-card button { width: 100%; padding: 16px 20px; border: 0; background: #dfbd82; color: #202a29; cursor: pointer; letter-spacing: .12em; font-weight: 700; text-align: left; }
+      .mission-card button span { float: right; }
+      .mission-card footer { margin-top: 24px; color: #8fa19c; font-size: 11px; line-height: 1.9; }
+      .mission-art { background: linear-gradient(0deg,#111c20 0%,transparent 65%), url('/references/rifle-concept.png') center / cover; border-left: 1px solid #ffffff16; position: relative; }
+      .mission-art span { position: absolute; bottom: 40px; left: 40px; color: #cdbf9f; font-size: 10px; letter-spacing: .2em; }
+      .mission-return { margin-top: 12px; background: transparent; color: #a8bcb6; border: 0; border-bottom: 1px solid #637970; cursor: pointer; padding: 4px 0; }
+      button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #7debdc; outline-offset: 4px; }
+      @media(max-width: 760px) { .mission-screen { grid-template-columns: 1fr; } .mission-art { display:none; } .mission-card { padding: 28px; } }
+      .threat-panel { position: fixed; z-index: 16; bottom: 42px; left: 50%; transform: translateX(-50%); max-width: 90vw; padding: 12px 18px; background: #182325ec; border: 1px solid #c9a16c; color: #ffe0a2; font: 12px/1.5 system-ui; text-align:center; }
+      .cover-mask { position:fixed; inset:0; z-index:14; background: linear-gradient(#161e24c9,#433f34 40%,#242722); pointer-events:none; }
+      .cover-mask::after { content:'IN COVER — Press C to peek'; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:#d6d4bd; font:18px system-ui; }
+      .damage-flash { position:fixed; inset:0; z-index:15; pointer-events:none; box-shadow:inset 0 0 100px 45px #d5471c; opacity:0; }
     </style>
   </head>
   <body>

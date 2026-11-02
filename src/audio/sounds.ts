@@ -203,14 +203,14 @@ function synthShot(s: Stage): void {
 }
 
 /** The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time. */
-export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308'): void {
+export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308', suppressed = false): void {
   const s = stage(e);
   if (!s) return;
   recordingOrSynth(
     e,
     shotClipId(rifleId),
-    (clip) => playClip(s, clip, { level: LEVELS.shot, rate: jitterRate(SHOT_RATE_SPREAD) }),
-    () => synthShot(s),
+    (clip) => playClip(s, clip, { level: LEVELS.shot * (suppressed ? .22 : 1), cutoff: suppressed ? 1400 : undefined, rate: jitterRate(SHOT_RATE_SPREAD) }),
+    () => suppressed ? noiseBurst(s, s.t, [{type:'lowpass',freq:1400}], .18, .002, .12) : synthShot(s),
   );
 }
 

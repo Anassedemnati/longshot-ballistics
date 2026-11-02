@@ -265,6 +265,7 @@ async function run() {
     // really running (HUD built, frames drawn), otherwise "undefined" would only mean "not started yet".
     const plain = await openPage();
     await plain.goto(`${preview.url}?range=800`, { waitUntil: 'load' });
+    await plain.locator('button[type=submit]').click();
     await plain.waitForSelector('.hud');
     const plainFrames = await animationFrames(plain, 3);
     check(plainFrames.frames >= 3, 'the game runs without ?debug=1');

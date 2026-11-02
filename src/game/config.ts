@@ -1,5 +1,10 @@
 /** Stage setup, read from the URL query: `?range=800&wind=4.47&rifle=308&air=desert`. */
+export type FiringPosition = 'valley' | 'ridge' | 'mountain';
+
 export interface StageConfig {
+  position?: FiringPosition;
+  theme?: 'training' | 'outpost' | 'convoy';
+  suppressed?: boolean;
   /** Distance from the shooter to the target, m. */
   range: number;
   /** Wind speed from the shooter's left (blowing toward +X), m/s. Negative blows from the right. */
@@ -16,6 +21,7 @@ export const DEFAULT_CONFIG: StageConfig = {
   windFromLeftMps: 4.4704, // 10 mph
   rifle: '308',
   air: 'desert',
+  position: 'ridge',
 };
 
 /** A finite number from a query value, or null for missing, blank or non-numeric text. */
@@ -41,6 +47,9 @@ export function parseConfig(search: string): StageConfig {
         : Math.min(RANGE_MAX, Math.max(RANGE_MIN, range)),
     windFromLeftMps: wind ?? DEFAULT_CONFIG.windFromLeftMps,
     rifle: rifle === '308' || rifle === '338' ? rifle : DEFAULT_CONFIG.rifle,
+    ...(params.has('theme') ? { theme: params.get('theme') === 'convoy' ? 'convoy' as const : params.get('theme') === 'training' ? 'training' as const : 'outpost' as const } : {}),
+    ...(params.has('suppressed') ? { suppressed: params.get('suppressed') === '1' } : {}),
+    position: params.get('position') === 'valley' ? 'valley' : params.get('position') === 'mountain' ? 'mountain' : 'ridge',
     air: air === 'standard' || air === 'desert' ? air : DEFAULT_CONFIG.air,
   };
 }

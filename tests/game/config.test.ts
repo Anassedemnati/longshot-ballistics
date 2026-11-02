@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/game/config';
 
-const DEFAULTS = { range: 800, windFromLeftMps: 4.4704, rifle: '308', air: 'desert' };
+const DEFAULTS = { range: 800, windFromLeftMps: 4.4704, rifle: '308', air: 'desert', position: 'ridge' };
 
 describe('parseConfig', () => {
   it('returns the defaults for an empty query', () => {
@@ -15,6 +15,7 @@ describe('parseConfig', () => {
       windFromLeftMps: -3.5,
       rifle: '338',
       air: 'standard',
+      position: 'ridge',
     });
     expect(parseConfig('range=450&wind=0')).toEqual({ ...DEFAULTS, range: 450, windFromLeftMps: 0 });
   });

@@ -83,7 +83,7 @@ export function bindInput(
       Promise.resolve(canvas.requestPointerLock() as unknown).catch(() => undefined);
     } else if (action === 'fire') handlers.fire();
     else if (action === 'toggleScope') handlers.toggleScope();
-  });
+  }, canvas);
   on('mousemove', (e) => state.onMouseMove(e.movementX, e.movementY, handlers.sensitivity()));
   on('contextmenu', (e) => e.preventDefault());
   on('pointerlockchange', () => {

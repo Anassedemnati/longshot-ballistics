@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
 import { terrainHeight } from './terrainHeight';
 
@@ -216,31 +217,45 @@ export interface TargetDummy {
 }
 
 /** A ~1.8 m low-poly humanoid standing on the ground at (0, *, -range). */
-export function createTargetDummy(range: number): TargetDummy {
-  const groundY = terrainHeight(0, -range);
+export function createTargetDummy(range: number, x = 0, persistent = false): TargetDummy {
+  const groundY = terrainHeight(x, -range);
   const group = new THREE.Group();
   group.name = 'target-dummy';
-  group.position.set(0, groundY, -range);
+  group.position.set(x, groundY, -range);
 
-  const material = (color: number): THREE.MeshLambertMaterial =>
-    new THREE.MeshLambertMaterial({ color, flatShading: true });
-  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(DUMMY_HEAD.radius, 1), material(KHAKI));
+  const material = (color: number): THREE.MeshStandardMaterial =>
+    new THREE.MeshStandardMaterial({ color, roughness: .9 });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(DUMMY_HEAD.radius, 20, 16), material(0xa38b6b));
   head.position.set(0, DUMMY_HEAD.cy, 0);
   group.add(head);
   for (const b of DUMMY_BOXES) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), material(b.color));
+    const mesh = new THREE.Mesh((/arm|leg/.test(b.name) ? new THREE.CapsuleGeometry(b.w/2, b.h-b.w, 5, 12) : new RoundedBoxGeometry(b.w, b.h, b.d, 3, Math.min(b.w,b.h,b.d)*.3)), material(b.color));
     mesh.position.set(b.cx, b.cy, b.cz);
     mesh.name = b.name;
     group.add(mesh);
   }
 
+  const goggles = new THREE.Mesh(new RoundedBoxGeometry(.19,.045,.045,2,.012),material(0x202a29));
+  goggles.position.set(0,1.68,.105); group.add(goggles);
+  const scarf = new THREE.Mesh(new THREE.CylinderGeometry(.10,.08,.10,16),material(0x827859));
+  scarf.position.set(0,1.56,0);group.add(scarf);
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(.135,20,12,0,Math.PI*2,0,Math.PI*.6),material(0x535a41));
+  helmet.position.set(0,1.7,0); group.add(helmet);
+  for (const side of [-1,1]) {
+    const pouch = new THREE.Mesh(new RoundedBoxGeometry(.12,.16,.07,2,.015),material(0x7b7955));
+    pouch.position.set(side*.12,1.3,.14);group.add(pouch);
+  }
+  const weapon = new THREE.Mesh(new THREE.CylinderGeometry(.018,.025,.8,12),material(0x25292a));
+  weapon.rotation.x=Math.PI/2;weapon.position.set(.13,1.23,.28);group.add(weapon);
+  const optic = new THREE.Mesh(new THREE.CylinderGeometry(.025,.025,.2,12),material(0x172021));
+  optic.rotation.x=Math.PI/2;optic.position.set(.13,1.3,.27);group.add(optic);
   // Hit spheres in world space.
   const zones: HitZone[] = dummyHitSpheres().map((s) => ({
     name: s.name,
     radius: s.radius,
-    center: { x: s.x, y: groundY + s.y, z: -range },
+    center: { x: x + s.x, y: groundY + s.y, z: -range },
   }));
-  const hitTarget: HitTarget = { id: 'dummy', zones };
+  const hitTarget: HitTarget = { id: x === 0 ? 'dummy' : `enemy-${x}`, zones };
 
   let down = false;
   let fallTime = 0;
@@ -282,7 +297,7 @@ export function createTargetDummy(range: number): TargetDummy {
       }
       if (fallTime >= FALL_DURATION) {
         lyingTime += dt;
-        if (lyingTime >= RESET_DELAY - TIMER_EPSILON) reset();
+        if (!persistent && lyingTime >= RESET_DELAY - TIMER_EPSILON) reset();
       }
     },
   };

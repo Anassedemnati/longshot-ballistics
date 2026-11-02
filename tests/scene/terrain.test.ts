@@ -26,7 +26,7 @@ describe('terrainHeight', () => {
     }
   });
 
-  it('has a ~12 m rise around the shooter and gentle dunes (3-6 m) elsewhere', () => {
+  it('has a 12 m firing ridge and tall mountain flanks around the valley', () => {
     expect(terrainHeight(0, 0)).toBeGreaterThan(11);
     expect(terrainHeight(0, 0)).toBeLessThan(13);
     // Dune field away from the rise and the lane: bounded amplitude, and actually varying.
@@ -40,8 +40,8 @@ describe('terrainHeight', () => {
         max = Math.max(max, h);
       }
     }
-    expect(max - min).toBeGreaterThan(3);
-    expect(max - min).toBeLessThan(14); // dunes + rock outcrops
+    expect(max - min).toBeGreaterThan(150);
+    expect(max - min).toBeLessThan(300); // bounded mountain flanks
   });
 
   it('puts the prone eye 0.4 m above the top of the rise, on the lane axis', () => {

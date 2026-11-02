@@ -1,3 +1,4 @@
+import type { FiringPosition } from '../game/config';
 import type { Vec3 } from '../ballistics/types';
 
 // Pure terrain height field (no three.js): shared by the render mesh, the bullets and the tests.
@@ -6,6 +7,18 @@ import type { Vec3 } from '../ballistics/types';
 //   - a flat-ish range lane along the -Z axis, so every line of sight down the lane is clear and
 //     the target stands on level ground at any range;
 //   - dunes (a few metres tall) outside the lane and a few rock outcrops beside it.
+
+export const POSITIONS = {
+  valley: { name: 'Valley floor', height: 1.5, radius: 24, description: 'Low sandbank. A near-level sightline across the dry wash.' },
+  ridge: { name: 'Rocky ridge', height: 12, radius: 40, description: 'Elevated ridge. A clear view into the valley below.' },
+  mountain: { name: 'Mountain overlook', height: 85, radius: 90, description: 'Steep rocky spur. A pronounced downhill shot into the basin.' },
+} as const;
+let activePosition: FiringPosition = 'ridge';
+/** Set once before creating terrain, targets and ballistics. */
+export function configurePosition(position: FiringPosition): Vec3 {
+  activePosition = position;
+  return { x: 0, y: terrainHeight(0, 0) + .4, z: 0 };
+}
 
 const SEED = 20260101;
 
@@ -84,7 +97,9 @@ function dunes(x: number, z: number): number {
 /** Ground height at (x, z), m. Deterministic and seeded; safe to call millions of times. */
 export function terrainHeight(x: number, z: number): number {
   const r = Math.hypot(x, z);
-  const rise = RISE_HEIGHT * (1 - smoothstep(0, RISE_RADIUS, r));
+  const site = POSITIONS[activePosition];
+  const rise = activePosition === 'ridge' ? RISE_HEIGHT * (1 - smoothstep(0, RISE_RADIUS, r))
+    : site.height * Math.pow(Math.max(0, 1 - r / site.radius), 2);
 
   // Outside the lane: full dunes. Inside it: only a faint hummock texture, faded out on the rise.
   const laneMask = smoothstep(LANE_FLAT_HALF_WIDTH, LANE_BLEND_END, Math.abs(x));
@@ -100,6 +115,11 @@ export function terrainHeight(x: number, z: number): number {
     const rough = 0.75 + 0.5 * valueNoise(x / 1.8 + 0.7, z / 1.8 + 3.1);
     h += rock.height * base * base * rough;
   }
+  // Eroded ridgelines enclose the shooting valley, leaving its floor traversable.
+  const flank = smoothstep(90, 650, Math.abs(x));
+  const ridgeNoise = 1 - Math.abs(valueNoise(x / 320 + 4, z / 430 - 2) * 2 - 1);
+  const strata = valueNoise(x / 85, z / 110) * 18;
+  h += flank * (55 + ridgeNoise * 190 + strata);
   return h;
 }
 

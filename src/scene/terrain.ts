@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sandRelief } from './detail';
 import { ROCK_OUTCROPS, terrainHeight } from './terrainHeight';
 
 export { SHOOTER_POS, terrainHeight } from './terrainHeight';
@@ -15,7 +16,7 @@ const FOCUS_Z_MIN = -1600;
 const FOCUS_Z_MAX = 120;
 const FINE_STEP_X = 2.5;
 const FINE_STEP_Z = 3;
-const COARSE_STEP = 70;
+const COARSE_STEP = 25;
 const FALLOFF_DISTANCE = 700;
 
 /** One sand texture tile covers this many metres. */
@@ -80,7 +81,9 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
       const patch = 0.5 + 0.5 * Math.sin(x * 0.0071 + 1.3) * Math.sin(z * 0.0053 - 0.6);
       const shade = 0.88 + 0.1 * Math.max(-1, Math.min(1, y / 5)) + 0.1 * patch;
       tint.setRGB(shade, shade, shade);
-      tint.lerp(rock, rockness(x, z) * 0.7);
+      const slope = Math.hypot(terrainHeight(x + 2, z) - terrainHeight(x - 2, z), terrainHeight(x, z + 2) - terrainHeight(x, z - 2)) / 4;
+      const exposedRock = Math.min(.85, Math.max(rockness(x, z) * .7, slope * .75, Math.max(0, y - 35) / 240));
+      tint.lerp(rock, exposedRock);
       colors[k * 3] = tint.r;
       colors[k * 3 + 1] = tint.g;
       colors[k * 3 + 2] = tint.b;
@@ -114,7 +117,7 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
   geometry.computeBoundingSphere();
 
   // Flat sand colour until the detail map arrives; if it never does, the terrain just stays flat sand.
-  const material = new THREE.MeshLambertMaterial({ color: SAND_COLOR, vertexColors: true });
+  const material = new THREE.MeshStandardMaterial({ color: SAND_COLOR, vertexColors: true, roughness: .94, bumpMap: sandRelief(), bumpScale: .045 });
   new THREE.TextureLoader().load(
     `${import.meta.env.BASE_URL}${TEXTURE_PATH}`,
     (texture) => {
@@ -133,6 +136,20 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
     () => console.warn(`terrain: could not load ${TEXTURE_PATH}, using flat sand colour`),
   );
 
+  // World-space geological mottling avoids a uniform orange hillside at distance.
+  material.onBeforeCompile = shader => {
+    shader.vertexShader = 'varying vec3 vGround;\n' + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvGround = position;');
+    shader.fragmentShader = 'varying vec3 vGround;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float broad = sin(vGround.x*.031 + sin(vGround.z*.043)*2.) * sin(vGround.z*.027);
+      float grain = sin(vGround.x*.67 + vGround.z*.37)*sin(vGround.z*.51-vGround.x*.29);
+      float strata = sin(vGround.y*1.8 + sin(vGround.x*.08)*2.);
+      float rockMix = smoothstep(15.,90.,vGround.y);
+      diffuseColor.rgb *= .91 + broad*.12 + grain*.035 + strata*.065*rockMix;
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(.77,.83,.91), rockMix*.5);
+    `);
+  };
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'terrain';
   mesh.frustumCulled = false; // one big mesh that is almost always in view
@@ -143,8 +160,8 @@ export function createTerrainMesh(maxAnisotropy = 8): THREE.Mesh {
 export function createRocks(): THREE.Group {
   const group = new THREE.Group();
   group.name = 'rocks';
-  const material = new THREE.MeshLambertMaterial({ color: 0x7a6a58, flatShading: true });
-  const geometry = new THREE.DodecahedronGeometry(1, 0);
+  const material = new THREE.MeshStandardMaterial({ color: 0x7a6a58, roughness: .92, flatShading: true });
+  const geometry = new THREE.IcosahedronGeometry(1, 1);
   // Deterministic jitter so the rocks are the same every load.
   let seed = 7;
   const rand = (): number => {
