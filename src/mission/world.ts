@@ -5,6 +5,8 @@ import { SparkSystem } from '../fx/sparks';
 import type { HitTarget, Obstacle } from '../game/hit';
 import { createPropMesh } from '../scene/props';
 import { createSky } from '../scene/sky';
+import { createSniper } from '../scene/sniper';
+import type { Sniper } from '../scene/sniper';
 import { createTargetDummy } from '../scene/target';
 import type { TargetDummy } from '../scene/target';
 import { DESERT_FIELD, createRocks, createTerrainMesh } from '../scene/terrain';
@@ -14,8 +16,9 @@ import { createVehicleTarget } from '../scene/vehicleTarget';
 import type { VehicleTarget } from '../scene/vehicleTarget';
 import type { MissionConfig } from './config';
 import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
-import type { MissionLayout, SoldierPlacement, VehicleTargetPlacement } from './layout';
+import type { MissionLayout, SniperPlacement, SoldierPlacement, VehicleTargetPlacement } from './layout';
 import { propColliders, vehicleEngineObstacle } from './props';
+import { sniperAimPoints } from './sniperDims';
 
 // Builds the mission's world from its config: the terrain field and the layout (pure, no three.js),
 // then the scene with the sky, terrain, props, soldiers and vehicle targets, and the lists the bullets
@@ -31,6 +34,16 @@ export interface Soldier {
   upperTorso: Vec3;
   lowerTorso: Vec3;
   /** Whether its hit target is in the live list the bullets see. */
+  live: boolean;
+}
+
+/** An enemy sniper lying on a roof or the ground; an extra target that shoots back (see mission/combat.ts). */
+export interface EnemySniper {
+  placement: SniperPlacement;
+  sniper: Sniper;
+  head: Vec3;
+  upperTorso: Vec3;
+  /** Whether its hit target is in the live list the bullets see (a downed sniper stays down). */
   live: boolean;
 }
 
@@ -60,6 +73,8 @@ export interface World extends MissionPlan {
   liveTargets: HitTarget[];
   soldiers: Map<string, Soldier>;
   vehicles: Map<string, Vehicle>;
+  snipers: Map<string, EnemySniper>;
+  /** Soldiers + vehicle targets + enemy snipers. */
   targetsTotal: number;
 }
 
@@ -138,9 +153,18 @@ export function buildWorld(
     vehicles.set(v.id, { placement: v, target, engineSolid, engineCenter: engineSolid.box.center });
     liveTargets.push(target.hitTarget);
   }
-  const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length;
 
-  return { ...plan, scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, targetsTotal };
+  const snipers = new Map<string, EnemySniper>();
+  for (const p of layout.snipers) {
+    const sniper = createSniper({ x: p.x, y: p.y, z: p.z }, p.yaw, p.id);
+    scene.add(sniper.group);
+    const aim = sniperAimPoints(p);
+    snipers.set(p.id, { placement: p, sniper, head: aim.head, upperTorso: aim.upperTorso, live: true });
+    liveTargets.push(sniper.hitTarget);
+  }
+  const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length;
+
+  return { ...plan, scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */
