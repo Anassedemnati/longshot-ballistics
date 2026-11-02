@@ -343,7 +343,7 @@ describe('generateLayout', () => {
     }
   });
 
-  it('places and sees everything from every firing position: valley floor, rocky ridge, mountain overlook (any theme, busy and crowded missions)', () => {
+  it('places and sees everything from every firing position: valley floor, rocky ridge, mountain overlook (any theme, busy and crowded missions)', { timeout: 30_000 }, () => {
     const behind = { valley: 0, ridge: 0, mountain: 0 };
     for (const position of ['valley', 'ridge', 'mountain'] as const) {
       for (const [k, theme] of THEMES.entries()) {

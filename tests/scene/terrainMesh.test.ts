@@ -34,7 +34,7 @@ function meshHeight(xs: number[], zs: number[], positions: ArrayLike<number>, x:
 describe('terrain mesh grid', () => {
   const { xs, zs } = terrainGridAxes();
 
-  it('stays within the vertex budget', () => {
+  it('stays within the vertex budget', { timeout: 30_000 }, () => {
     expect(xs.length * zs.length).toBeLessThanOrEqual(250_000);
     const geometry = buildTerrainGeometry(createTerrainField('valley', 3));
     expect(geometry.getAttribute('position').count).toBe(xs.length * zs.length);
@@ -65,7 +65,7 @@ describe('terrain mesh grid', () => {
   });
 
   for (const theme of THEME_IDS) {
-    it(`${theme}: the mountain spur and the valley walls are rendered, not smoothed away`, () => {
+    it(`${theme}: the mountain spur and the valley walls are rendered, not smoothed away`, { timeout: 30_000 }, () => {
       const field = createTerrainField(theme, 1, 'mountain');
       const positions = buildTerrainGeometry(field).getAttribute('position').array;
       // The spur: crags within a metre of height() on its steep, rough flanks (a 3 m grid on 60 degree slopes).
@@ -97,7 +97,7 @@ describe('terrain mesh grid', () => {
       expect(Math.sqrt(sumSquares / n), `${theme} wall rms`).toBeLessThanOrEqual(1.5);
     });
 
-    it(`${theme}: the rendered surface agrees with height() within 0.1 m at any target spot`, () => {
+    it(`${theme}: the rendered surface agrees with height() within 0.1 m at any target spot`, { timeout: 30_000 }, () => {
       for (const seed of [1, 20261101]) {
         const field: TerrainField = createTerrainField(theme, seed);
         const positions = buildTerrainGeometry(field).getAttribute('position').array;

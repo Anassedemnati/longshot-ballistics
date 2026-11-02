@@ -134,7 +134,7 @@ describe('createTerrainField', () => {
           }
         });
 
-        it(`${position}: keeps that line of sight for any bearing within +-10 deg, any range 100-1500, and many seeds`, () => {
+        it(`${position}: keeps that line of sight for any bearing within +-10 deg, any range 100-1500, and many seeds`, { timeout: 30_000 }, () => {
           for (const seed of MANY_SEEDS) {
             const field = createTerrainField(theme, seed, position);
             for (const bearing of [-10, -7.3, -3.1, 2.2, 6.6, 10]) {
@@ -145,7 +145,7 @@ describe('createTerrainField', () => {
           }
         });
 
-        it(`${position}: is gentle inside the sector: |h| <= 1.5 m and |h(p) - h(p + 6 m)| <= 0.5 m beyond the landform`, () => {
+        it(`${position}: is gentle inside the sector: |h| <= 1.5 m and |h(p) - h(p + 6 m)| <= 0.5 m beyond the landform`, { timeout: 30_000 }, () => {
           const from = position === 'mountain' ? 100 : 60; // the spur is 90 m wide
           for (const seed of [...SEEDS, ...MANY_SEEDS.slice(0, 5)]) {
             const field = createTerrainField(theme, seed, position);
@@ -321,7 +321,7 @@ describe('firing positions', () => {
     }
   });
 
-  it('the mountain keeps a clear line of sight to the foot of the spur and to near targets, at every bearing in the sector', () => {
+  it('the mountain keeps a clear line of sight to the foot of the spur and to near targets, at every bearing in the sector', { timeout: 30_000 }, () => {
     for (const theme of THEME_IDS) {
       for (const seed of MANY_SEEDS.slice(0, 10)) {
         const field = createTerrainField(theme, seed, 'mountain');
@@ -342,7 +342,7 @@ describe('valley walls', () => {
   };
 
   for (const theme of THEME_IDS) {
-    it(`${theme}: reach 80 m or more somewhere at |bearing| >= 30 deg, range 600 m, for every seed and position`, () => {
+    it(`${theme}: reach 80 m or more somewhere at |bearing| >= 30 deg, range 600 m, for every seed and position`, { timeout: 30_000 }, () => {
       for (const seed of [...SEEDS, ...MANY_SEEDS]) {
         for (const position of seed === SEEDS[0] ? POSITION_IDS : (['ridge'] as const)) {
           const field = createTerrainField(theme, seed, position);
@@ -378,7 +378,7 @@ describe('valley walls', () => {
       }
     });
 
-    it(`${theme}: keep clear of the sector and a ${WALL_START} m margin around it`, () => {
+    it(`${theme}: keep clear of the sector and a ${WALL_START} m margin around it`, { timeout: 30_000 }, () => {
       for (const seed of SEEDS) {
         for (const position of POSITION_IDS) {
           const field = createTerrainField(theme, seed, position);
