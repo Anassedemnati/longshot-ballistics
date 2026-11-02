@@ -24,8 +24,10 @@ import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
+import { createPostFx, postQualityFromSearch } from '../scene/postfx';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
 import { shadowFocus } from '../scene/shadows';
+import { applyHdriSky, loadSkyHdri } from '../scene/sky';
 import { Assists } from '../ui/assists';
 import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
@@ -103,7 +105,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   // Scene
   const renderer = createRenderer(app);
-  prep.remove(); // the canvas is in; the rest of the build runs before the next paint
+  // The HDRI sky (and its post-processing) is fetched while the world is built; `?post=off` keeps the stage-1 sky and render path.
+  const postQuality = postQualityFromSearch(window.location.search);
+  const hdriLoading = postQuality === 'off' ? Promise.resolve(null) : loadSkyHdri(config.theme);
   const world = buildWorld(config, plan, {
     legacy,
     maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
@@ -133,6 +137,20 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // The visible rifle: drawn over the world when not scoped, no flash when suppressed.
   const rifleModel = new FirstPersonRifle(config.rifle, config.suppressed);
   rifleModel.resize(window.innerWidth, window.innerHeight);
+
+  // Sky and post-processing: with the HDRI (background, image-based light, matched fog, exposure) the world is drawn
+  // through the composer; without it (file missing, `?post=off`) the procedural sky stays and the render is direct.
+  const hdri = await hdriLoading;
+  if (hdri) applyHdriSky(renderer, scene, config.theme, hdri);
+  const post = createPostFx({
+    renderer,
+    scene,
+    camera: view.camera,
+    theme: config.theme,
+    quality: hdri ? postQuality : 'off',
+    overlay: () => rifleModel.render(renderer),
+  });
+  prep.remove(); // the canvas is in; the rest of the build runs before the next paint
 
   /** Turn the view at a world point (also used by the debug hook). */
   function lookAtPoint(x: number, y: number, z: number): void {
@@ -403,6 +421,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   window.addEventListener('resize', () => {
     resizeRenderer(renderer, window.innerWidth, window.innerHeight);
+    post.setSize(window.innerWidth, window.innerHeight);
     view.resize(window.innerWidth, window.innerHeight);
     rifleModel.resize(window.innerWidth, window.innerHeight);
   });
@@ -470,9 +489,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       if (failedTimer >= FAILED_DELAY_S) showResultsScreen();
     }
 
-    renderer.render(scene, view.camera);
     // The rifle is in front of the player's face: not through the scope, and not while he is ducked behind cover.
-    if (!view.isScoped && !combat?.covered) rifleModel.render(renderer);
+    post.render(!view.isScoped && !combat?.covered);
   }
   function frame(nowMs: number): void {
     try {
