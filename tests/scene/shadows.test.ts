@@ -89,6 +89,37 @@ describe('shadowFocus', () => {
   });
 });
 
+describe('shadowFocus and snapToTexelGrid write into the object they are given (the frame loop must not allocate)', () => {
+  it('shadowFocus fills `out`, returns it, and gives the same point as without one, in every branch', () => {
+    const out: Vec3 = { x: 99, y: 99, z: 99 };
+    const cases = [
+      { scoped: true, eye, forward: unit({ x: -0.1, y: -0.02, z: -1 }), rangeM: 750, ground },
+      { scoped: false, eye, forward: unit({ x: 0.3, y: 0.1, z: -1 }), rangeM: 750, ground },
+      { scoped: true, eye, forward: unit({ x: 0, y: 0.5, z: -1 }), rangeM: null, ground },
+      { scoped: false, eye, forward: { x: 0, y: 1, z: 0 }, rangeM: null, ground },
+    ];
+    for (const input of cases) {
+      expect(shadowFocus(input, out)).toBe(out);
+      expect(out).toEqual(shadowFocus(input));
+    }
+  });
+
+  it('snapToTexelGrid fills `out`, returns it, and may snap a point in place', () => {
+    const texel = (2 * SHADOW_HALF_EXTENT) / SHADOW_MAP_SIZE;
+    const sun = unit({ x: -0.8, y: 0.31, z: 0.46 });
+    const p = { x: 12.3, y: 0.4, z: -840.77 };
+    const out: Vec3 = { x: 0, y: 0, z: 0 };
+    expect(snapToTexelGrid(p, sun, texel, out)).toBe(out);
+    expect(out).toEqual(snapToTexelGrid(p, sun, texel));
+    const inPlace = { ...p };
+    expect(snapToTexelGrid(inPlace, sun, texel, inPlace)).toBe(inPlace);
+    expect(inPlace).toEqual(out);
+    const overhead = { x: 1.23, y: 4, z: 5.67 };
+    expect(snapToTexelGrid(overhead, { x: 0, y: 1, z: 0 }, texel, out)).toBe(out);
+    expect(out).toEqual(overhead);
+  });
+});
+
 describe('snapToTexelGrid', () => {
   const texel = (2 * SHADOW_HALF_EXTENT) / SHADOW_MAP_SIZE;
   const sun = unit({ x: -0.8, y: 0.31, z: 0.46 });
