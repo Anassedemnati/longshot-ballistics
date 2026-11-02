@@ -9,6 +9,7 @@ import {
   createTargetDummy,
   createTargetDummyAtRange,
   dummyHitSpheres,
+  dummyParts,
 } from '../../src/scene/target';
 import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
@@ -142,20 +143,13 @@ describe('dummy hit zones match the visible dummy', () => {
   it('hit spheres overhang the silhouette of the drawn shapes by at most 3 cm', () => {
     // The shapes as the scene draws them (rounded boxes, head sphere, goggles, scarf), not the sharp DUMMY_BOXES
     // they are built from: the outline of each convex mesh seen from the front is the hull of its vertices.
-    const dummy = createTargetDummy({ x: 0, y: 0, z: 0 }, 0);
-    dummy.group.updateMatrixWorld(true);
     const outlines: Point[][] = [];
-    dummy.group.traverse((o) => {
-      if (!(o instanceof THREE.Mesh)) return;
-      const position = o.geometry.getAttribute('position');
-      const v = new THREE.Vector3();
+    for (const part of dummyParts()) {
+      const position = part.geometry.getAttribute('position');
       const points: Point[] = [];
-      for (let i = 0; i < position.count; i++) {
-        v.fromBufferAttribute(position, i).applyMatrix4(o.matrixWorld);
-        points.push([v.x, v.y]);
-      }
+      for (let i = 0; i < position.count; i++) points.push([position.getX(i), position.getY(i)]);
       outlines.push(convexHull(points));
-    });
+    }
     expect(outlines.length).toBe(DUMMY_BOXES.length - 1 + 3); // no neck (the scarf covers it), plus head, goggles, scarf
     let worst = 0;
     let where = '';
@@ -173,6 +167,34 @@ describe('dummy hit zones match the visible dummy', () => {
     }
     // Half a millimetre of slack for the polygons that stand in for the rounded corners.
     expect(worst, where).toBeLessThanOrEqual(MAX_OVERHANG + 0.0005);
+  });
+});
+
+describe('dummy body mesh', () => {
+  it('is every part merged into one geometry with its colour in a vertex attribute (a soldier is one draw call)', () => {
+    const dummy = createTargetDummy({ x: 0, y: 0, z: 0 }, 0);
+    const meshes: THREE.Mesh[] = [];
+    dummy.group.traverse((o) => {
+      if (o instanceof THREE.Mesh) meshes.push(o);
+    });
+    expect(meshes).toHaveLength(1);
+    const body = meshes[0];
+    const parts = dummyParts();
+    const vertices = (g: THREE.BufferGeometry): number => (g.index ? g.index.count : g.getAttribute('position').count); // merged non-indexed: three per triangle
+    expect(body.geometry.getAttribute('position').count).toBe(parts.reduce((n, p) => n + vertices(p.geometry), 0));
+    expect(body.geometry.getAttribute('color')).toBeDefined();
+    expect((body.material as THREE.MeshStandardMaterial).vertexColors).toBe(true);
+    expect(body.castShadow && body.receiveShadow).toBe(true);
+    // the colours are the parts': khaki head and vest/limbs from DUMMY_BOXES, dark goggles
+    const colors = body.geometry.getAttribute('color');
+    const first = new THREE.Color(parts[0].color);
+    expect([colors.getX(0), colors.getY(0), colors.getZ(0)]).toEqual([first.r, first.g, first.b].map((v) => Math.fround(v)));
+    expect(new Set(parts.map((p) => p.color)).size).toBeGreaterThanOrEqual(3);
+    // and the merged body stays inside the boxes the hit spheres are built for
+    body.geometry.computeBoundingBox();
+    const box = body.geometry.boundingBox as THREE.Box3;
+    expect(box.min.y).toBeGreaterThanOrEqual(-0.02);
+    expect(box.max.y).toBeLessThan(1.95);
   });
 });
 
@@ -328,6 +350,7 @@ describe('dummy fall and reset', () => {
       g.children.map((c) => c as unknown as { geometry: unknown; material: unknown });
     const pa = parts(a.group);
     const pb = parts(b.group);
+    expect(pa.length).toBe(1); // the whole body is one mesh: one draw call per soldier
     expect(pa.length).toBe(pb.length);
     pa.forEach((part, i) => {
       expect(part.geometry).toBe(pb[i].geometry);

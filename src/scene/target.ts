@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../ballistics/types';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
 import {
@@ -171,21 +172,11 @@ const BOUNDS_MARGIN = 0.05;
 // more than MAX_OVERHANG), a sphere head, goggles and a scarf. Every piece stays inside the DUMMY_BOXES
 // dimensions (the hit spheres and the layout are built from those), and the goggles and scarf sit within the
 // head and torso spheres.
-const dummyMaterials = new Map<number, THREE.MeshStandardMaterial>();
 const dummyGeometries = new Map<string, THREE.BufferGeometry>();
 
 /** Goggles and scarf (mesh only: they sit inside the head and upper-torso hit zones). */
 const GOGGLES = { cy: 1.68, cz: 0.105, w: 0.19, h: 0.045, d: 0.045, color: 0x1c2524 } as const;
 const SCARF = { cy: 1.56, rTop: 0.1, rBottom: 0.08, h: 0.1, color: 0x7b7352 } as const;
-
-function dummyMaterial(color: number): THREE.MeshStandardMaterial {
-  let m = dummyMaterials.get(color);
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 });
-    dummyMaterials.set(color, m);
-  }
-  return m;
-}
 
 function sharedGeometry(key: string, make: () => THREE.BufferGeometry): THREE.BufferGeometry {
   let g = dummyGeometries.get(key);
@@ -205,8 +196,62 @@ function headGeometry(): THREE.BufferGeometry {
   return sharedGeometry('head', () => new THREE.SphereGeometry(DUMMY_HEAD.radius, 22, 16));
 }
 
-/** Parts that cast a shadow: the body and the limbs; boots, goggles and the scarf are too small to be worth a shadow-pass draw. */
-const castsShadow = (name: string): boolean => /vest|pelvis|arm|leg/.test(name);
+/** One drawn part of the dummy, positioned in the dummy's own frame (feet at the origin, front +Z), with its colour (sRGB hex). */
+export interface DummyPart {
+  name: string;
+  geometry: THREE.BufferGeometry;
+  color: number;
+}
+
+let partList: DummyPart[] | null = null;
+
+/**
+ * Every drawn part of the dummy (head, the rounded boxes of DUMMY_BOXES but the neck, goggles, scarf), baked into the dummy's
+ * frame. Built once. The dummy draws them merged into one mesh (it falls and stands as a whole, so its parts never move relative
+ * to each other): a soldier is one draw call, not eleven. Exported for the tests, which measure each part's outline.
+ */
+export function dummyParts(): DummyPart[] {
+  if (partList) return partList;
+  const at = (g: THREE.BufferGeometry, x: number, y: number, z: number): THREE.BufferGeometry => g.clone().translate(x, y, z);
+  const parts: DummyPart[] = [{ name: 'head', geometry: at(headGeometry(), 0, DUMMY_HEAD.cy, 0), color: DUMMY_KHAKI }];
+  for (const b of DUMMY_BOXES) {
+    if (b.name === 'neck') continue; // the scarf covers it
+    parts.push({ name: b.name, geometry: at(roundedBox(b.w, b.h, b.d, cornerRadius(b)), b.cx, b.cy, b.cz), color: b.color });
+  }
+  parts.push({ name: 'goggles', geometry: at(roundedBox(GOGGLES.w, GOGGLES.h, GOGGLES.d), 0, GOGGLES.cy, GOGGLES.cz), color: GOGGLES.color });
+  const scarf = sharedGeometry('scarf', () => new THREE.CylinderGeometry(SCARF.rTop, SCARF.rBottom, SCARF.h, 18));
+  parts.push({ name: 'scarf', geometry: at(scarf, 0, SCARF.cy, 0), color: SCARF.color });
+  partList = parts;
+  return parts;
+}
+
+let bodyGeometry: THREE.BufferGeometry | null = null;
+let bodyMaterial: THREE.MeshStandardMaterial | null = null;
+
+/** All the parts as one geometry with the colours in a vertex attribute (shared by every dummy). */
+function dummyBody(): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial } {
+  if (!bodyGeometry || !bodyMaterial) {
+    const colored = dummyParts().map((part) => {
+      const g = part.geometry.index ? part.geometry.toNonIndexed() : part.geometry.clone(); // the rounded boxes are not indexed, the sphere and the cylinder are: merge them alike
+      const count = g.getAttribute('position').count;
+      const c = new THREE.Color(part.color); // linear, like the material colour it replaces
+      const colors = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = c.r;
+        colors[i * 3 + 1] = c.g;
+        colors[i * 3 + 2] = c.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      return g;
+    });
+    const merged = mergeGeometries(colored);
+    if (!merged) throw new Error('target: the dummy parts could not be merged');
+    merged.computeBoundingSphere();
+    bodyGeometry = merged;
+    bodyMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  }
+  return { geometry: bodyGeometry, material: bodyMaterial };
+}
 
 /**
  * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
@@ -231,33 +276,13 @@ export function createTargetDummy(
   group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
-  const add = (mesh: THREE.Mesh, cast: boolean): void => {
-    mesh.castShadow = cast;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  };
-
-  const head = new THREE.Mesh(headGeometry(), dummyMaterial(DUMMY_KHAKI));
-  head.position.set(0, DUMMY_HEAD.cy, 0);
-  add(head, true);
-  for (const b of DUMMY_BOXES) {
-    if (b.name === 'neck') continue; // the scarf covers it
-    const mesh = new THREE.Mesh(roundedBox(b.w, b.h, b.d, cornerRadius(b)), dummyMaterial(b.color));
-    mesh.position.set(b.cx, b.cy, b.cz);
-    mesh.name = b.name;
-    add(mesh, castsShadow(b.name));
-  }
-  const goggles = new THREE.Mesh(roundedBox(GOGGLES.w, GOGGLES.h, GOGGLES.d), dummyMaterial(GOGGLES.color));
-  goggles.position.set(0, GOGGLES.cy, GOGGLES.cz);
-  goggles.name = 'goggles';
-  add(goggles, false);
-  const scarf = new THREE.Mesh(
-    sharedGeometry('scarf', () => new THREE.CylinderGeometry(SCARF.rTop, SCARF.rBottom, SCARF.h, 18)),
-    dummyMaterial(SCARF.color),
-  );
-  scarf.position.set(0, SCARF.cy, 0);
-  scarf.name = 'scarf';
-  add(scarf, false);
+  // The whole body is one mesh (see `dummyParts`); the boots, goggles and scarf are too small to be worth a shadow-pass draw of their own, so they ride along.
+  const body = dummyBody();
+  const mesh = new THREE.Mesh(body.geometry, body.material);
+  mesh.name = 'dummy-body';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
 
   // Hit spheres in world space: the dummy's own (x, y) turned by the yaw about the feet.
   const cos = Math.cos(yaw);
