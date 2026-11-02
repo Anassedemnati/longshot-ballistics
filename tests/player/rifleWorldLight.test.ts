@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { FLASH_HDR_GAIN, FirstPersonRifle } from '../../src/player/rifle';
+import { FLASH_HDR_GAIN, FirstPersonRifle, RIFLE_REFERENCE_EXPOSURE } from '../../src/player/rifle';
 import { SKY_LOOKS, SKY_OBJECT_NAMES, createSky } from '../../src/scene/sky';
 
 /** A world scene as `applyHdriSky` leaves it: sky objects by name, an environment texture, its yaw, per-theme light. */
@@ -52,6 +52,22 @@ describe('the rifle lit by the world', () => {
       expect(hemisphere?.intensity).toBe(SKY_LOOKS[theme].hdri.hemisphereIntensity);
     });
   }
+
+  it('scales the rifle\'s light by the sky\'s exposure (within limits), so it reads alike in a high-exposure snowfield and a low-exposure desert', () => {
+    const key = (rifle: FirstPersonRifle) => lights(rifle).find((l): l is THREE.DirectionalLight => l instanceof THREE.DirectionalLight && l.intensity > 1) as THREE.DirectionalLight;
+    const sun = SKY_LOOKS.desert.hdri.sunIntensity;
+    const at = (exposure: number) => {
+      const rifle = new FirstPersonRifle('308');
+      rifle.lightFrom(hdriWorld('desert').scene, exposure);
+      return { key: key(rifle).intensity, environment: rifle.scene.environmentIntensity };
+    };
+    expect(at(RIFLE_REFERENCE_EXPOSURE).key).toBeCloseTo(sun, 9);
+    expect(at(1.7).key).toBeCloseTo(sun * 0.5, 9); // clamped at half
+    expect(at(1.3).key).toBeCloseTo((sun * RIFLE_REFERENCE_EXPOSURE) / 1.3, 9);
+    expect(at(0.72).key).toBeCloseTo((sun * RIFLE_REFERENCE_EXPOSURE) / 0.72, 9);
+    expect(at(0.2).key).toBeCloseTo(sun * 1.3, 9); // clamped
+    expect(at(1.3).environment).toBeCloseTo(SKY_LOOKS.desert.hdri.environmentIntensity * (RIFLE_REFERENCE_EXPOSURE / 1.3), 9);
+  });
 
   it('the muzzle flash gets an HDR colour (above the bloom threshold) only when the rifle is lit by the world; a suppressed rifle has no flash and lights fine', () => {
     const rifle = new FirstPersonRifle('308');

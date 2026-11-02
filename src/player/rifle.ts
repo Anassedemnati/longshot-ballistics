@@ -46,6 +46,10 @@ const HOLD_ROLL_RAD = -0.06;
 /** The rifle's own field of view, deg (independent of the world camera's scope zoom). */
 const VIEW_FOV_DEG = 58;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+/** The exposure the rifle's light is balanced for (the valley's), and the limits of its compensation for another theme's. */
+export const RIFLE_REFERENCE_EXPOSURE = 0.85;
+const RIFLE_GAIN_MIN = 0.5;
+const RIFLE_GAIN_MAX = 1.3;
 /** In the world's light the fill from the right is this share of the sun's strength, and the key sits this far out, m. */
 const FILL_WORLD_SHARE = 0.08;
 const KEY_DISTANCE_M = 5;
@@ -492,29 +496,32 @@ export class FirstPersonRifle {
    * Light the rifle with `world`'s sky and sun instead of its own stand-in: the world's image-based light (the PMREM of the
    * HDRI, shared, not copied), the sun's colour and strength, the hemisphere's. Call it when the world has its HDRI
    * (`applyHdriSky`), and only when the rifle is then drawn into the same HDR post chain (so the exposure is the world's and the
-   * muzzle flash, given an HDR colour, can bloom). Returns false, leaving the stand-in, when the world has no environment.
+   * muzzle flash, given an HDR colour, can bloom). `exposure` is the world's tone mapping exposure. Returns false, leaving the stand-in, when the world has no environment.
    * `orient` must then follow the view every frame.
    */
-  lightFrom(world: THREE.Scene): boolean {
+  lightFrom(world: THREE.Scene, exposure: number = RIFLE_REFERENCE_EXPOSURE): boolean {
     const environment = world.environment;
     if (!environment) return false;
+    // The sky's exposure differs by theme (the arctic's is high for its dim overcast, the desert's low for its strong sun): the rifle's
+    // light is scaled so it reads about the same in all three, not blown out in the snow nor dark in the desert.
+    const gain = Math.min(RIFLE_GAIN_MAX, Math.max(RIFLE_GAIN_MIN, RIFLE_REFERENCE_EXPOSURE / exposure));
     this.scene.environment = environment;
-    this.scene.environmentIntensity = world.environmentIntensity;
+    this.scene.environmentIntensity = world.environmentIntensity * gain;
     this.environmentYaw.setFromAxisAngle(Y_AXIS, world.environmentRotation.y);
     this.environmentTried = true; // no stand-in to bake
     const sun = world.getObjectByName(SKY_OBJECT_NAMES.sun) as THREE.DirectionalLight | undefined;
     if (sun) {
       this.key.color.copy(sun.color);
-      this.key.intensity = sun.intensity;
+      this.key.intensity = sun.intensity * gain;
       this.sunWorld.copy(sun.position).normalize();
     }
     const hemisphere = world.getObjectByName(SKY_OBJECT_NAMES.hemisphere) as THREE.HemisphereLight | undefined;
     if (hemisphere) {
       this.hemisphere.color.copy(hemisphere.color);
       this.hemisphere.groundColor.copy(hemisphere.groundColor);
-      this.hemisphere.intensity = hemisphere.intensity;
+      this.hemisphere.intensity = hemisphere.intensity * gain;
     }
-    this.fill.intensity = FILL_WORLD_SHARE * (sun ? sun.intensity : 1);
+    this.fill.intensity = FILL_WORLD_SHARE * (sun ? sun.intensity : 1) * gain;
     this.flash?.setGain(FLASH_HDR_GAIN);
     this.worldLit = true;
     this.orient(this.viewInverse.identity());
