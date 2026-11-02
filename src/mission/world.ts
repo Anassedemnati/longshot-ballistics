@@ -4,6 +4,8 @@ import { DustSystem } from '../fx/dust';
 import { SparkSystem } from '../fx/sparks';
 import type { HitTarget, Obstacle } from '../game/hit';
 import { createGroundDetail } from '../scene/detail';
+import { createNest } from '../scene/nest';
+import type { Nest } from '../scene/nest';
 import { createPropMesh } from '../scene/props';
 import { createShadowLight } from '../scene/shadows';
 import type { ShadowLight } from '../scene/shadows';
@@ -17,6 +19,8 @@ import { createTerrainField } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import { createVehicleTarget } from '../scene/vehicleTarget';
 import type { VehicleTarget } from '../scene/vehicleTarget';
+import { createVegetation, gltfModelLoader, meshGroundOf } from '../scene/vegetation';
+import type { ModelLoader, Vegetation } from '../scene/vegetation';
 import type { MissionConfig } from './config';
 import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
 import type { MissionLayout, SniperPlacement, SoldierPlacement, VehicleTargetPlacement } from './layout';
@@ -24,7 +28,7 @@ import { propColliders, vehicleEngineObstacle } from './props';
 import { sniperAimPoints } from './sniperDims';
 
 // Builds the mission's world from its config: the terrain field and the layout (pure, no three.js),
-// then the scene with the sky and sun shadow, terrain, ground detail, props, soldiers and vehicle targets, and the lists the bullets
+// then the scene with the sky and sun shadow, terrain, ground detail, vegetation, the firing nest, props, soldiers and vehicle targets, and the lists the bullets
 // and the rangefinder read (cover colliders, live hit targets). `run.ts` plays it.
 
 /** Height of the aim point on a soldier (chest), m above the feet. */
@@ -70,6 +74,10 @@ export interface World extends MissionPlan {
   shadow: ShadowLight;
   dust: DustSystem;
   sparks: SparkSystem;
+  /** Trees, shrubs, boulders and grass; the glTF kinds join the scene as they load. */
+  vegetation: Vegetation;
+  /** The sandbags and rocks round the shooter. */
+  nest: Nest;
   /**
    * Everything the bullets can meet. `obstacles` and `liveTargets` are single arrays built here and
    * only edited in place (BulletSystem caches bounding radii by Obstacle identity; no per-frame rebuilds).
@@ -108,7 +116,7 @@ export function planMission(config: MissionConfig, legacy: boolean): MissionPlan
 export function buildWorld(
   config: MissionConfig,
   plan: MissionPlan,
-  opts: { legacy: boolean; maxAnisotropy: number; wind: Vec3 },
+  opts: { legacy: boolean; maxAnisotropy: number; wind: Vec3; loadModel?: ModelLoader },
 ): World {
   const { field, layout } = plan;
   const scene = new THREE.Scene();
@@ -118,6 +126,13 @@ export function buildWorld(
   scene.add(createRocks(field));
   // Pebbles (and grass in the valley): visual only, kept off the lanes, the props and every target, enemy snipers included.
   scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers).group);
+  // Trees, boulders, grass and the firing nest stand on the terrain mesh's surface; both keep clear of every line of sight.
+  const ground = meshGroundOf(field);
+  const loadModel = opts.loadModel ?? gltfModelLoader(); // one loader, so a model both use (the boulder) is fetched once
+  const vegetation = createVegetation(field, layout, config.seed, config.position, { maxAnisotropy: opts.maxAnisotropy, loadModel, ground });
+  scene.add(vegetation.group);
+  const nest = createNest(field, config.seed, config.position, { maxAnisotropy: opts.maxAnisotropy, loadModel, ground });
+  scene.add(nest.group);
   const dust = new DustSystem();
   scene.add(dust.group);
   const sparks = new SparkSystem();
@@ -172,7 +187,7 @@ export function buildWorld(
   }
   const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length;
 
-  return { ...plan, scene, shadow, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
+  return { ...plan, scene, shadow, dust, sparks, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */
