@@ -102,20 +102,32 @@ export interface ShadowLight {
   light: THREE.DirectionalLight;
   /** Centre the shadow box on `focus` (a world point); call once per frame. */
   update(focus: Vec3): void;
+  /** Redraw the map every `n` frames from now on (1 = every frame). */
+  setEvery(n: number): void;
+}
+
+export interface ShadowOptions {
+  /** Side of the map, texels (default `SHADOW_MAP_SIZE`). */
+  mapSize?: number;
+  /** The map is redrawn every this many frames (1 = every frame). The box moves only when the map is redrawn, so between redraws the shadows lag the view by a frame or two. */
+  every?: number;
 }
 
 /**
- * Turn the scene's sun into the shadow caster: 2048 x 2048 PCF map, a +-30 m box. `sun` is the light
+ * Turn the scene's sun into the shadow caster: a PCF map (2048 x 2048 by default), a +-30 m box. `sun` is the light
  * `createSky` already added (so the scene is not lit twice); without one a new light with the theme's
  * sun colour and intensity is added to `scene`.
  */
-export function createShadowLight(scene: THREE.Scene, theme: ThemeId, sun?: THREE.DirectionalLight): ShadowLight {
+export function createShadowLight(scene: THREE.Scene, theme: ThemeId, sun?: THREE.DirectionalLight, options: ShadowOptions = {}): ShadowLight {
+  const mapSize = options.mapSize ?? SHADOW_MAP_SIZE;
+  let every = Math.max(1, Math.floor(options.every ?? 1));
   const look = SKY_LOOKS[theme];
   const dir = sunDirectionOf(look);
   const light = sun ?? new THREE.DirectionalLight(look.sunColor, look.sunIntensity);
   if (!sun) scene.add(light);
   light.castShadow = true;
-  light.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+  light.shadow.mapSize.set(mapSize, mapSize);
+  light.shadow.autoUpdate = every === 1;
   const cam = light.shadow.camera;
   cam.left = -SHADOW_HALF_EXTENT;
   cam.right = SHADOW_HALF_EXTENT;
@@ -128,11 +140,21 @@ export function createShadowLight(scene: THREE.Scene, theme: ThemeId, sun?: THRE
   light.shadow.normalBias = 0.03;
   scene.add(light.target); // its world matrix places the box: it must be in the scene graph
 
-  const texel = (2 * SHADOW_HALF_EXTENT) / SHADOW_MAP_SIZE;
+  const texel = (2 * SHADOW_HALF_EXTENT) / mapSize;
+  let frame = 0;
   const snapped: Vec3 = { x: 0, y: 0, z: 0 }; // reused every frame
   return {
     light,
+    setEvery(n) {
+      every = Math.max(1, Math.floor(n));
+      light.shadow.autoUpdate = every === 1;
+    },
     update(focus) {
+      if (every > 1) {
+        // With autoUpdate off the map is drawn on the frames asked for; the box moves only then too, so a held map is never looked up through a moved box.
+        if (frame++ % every !== 0) return;
+        light.shadow.needsUpdate = true;
+      }
       const f = snapToTexelGrid(focus, dir, texel, snapped);
       light.target.position.set(f.x, f.y, f.z);
       light.position.set(f.x + dir.x * LIGHT_DISTANCE, f.y + dir.y * LIGHT_DISTANCE, f.z + dir.z * LIGHT_DISTANCE);

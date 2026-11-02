@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ThemeId } from '../../src/mission/themes';
@@ -241,6 +242,42 @@ describe('createPostFx (built without WebGL)', () => {
     expect((overlay as OverlayPass).enabled).toBe(false);
     expect(renderer.toneMappingExposure).toBe(0.55);
     expect(renderer.info.reset).toHaveBeenCalledTimes(2); // once per frame, so the counts cover every pass
+  });
+
+  it('FXAA is the last pass, after the output pass (it needs the display colours), and its resolution follows the drawing buffer', () => {
+    const renderer = stubRenderer();
+    const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high', samples: 0, fxaa: true });
+    expect(post.fxaa).toBeInstanceOf(ShaderPass);
+    expect(post.passes[post.passes.length - 1]).toBe(post.fxaa);
+    expect(post.passes[post.passes.length - 2]).toBe(post.output);
+    expect(post.fxaa!.uniforms['resolution'].value.x).toBeCloseTo(1 / 2560, 9); // 1280 x 720 CSS px at pixel ratio 2
+    expect(post.fxaa!.uniforms['resolution'].value.y).toBeCloseTo(1 / 1440, 9);
+    post.setSize(800, 600);
+    expect(post.fxaa!.uniforms['resolution'].value.x).toBeCloseTo(1 / 1600, 9);
+    // without it, the output pass is last
+    const plain = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high' });
+    expect(plain.fxaa).toBeNull();
+    expect(plain.passes[plain.passes.length - 1]).toBe(plain.output);
+  });
+
+  it('the multisampling can be chosen apart from the chain: bloom on, no multisampling (the medium level)', () => {
+    const post = createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'valley', quality: 'high', samples: 0 });
+    expect(post.bloom).not.toBeNull();
+    expect(post.composer?.renderTarget1.samples).toBe(0);
+    expect(createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'valley', quality: 'high' }).composer?.renderTarget1.samples).toBe(POST_SAMPLES.high);
+  });
+
+  it('with a reversed depth buffer the target gets a 32-bit float depth texture (a fixed-point one would lose the precision the reversal brings)', () => {
+    const renderer = stubRenderer();
+    (renderer as unknown as { capabilities: { reversedDepthBuffer: boolean } }).capabilities = { reversedDepthBuffer: true };
+    const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high' });
+    const target = post.composer!.renderTarget1;
+    expect(target.depthTexture).not.toBeNull();
+    expect(target.depthTexture!.type).toBe(THREE.FloatType);
+    expect(target.resolveDepthBuffer).toBe(false);
+    expect(post.composer!.renderTarget2.depthTexture!.type).toBe(THREE.FloatType);
+    // and none without it
+    expect(createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'desert', quality: 'high' }).composer!.renderTarget1.depthTexture).toBeNull();
   });
 
   it('without an overlay there is no overlay pass', () => {

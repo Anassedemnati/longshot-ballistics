@@ -301,8 +301,12 @@ export function createGroundDetail(
   seed: number,
   maxAnisotropy = 8,
   extraTargets: ReadonlyArray<{ x: number; z: number }> = [],
+  /** Share of the planned pebbles and tufts drawn (the quality level's; a prefix of the shuffled plan is an even thinning). */
+  scale = 1,
 ): { group: THREE.Group; plan: GroundDetailPlan } {
-  const plan = planGroundDetail(field, layout, seed, extraTargets);
+  const full = planGroundDetail(field, layout, seed, extraTargets);
+  const keep = <T>(items: T[]): T[] => (scale >= 1 ? items : items.slice(0, Math.ceil(items.length * Math.max(0, scale))));
+  const plan: GroundDetailPlan = { pebbles: keep(full.pebbles), tufts: keep(full.tufts) };
   const group = new THREE.Group();
   group.name = 'ground-detail';
   group.add(pebbleMesh(plan, field.theme));

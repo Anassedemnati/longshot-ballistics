@@ -72,6 +72,19 @@ describe('grassTuftPixels', () => {
   });
 });
 
+describe('createGroundDetail scale', () => {
+  it('draws a prefix share of the plan (an even thinning), all of it by default', () => {
+    const config = clampMission({ ...DEFAULT_MISSION, theme: 'valley', seed: 3 });
+    const field = createTerrainField('valley', 3);
+    const layout = generateLayout(config, field);
+    const full = createGroundDetail(field, layout, 3).plan;
+    const half = createGroundDetail(field, layout, 3, 8, [], 0.5);
+    expect(half.plan.pebbles).toEqual(full.pebbles.slice(0, Math.ceil(full.pebbles.length * 0.5)));
+    expect(half.plan.tufts.length).toBe(Math.ceil(full.tufts.length * 0.5));
+    expect((half.group.children[0] as THREE.InstancedMesh).count).toBe(half.plan.pebbles.length);
+  });
+});
+
 describe('createGroundDetail', () => {
   for (const theme of THEMES) {
     it(`${theme}: one instanced mesh of pebbles${theme === 'valley' ? ' and one of grass tufts' : ''}, within the caps`, () => {

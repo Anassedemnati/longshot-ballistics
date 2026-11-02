@@ -511,6 +511,8 @@ export interface VegetationOptions {
   loadModel?: ModelLoader;
   /** The terrain mesh's surface (see `meshGroundOf`); computed when absent. */
   ground?: (x: number, z: number) => number;
+  /** Share of the planned trees, shrubs, boulders and grass that is drawn (the quality level's); 1 = all. The plan is in placement order, which is random, so a prefix is an even thinning. */
+  scale?: number;
 }
 
 /**
@@ -527,7 +529,10 @@ export function createVegetation(
   const theme = field.theme;
   const maxAnisotropy = options.maxAnisotropy ?? 8;
   const ground = options.ground ?? meshGroundOf(field);
-  const plan = planScatter({ field, layout, seed, position, ground });
+  const full = planScatter({ field, layout, seed, position, ground });
+  const share = options.scale ?? 1;
+  const thin = (items: ScatterItem[]): ScatterItem[] => (share >= 1 ? items : items.slice(0, Math.ceil(items.length * Math.max(0, share))));
+  const plan: ScatterPlan = { firs: thin(full.firs), snags: thin(full.snags), logs: thin(full.logs), shrubs: thin(full.shrubs), boulders: thin(full.boulders), grass: thin(full.grass) };
   const group = new THREE.Group();
   group.name = 'vegetation';
   const add = (mesh: THREE.InstancedMesh): void => {

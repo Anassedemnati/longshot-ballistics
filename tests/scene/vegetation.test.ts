@@ -158,6 +158,20 @@ describe('modelParts / loadModelKit', () => {
   });
 });
 
+describe('createVegetation scale', () => {
+  it('draws a prefix share of every kind (the placement order is random: an even thinning), and all of it by default', async () => {
+    const m = bigMission('valley', 3, 'ridge');
+    const full = createVegetation(m.field, m.layout, 3, 'ridge', { loadModel: fakeLoader });
+    const thin = createVegetation(m.field, m.layout, 3, 'ridge', { loadModel: fakeLoader, scale: 0.5 });
+    await Promise.all([full.ready, thin.ready]);
+    for (const kind of ['firs', 'snags', 'logs', 'shrubs', 'boulders', 'grass'] as const) {
+      expect(thin.plan[kind]).toEqual(full.plan[kind].slice(0, Math.ceil(full.plan[kind].length * 0.5)));
+    }
+    expect(thin.plan.firs.length).toBeLessThan(full.plan.firs.length);
+    expect(full.plan.firs.length).toBeGreaterThan(300); // untouched by default
+  });
+});
+
 describe('createVegetation', () => {
   it('one InstancedMesh per kind with the planned counts, within the budgets; every instance inside its reserved footprint', async () => {
     for (const theme of THEMES) {

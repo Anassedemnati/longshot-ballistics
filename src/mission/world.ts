@@ -62,6 +62,14 @@ export interface Vehicle {
   engineCenter: Vec3;
 }
 
+/** What the render quality level changes in the scene itself (see scene/quality.ts); the defaults are the full scene. */
+export interface WorldQuality {
+  shadowMapSize?: number;
+  shadowEvery?: number;
+  vegetationScale?: number;
+  detailScale?: number;
+}
+
 /** The terrain and where everything stands: all that can fail while a mission is planned, before any scene exists. */
 export interface MissionPlan {
   field: TerrainField;
@@ -116,21 +124,22 @@ export function planMission(config: MissionConfig, legacy: boolean): MissionPlan
 export function buildWorld(
   config: MissionConfig,
   plan: MissionPlan,
-  opts: { legacy: boolean; maxAnisotropy: number; wind: Vec3; loadModel?: ModelLoader },
+  opts: { legacy: boolean; maxAnisotropy: number; wind: Vec3; loadModel?: ModelLoader; quality?: WorldQuality },
 ): World {
   const { field, layout } = plan;
   const scene = new THREE.Scene();
   const { sun, sunDirection } = createSky(scene, config.theme);
-  const shadow = createShadowLight(scene, config.theme, sun);
+  const quality = opts.quality ?? {};
+  const shadow = createShadowLight(scene, config.theme, sun, { mapSize: quality.shadowMapSize, every: quality.shadowEvery });
   // The terrain's baked wall shadows are cast for the very sun the sky and the shadow light use (the HDRI is turned to match it).
   scene.add(createTerrainMesh(field, opts.maxAnisotropy, sunDirection));
   scene.add(createRocks(field));
   // Pebbles (and grass in the valley): visual only, kept off the lanes, the props and every target, enemy snipers included.
-  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers).group);
+  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers, quality.detailScale ?? 1).group);
   // Trees, boulders, grass and the firing nest stand on the terrain mesh's surface; both keep clear of every line of sight.
   const ground = meshGroundOf(field);
   const loadModel = opts.loadModel ?? gltfModelLoader(); // one loader, so a model both use (the boulder) is fetched once
-  const vegetation = createVegetation(field, layout, config.seed, config.position, { maxAnisotropy: opts.maxAnisotropy, loadModel, ground });
+  const vegetation = createVegetation(field, layout, config.seed, config.position, { maxAnisotropy: opts.maxAnisotropy, loadModel, ground, scale: quality.vegetationScale });
   scene.add(vegetation.group);
   const nest = createNest(field, config.seed, config.position, { maxAnisotropy: opts.maxAnisotropy, loadModel, ground });
   scene.add(nest.group);

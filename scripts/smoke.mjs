@@ -1093,6 +1093,36 @@ async function run() {
       }
     }
 
+    // 10c. The render quality settings and the depth buffer: every level (and the older ?post= flags) starts without a console error, draws,
+    // stays in the draw-call budget, and the post chain's float depth is reversed (only ?post=off, which draws onto the canvas, keeps the logarithmic one).
+    for (const [query, levels, reversed] of [
+      ['quality=high', ['high'], true],
+      ['quality=medium', ['medium'], true],
+      ['quality=low', ['low'], true],
+      ['post=low', ['low'], true],
+      ['post=off', ['low'], false],
+      ['', ['medium', 'low'], true], // auto: starts on medium (a very slow machine drops to low in the first seconds)
+    ]) {
+      const label = `quality ${query || 'auto'}`;
+      const problemsBefore = problems.length;
+      const qpage = await openPage();
+      await startGame(qpage, `m=${smallMission('d', 'r')}&debug=1${query ? `&${query}` : ''}`);
+      await animationFrames(qpage, 8);
+      const q = await qpage.evaluate(() => ({
+        info: window.__perf ? window.__perf.quality() : null,
+        reversed: window.__perf ? window.__perf.renderer.capabilities.reversedDepthBuffer : null,
+        log: window.__perf ? window.__perf.renderer.capabilities.logarithmicDepthBuffer : null,
+      }));
+      check(q.info !== null && levels.includes(q.info.level), `${label}: the level is ${levels.join(' or ')} (${q.info && q.info.level})`);
+      check(q.reversed === reversed && q.log === !reversed, `${label}: ${reversed ? 'reversed' : 'logarithmic'} depth buffer (reversed ${q.reversed}, logarithmic ${q.log})`);
+      st = await gameState(qpage);
+      check(st.render.calls > 20 && st.render.calls <= MAX_DRAW_CALLS, `${label}: ${st.render.calls} draw calls (within 20..${MAX_DRAW_CALLS})`);
+      const qPng = await analyzePng(qpage, await shoot(qpage, { hideHud: true, path: join(OUT_DIR, `quality-${query.replace(/[^a-z]/g, '') || 'auto'}.png`) }));
+      check(qPng.distinctAll >= 6, `${label}: the canvas is not blank (${qPng.distinctAll} distinct sampled colours)`);
+      check(problems.length === problemsBefore, `${label}: no console errors${problems.length > problemsBefore ? `: ${problems.slice(problemsBefore).join(' | ')}` : ''}`);
+      await qpage.close();
+    }
+
     // 11. The start menu. First without ?debug=1: it shows, fits 1280x720, exposes no hook and starts the defaults.
     const plainMenu = await openPage();
     await plainMenu.goto(preview.url, { waitUntil: 'load' });

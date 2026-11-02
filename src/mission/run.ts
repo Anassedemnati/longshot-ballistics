@@ -24,7 +24,10 @@ import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
-import { createPostFx, postQualityFromSearch } from '../scene/postfx';
+import { createPostFx } from '../scene/postfx';
+import type { PostFx } from '../scene/postfx';
+import { FrameGovernor, pixelRatioFor, qualityFromSearch, settingsFor } from '../scene/quality';
+import type { GovernorAction } from '../scene/quality';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
 import { shadowFocus } from '../scene/shadows';
 import type { ShadowFocusInput } from '../scene/shadows';
@@ -108,14 +111,21 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   const shooter = field.shooter;
 
   // Scene
-  const renderer = createRenderer(app);
-  // The HDRI sky (and its post-processing) is fetched while the world is built; `?post=off` keeps the stage-1 sky and render path.
-  const postQuality = postQualityFromSearch(window.location.search);
-  const hdriLoading = postQuality === 'off' ? Promise.resolve(null) : loadSkyHdri(config.theme);
+  // Render quality (scene/quality.ts): `?quality=auto|high|medium|low`, `auto` (the default) starting at `medium` and holding 60 fps by
+  // scaling the resolution; the older `?post=high|low|off` maps onto it. The HDRI sky (and its post-processing) is fetched while the
+  // world is built; `?post=off` keeps the stage-1 sky and render path.
+  const request = qualityFromSearch(window.location.search);
+  const auto = request.choice === 'auto';
+  let settings = settingsFor(request.choice === 'auto' ? 'medium' : request.choice, request.post);
+  const governor = new FrameGovernor(auto);
+  let pixelRatio = pixelRatioFor(settings, window.devicePixelRatio, 1);
+  const renderer = createRenderer(app, { composer: settings.post !== 'off', pixelRatio });
+  const hdriLoading = settings.post === 'off' ? Promise.resolve(null) : loadSkyHdri(config.theme);
   const world = buildWorld(config, plan, {
     legacy,
     maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
     wind: windVec,
+    quality: settings,
   });
   // `obstacles` and `liveTargets` are the world's single arrays, only ever edited in place.
   const { scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal } = world;
@@ -147,15 +157,20 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // The glTF models were requested with the world: wait for them too (they load alongside the HDRI), so the vegetation is there on the first frame.
   const [hdri] = await Promise.all([hdriLoading, settledWithin([world.vegetation.ready, world.nest.ready], MODELS_TIMEOUT_MS)]);
   if (hdri) applyHdriSky(renderer, scene, config.theme, hdri);
-  const post = createPostFx({
-    renderer,
-    scene,
-    camera: view.camera,
-    theme: config.theme,
-    quality: hdri ? postQuality : 'off',
-    overlay: () => rifleModel.render(renderer),
-    glow: () => rifleModel.flashVisible,
-  });
+  // Without the HDRI the procedural sky is drawn through the same chain (its float depth keeps the far precision).
+  const buildPost = (): PostFx =>
+    createPostFx({
+      renderer,
+      scene,
+      camera: view.camera,
+      theme: config.theme,
+      quality: settings.post,
+      samples: settings.samples,
+      fxaa: settings.fxaa,
+      overlay: () => rifleModel.render(renderer),
+      glow: () => rifleModel.flashVisible,
+    });
+  let post = buildPost();
   // Drawn into the post chain, the rifle is lit by the world's own sky and sun (its muzzle flash then blooms); on the direct path it keeps its stand-in light.
   if (post.composer) rifleModel.lightFrom(scene, renderer.toneMappingExposure, post.bloom !== null);
   prep.remove(); // the canvas is in; the rest of the build runs before the next paint
@@ -398,6 +413,19 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     });
   }
 
+  // Performance probes (`?debug=1` only): the scene, renderer and post chain, so a measuring script can switch parts off.
+  if (opts.debug) {
+    (window as unknown as { __perf?: unknown }).__perf = {
+      scene,
+      renderer,
+      view,
+      world,
+      get post() {
+        return post;
+      },
+      quality: () => ({ level: settings.level, scale: governor.scale, pixelRatio, frameMs: governor.frameMs, auto }),
+    };
+  }
   if (import.meta.env.DEV || opts.debug) {
     installDebugHook(
       {
@@ -436,8 +464,27 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     );
   }
 
+  /** Render at the level's pixel ratio times the governor's scale (a new pixel ratio reallocates the post chain's targets). */
+  function applyResolution(): void {
+    pixelRatio = pixelRatioFor(settings, window.devicePixelRatio, governor.scale);
+    resizeRenderer(renderer, window.innerWidth, window.innerHeight, pixelRatio);
+    post.setSize(window.innerWidth, window.innerHeight);
+  }
+  function applyGovernor(action: GovernorAction): void {
+    if (action.kind === 'scale') {
+      applyResolution();
+      return;
+    }
+    // `auto` found the machine hopelessly slow: what can change at run time goes to the low level (no FXAA, the shadow map every other frame).
+    settings = settingsFor(action.level, request.post);
+    world.shadow.setEvery(settings.shadowEvery);
+    post.dispose();
+    post = buildPost();
+    applyResolution();
+  }
+
   window.addEventListener('resize', () => {
-    resizeRenderer(renderer, window.innerWidth, window.innerHeight);
+    resizeRenderer(renderer, window.innerWidth, window.innerHeight, pixelRatio);
     post.setSize(window.innerWidth, window.innerHeight);
     view.resize(window.innerWidth, window.innerHeight);
     rifleModel.resize(window.innerWidth, window.innerHeight);
@@ -458,6 +505,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     const rawDt = lastMs === null ? 0 : (nowMs - lastMs) / 1000;
     lastMs = nowMs;
     const dt = Number.isFinite(rawDt) && rawDt > 0 ? Math.min(rawDt, MAX_FRAME_DT) : 0;
+    if (auto) {
+      const action = governor.frame(rawDt * 1000);
+      if (action) applyGovernor(action);
+    }
     frameNowMs = nowMs;
 
     view.look(input.yaw, input.pitch);

@@ -3,7 +3,9 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 import type { ThemeId } from '../mission/themes';
 import { SKY_LOOKS, sunDirectionOf } from './sky';
 
@@ -175,6 +177,10 @@ export interface PostFxOptions {
   overlay?: () => void;
   /** True while the overlay shows something that should bloom (the muzzle flash): the bloom pass then runs even with the sun out of view. */
   glow?: () => boolean;
+  /** Multisampling of the target; default `POST_SAMPLES[quality]` (2 for `high`, none for `low`). */
+  samples?: number;
+  /** FXAA after the output pass (for a chain without multisampling). */
+  fxaa?: boolean;
 }
 
 export interface PostFx {
@@ -185,6 +191,8 @@ export interface PostFx {
   composer: EffectComposer | null;
   /** Null unless `quality` is `high`. Drawn only while the sun is near the view (see `sunNearView`). */
   bloom: UnrealBloomPass | null;
+  /** The FXAA pass, last in the chain, or null. */
+  fxaa: ShaderPass | null;
   /** The output pass, whose `gradeLift`, `gradeGain`, ... uniforms hold the theme's grade; null when `quality` is `off`. */
   output: OutputPass | null;
   /** Draw one frame; `withOverlay`: draw the overlay (the rifle) over the world. Resets `renderer.info` first, so its counts cover every pass of the frame. */
@@ -201,6 +209,7 @@ export interface PostFx {
  */
 export function createPostFx(opts: PostFxOptions): PostFx {
   const { renderer, scene, camera, theme, quality, overlay, glow } = opts;
+  const wantFxaa = opts.fxaa === true;
   // The composer renders several times a frame; `info` is reset by hand once per frame so it counts all of them.
   renderer.info.autoReset = false;
 
@@ -211,6 +220,7 @@ export function createPostFx(opts: PostFxOptions): PostFx {
       composer: null,
       bloom: null,
       output: null,
+      fxaa: null,
       render(withOverlay) {
         renderer.info.reset();
         renderer.render(scene, camera);
@@ -223,10 +233,17 @@ export function createPostFx(opts: PostFxOptions): PostFx {
 
   const size = renderer.getSize(new THREE.Vector2());
   const pixelRatio = renderer.getPixelRatio();
-  const target = new THREE.WebGLRenderTarget(size.x * pixelRatio, size.y * pixelRatio, {
+  // A reversed depth buffer only keeps its precision in 32-bit float: the target's default is 24-bit fixed point (a depth texture
+  // of float type makes three allocate the float format, also for the multisampled buffer). Its resolve is not needed.
+  const reversedDepth = (renderer as { capabilities?: { reversedDepthBuffer?: boolean } }).capabilities?.reversedDepthBuffer === true;
+  const width = size.x * pixelRatio;
+  const height = size.y * pixelRatio;
+  const target = new THREE.WebGLRenderTarget(width, height, {
     type: THREE.HalfFloatType,
-    samples: POST_SAMPLES[quality],
+    samples: opts.samples ?? POST_SAMPLES[quality],
+    ...(reversedDepth ? { depthTexture: new THREE.DepthTexture(width, height, THREE.FloatType) } : {}),
   });
+  if (reversedDepth) target.resolveDepthBuffer = false;
   target.texture.name = 'PostFx.rt1';
   const composer = new EffectComposer(renderer, target);
   composer.setPixelRatio(pixelRatio);
@@ -252,6 +269,12 @@ export function createPostFx(opts: PostFxOptions): PostFx {
   }
 
   const output = add(gradedOutputPass(GRADES[theme]));
+  // FXAA works on the display colours the output pass has just made: it is the last pass, which draws to the screen.
+  let fxaa: ShaderPass | null = null;
+  if (wantFxaa) {
+    fxaa = add(new ShaderPass(FXAAShader));
+    fxaa.uniforms['resolution'].value.set(1 / width, 1 / height);
+  }
 
   const sun = sunDirectionOf(SKY_LOOKS[theme]);
   const forward = new THREE.Vector3();
@@ -261,6 +284,7 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     composer,
     bloom,
     output,
+    fxaa,
     render(withOverlay) {
       renderer.info.reset();
       if (overlayPass) overlayPass.enabled = withOverlay;
@@ -273,6 +297,7 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     setSize(width, height) {
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(width, height);
+      if (fxaa) fxaa.uniforms['resolution'].value.set(1 / (width * renderer.getPixelRatio()), 1 / (height * renderer.getPixelRatio()));
     },
     dispose() {
       composer.dispose();

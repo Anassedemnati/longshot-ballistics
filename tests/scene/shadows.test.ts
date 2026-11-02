@@ -189,6 +189,38 @@ describe('createShadowLight', () => {
     });
   }
 
+  it('a smaller map and a redraw every other frame: the map is drawn on the frames asked for, and the box moves only then', () => {
+    const scene = new THREE.Scene();
+    const { sun } = createSky(scene, 'desert');
+    const shadow = createShadowLight(scene, 'desert', sun, { mapSize: 1024, every: 2 });
+    expect(sun.shadow.mapSize.x).toBe(1024);
+    expect(sun.shadow.autoUpdate).toBe(false);
+    const drawn: boolean[] = [];
+    const targets: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      sun.shadow.needsUpdate = false;
+      shadow.update({ x: 0, y: 0, z: -100 - i * 10 });
+      drawn.push(sun.shadow.needsUpdate);
+      targets.push(Math.round(sun.target.position.z));
+    }
+    expect(drawn).toEqual([true, false, true, false, true, false]);
+    expect(targets[1]).toBe(targets[0]); // held between redraws: the map is never looked up through a moved box
+    expect(targets[2]).not.toBe(targets[1]);
+    shadow.setEvery(1);
+    expect(sun.shadow.autoUpdate).toBe(true);
+    // the texel (and so the snap grid) follows the map size
+    shadow.update({ x: 0, y: 0, z: -500 });
+    expect(Math.abs(sun.target.position.z + 500)).toBeLessThan(1);
+  });
+
+  it('every frame by default, with the 2048 map', () => {
+    const scene = new THREE.Scene();
+    const { sun } = createSky(scene, 'valley');
+    createShadowLight(scene, 'valley', sun);
+    expect(sun.shadow.autoUpdate).toBe(true);
+    expect(sun.shadow.mapSize.x).toBe(2048);
+  });
+
   it('without a sun it adds its own light', () => {
     const scene = new THREE.Scene();
     const shadow = createShadowLight(scene, 'valley');
