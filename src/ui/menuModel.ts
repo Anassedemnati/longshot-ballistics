@@ -60,7 +60,7 @@ export function rifleNote(rifle: MissionConfig['rifle']): string {
 
 /** The line under the firing position control: what the player sees from each position (spec B.2). Theme-neutral: it reads the same in every theme. */
 const POSITION_NOTE: Record<FiringPosition, string> = {
-  valley: 'Low ground. A near-level sightline across the valley floor.',
+  valley: 'Valley floor. A near-level sightline downrange.',
   ridge: 'Elevated ridge. A clear view into the valley below.',
   mountain: 'Steep rocky spur. A pronounced downhill shot into the basin.',
 };
