@@ -225,7 +225,12 @@ vec4 triSample(sampler2D t, vec3 p, vec3 dx, vec3 dy, vec3 w, float tile, vec3 s
   p = p / tile + shift;
   dx /= tile;
   dy /= tile;
-  return textureGrad(t, p.zy, dx.zy, dy.zy) * w.x + textureGrad(t, p.xz, dx.xz, dy.xz) * w.y + textureGrad(t, p.xy, dx.xy, dy.xy) * w.z;
+  // A projection whose weight is zero is not fetched (a cliff face is mostly one or two of the three): the weights are trimmed by the caller.
+  vec4 c = vec4(0.0);
+  if (w.x > 0.0) c += textureGrad(t, p.zy, dx.zy, dy.zy) * w.x;
+  if (w.y > 0.0) c += textureGrad(t, p.xz, dx.xz, dy.xz) * w.y;
+  if (w.z > 0.0) c += textureGrad(t, p.xy, dx.xy, dy.xy) * w.z;
+  return c;
 }
 
 // Triplanar normal map in world space (whiteout blend); n is the geometric normal, k the strength of the map.
@@ -233,13 +238,23 @@ vec3 triNormal(sampler2D t, vec3 p, vec3 dx, vec3 dy, vec3 w, float tile, vec3 n
   p /= tile;
   dx /= tile;
   dy /= tile;
-  vec3 tx = textureGrad(t, p.zy, dx.zy, dy.zy).xyz * 2.0 - 1.0;
-  vec3 ty = textureGrad(t, p.xz, dx.xz, dy.xz).xyz * 2.0 - 1.0;
-  vec3 tz = textureGrad(t, p.xy, dx.xy, dy.xy).xyz * 2.0 - 1.0;
-  tx = vec3(tx.xy * k + n.zy, abs(tx.z) * n.x);
-  ty = vec3(ty.xy * k + n.xz, abs(ty.z) * n.y);
-  tz = vec3(tz.xy * k + n.xy, abs(tz.z) * n.z);
-  return normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
+  vec3 sum = vec3(0.0);
+  if (w.x > 0.0) {
+    vec3 tx = textureGrad(t, p.zy, dx.zy, dy.zy).xyz * 2.0 - 1.0;
+    tx = vec3(tx.xy * k + n.zy, abs(tx.z) * n.x);
+    sum += tx.zyx * w.x;
+  }
+  if (w.y > 0.0) {
+    vec3 ty = textureGrad(t, p.xz, dx.xz, dy.xz).xyz * 2.0 - 1.0;
+    ty = vec3(ty.xy * k + n.xz, abs(ty.z) * n.y);
+    sum += ty.xzy * w.y;
+  }
+  if (w.z > 0.0) {
+    vec3 tz = textureGrad(t, p.xy, dx.xy, dy.xy).xyz * 2.0 - 1.0;
+    tz = vec3(tz.xy * k + n.xy, abs(tz.z) * n.z);
+    sum += tz.xyz * w.z;
+  }
+  return normalize(sum);
 }
 
 // Tangent-space normal (-1..1) seen from above, in world space.
@@ -278,8 +293,10 @@ function colorChunk(look: TerrainMaterialLook): string {
       vec3 dpx = dFdx(vGround);
       vec3 dpy = dFdy(vGround);
       // Slow world-space wobble that breaks up the slope and height thresholds (it fades with the pixel footprint like the rest).
-      float wob = (vnoise(vec2(vGround.x * 0.6 + vGround.z * 0.8, vGround.y) / 45.0) - 0.5) * 2.0 * wide
-                + 0.5 * (vnoise(vec2(vGround.x * 0.8 - vGround.z * 0.6, vGround.y * 1.3) / 14.0) - 0.5) * 2.0 * fine;
+      // (Each noise is evaluated only while its weight is above zero: most of the screen is far ground, where the fine terms are gone.)
+      float wob = 0.0;
+      if (wide > 0.0) wob += (vnoise(vec2(vGround.x * 0.6 + vGround.z * 0.8, vGround.y) / 45.0) - 0.5) * 2.0 * wide;
+      if (fine > 0.0) wob += 0.5 * (vnoise(vec2(vGround.x * 0.8 - vGround.z * 0.6, vGround.y * 1.3) / 14.0) - 0.5) * 2.0 * fine;
       float rockW = smoothstep(uRockMask.x, uRockMask.y, steep + wob * 0.07);
       rockW = max(rockW, smoothstep(uRockMask.z, uRockMask.w, vGround.y + wob * 9.0));
       float capW = 0.0;
@@ -296,16 +313,27 @@ function colorChunk(look: TerrainMaterialLook): string {
       vec2 gp = vGround.xz;
       mat2 turn = mat2(0.8, -0.6, 0.6, 0.8);
       float fineG = 1.0 - smoothstep(0.3, 1.5, pixelM);
-      float pickD = mix(0.5, smoothstep(0.3, 0.7, vnoise(turn * gp / 11.0)), fineG);
-      vec3 gDetail = mix(texture2D(tGroundDiff, gp / uTile.x).rgb, texture2D(tGroundDiff, turn * gp / uTile.y + 0.29).rgb, pickD);
+      float pickD = 0.5;
+      if (fineG > 0.0) pickD = mix(0.5, smoothstep(0.3, 0.7, vnoise(turn * gp / 11.0)), fineG);
       vec3 gMean = textureLod(tGroundDiff, gp / uTile.x, 10.0).rgb;
-      float lumaMean = dot(gMean, vec3(0.3, 0.59, 0.11));
-      gDetail += max(0.0, lumaMean * uDetailFloor - dot(gDetail, vec3(0.3, 0.59, 0.11))); // lift the darkest marks (footprints, holes): repeated, they would read as a pattern
-      vec3 albedo = mix(gMean, gDetail, 1.0 - smoothstep(uTile.x / 16.0, uTile.x / 5.0, pixelM));
-      float cloud = 0.38 * mix(0.5, vnoise(gp / 9.0), 1.0 - smoothstep(1.1, 3.0, pixelM))
-                  + 0.30 * mix(0.5, vnoise(turn * gp / 26.0 + 3.1), 1.0 - smoothstep(3.0, 9.0, pixelM))
-                  + 0.20 * mix(0.5, vnoise(gp / 75.0 + 9.7), 1.0 - smoothstep(9.0, 25.0, pixelM))
-                  + 0.12 * vnoise(turn * gp / 210.0 + 1.3);
+      // The detail texture only shows while the pixel is small (beyond a metre and a bit it is the mean colour): sampled then only, with
+      // explicit gradients (the same ones the implicit sampling would use) so the fetch may sit in a branch.
+      float detailW = 1.0 - smoothstep(uTile.x / 16.0, uTile.x / 5.0, pixelM);
+      vec3 albedo = gMean;
+      if (detailW > 0.0) {
+        vec3 gDetail = mix(textureGrad(tGroundDiff, gp / uTile.x, dpx.xz / uTile.x, dpy.xz / uTile.x).rgb,
+                           textureGrad(tGroundDiff, turn * gp / uTile.y + 0.29, turn * dpx.xz / uTile.y, turn * dpy.xz / uTile.y).rgb, pickD);
+        float lumaMean = dot(gMean, vec3(0.3, 0.59, 0.11));
+        gDetail += max(0.0, lumaMean * uDetailFloor - dot(gDetail, vec3(0.3, 0.59, 0.11))); // lift the darkest marks (footprints, holes): repeated, they would read as a pattern
+        albedo = mix(gMean, gDetail, detailW);
+      }
+      float cloud = 0.44 + 0.12 * vnoise(turn * gp / 210.0 + 1.3); // 0.5 * (0.38 + 0.30 + 0.20): each finer term below swings around its middle
+      float cloudA = 1.0 - smoothstep(1.1, 3.0, pixelM);
+      float cloudB = 1.0 - smoothstep(3.0, 9.0, pixelM);
+      float cloudC = 1.0 - smoothstep(9.0, 25.0, pixelM);
+      if (cloudA > 0.0) cloud += 0.38 * cloudA * (vnoise(gp / 9.0) - 0.5);
+      if (cloudB > 0.0) cloud += 0.30 * cloudB * (vnoise(turn * gp / 26.0 + 3.1) - 0.5);
+      if (cloudC > 0.0) cloud += 0.20 * cloudC * (vnoise(gp / 75.0 + 9.7) - 0.5);
       albedo *= (0.78 + 0.44 * cloud) * uGroundTint;
       // The normal map takes both copies too (the turned one rotated back), and fades out early: its bumps are what shows a repeating tile first.
       float nFadeG = 1.0 - smoothstep(uTile.x / 120.0, uTile.x / 35.0, pixelM);
@@ -322,6 +350,8 @@ function colorChunk(look: TerrainMaterialLook): string {
       // and the normal and roughness maps only while the pixel is small enough for their detail to matter.
       if (rockW > 0.004) {
         vec3 w = pow(abs(gN), vec3(4.0));
+        w /= w.x + w.y + w.z;
+        w = max(w - 0.06, vec3(0.0)); // the faintest projection is dropped (one fetch less per layer); the others are renormalised
         w /= w.x + w.y + w.z;
         float farR = smoothstep(uTile.z / 100.0, uTile.z / 30.0, pixelM);
         vec3 rock = vec3(0.0);

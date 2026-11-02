@@ -219,7 +219,7 @@ describe('makeMeshGround', () => {
       const z = -300 + ((n * 91) % 650) + 0.61;
       const i = axes.xs.findIndex((v, idx) => v <= x && x < axes.xs[idx + 1]);
       const j = axes.zs.findIndex((v, idx) => v <= z && z < axes.zs[idx + 1]);
-      const first = (j * (nx - 1) + i) * 6;
+      const first = ((nz - 2 - j) * (nx - 1) + i) * 6; // the index buffer lists the rows nearest first (the last grid row first), see buildTerrainGeometry
       let y: number | null = null;
       for (let t = 0; t < 2 && y === null; t++) {
         const [a, b, c] = [index.getX(first + t * 3), index.getX(first + t * 3 + 1), index.getX(first + t * 3 + 2)];

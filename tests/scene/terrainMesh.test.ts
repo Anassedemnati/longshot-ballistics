@@ -67,6 +67,21 @@ describe('terrain mesh grid', () => {
     }
   });
 
+  it('lists the triangles nearest row first (the shooter looks down -Z, the grid\'s last rows), so a depth test rejects far ground early', () => {
+    const geometry = buildTerrainGeometry(createTerrainField('desert', 1));
+    const index = geometry.getIndex()!;
+    const position = geometry.getAttribute('position');
+    const rowZ = (t: number): number => position.getZ(index.getX(t * 3));
+    const triangles = index.count / 3;
+    expect(rowZ(0)).toBeCloseTo(zs[zs.length - 2], 3); // float32 positions
+    expect(rowZ(triangles - 1)).toBeCloseTo(zs[0], 3);
+    let last = Infinity;
+    for (let t = 0; t < triangles; t += 997) {
+      expect(rowZ(t)).toBeLessThanOrEqual(last);
+      last = rowZ(t);
+    }
+  });
+
   it('has a grid line exactly on x = 0 and on z = 0, so the mountain apex is a vertex and the rendered tip is the height field\'s', () => {
     expect(xs).toContain(0);
     expect(zs).toContain(0);

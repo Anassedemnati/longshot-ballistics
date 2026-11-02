@@ -183,9 +183,11 @@ export function buildTerrainGeometry(field: TerrainField, sun: SunVector = theme
     }
   }
 
+  // Rows are drawn nearest first (the shooter looks down -Z, the grid's last rows): with a depth test the GPU rejects the far
+  // ground behind the near ground before shading it, instead of shading it and then painting over it. Within a row any order does.
   const indices = new Uint32Array((nx - 1) * (nz - 1) * 6);
   let w = 0;
-  for (let j = 0; j < nz - 1; j++) {
+  for (let j = nz - 2; j >= 0; j--) {
     for (let i = 0; i < nx - 1; i++) {
       const a = j * nx + i;
       const b = a + 1;
@@ -226,11 +228,12 @@ export function createTerrainMesh(field: TerrainField, maxAnisotropy = 8, sun?: 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'terrain';
   mesh.frustumCulled = false; // one big mesh that is almost always in view
+  mesh.renderOrder = 1; // drawn after the other opaque things (their pixels are in the depth buffer by then, so the ground behind a prop or a tree is rejected before its expensive shader runs)
   mesh.receiveShadow = true; // the ground takes the shadows of props and soldiers; it casts none (it would fill the shadow map)
   return mesh;
 }
 
-/** Low-poly boulders sitting on the outcrop mounds of `field`. */
+/** Low-poly boulders sitting on the outcrop mounds of `field` (one instanced mesh: one draw call, however many). */
 export function createRocks(field: TerrainField): THREE.Group {
   const group = new THREE.Group();
   group.name = 'rocks';
@@ -238,6 +241,8 @@ export function createRocks(field: TerrainField): THREE.Group {
   const geometry = new THREE.DodecahedronGeometry(1, 0);
   // Deterministic jitter so the rocks are the same every load.
   const rand = createRng(7);
+  const matrices: THREE.Matrix4[] = [];
+  const placer = new THREE.Object3D();
   for (const outcrop of field.outcrops) {
     const count = 4 + Math.floor(rand() * 3);
     for (let n = 0; n < count; n++) {
@@ -246,14 +251,22 @@ export function createRocks(field: TerrainField): THREE.Group {
       const x = outcrop.x + Math.cos(angle) * dist;
       const z = outcrop.z + Math.sin(angle) * dist;
       const size = (0.5 + rand() * 0.9) * (outcrop.height / 3);
-      const rock = new THREE.Mesh(geometry, material);
-      rock.scale.set(size * (1 + rand()), size * (0.6 + rand() * 0.5), size * (1 + rand()));
-      rock.position.set(x, field.height(x, z) + size * 0.1, z);
-      rock.rotation.set(rand() * 3, rand() * 6.28, rand() * 3);
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      group.add(rock);
+      placer.scale.set(size * (1 + rand()), size * (0.6 + rand() * 0.5), size * (1 + rand()));
+      placer.position.set(x, field.height(x, z) + size * 0.1, z);
+      placer.rotation.set(rand() * 3, rand() * 6.28, rand() * 3);
+      placer.updateMatrix();
+      matrices.push(placer.matrix.clone());
     }
   }
+  const rocks = new THREE.InstancedMesh(geometry, material, Math.max(1, matrices.length));
+  rocks.name = 'rocks-instanced';
+  rocks.count = matrices.length;
+  matrices.forEach((m, i) => rocks.setMatrixAt(i, m));
+  rocks.castShadow = true;
+  rocks.receiveShadow = true;
+  rocks.computeBoundingSphere();
+  rocks.matrixAutoUpdate = false;
+  rocks.updateMatrix();
+  if (matrices.length > 0) group.add(rocks);
   return group;
 }
