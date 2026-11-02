@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
+import { markAssistsUsed, newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
 import { missionTimeText, resultRows } from '../../src/ui/results';
 
 describe('missionTimeText', () => {
@@ -55,5 +55,12 @@ describe('resultRows', () => {
     expect(rows).toContainEqual(['Accuracy', '0 %']);
     expect(rows).toContainEqual(['Longest hit', '—']);
     expect(rows).toContainEqual(['Mission time', '00:00']);
+  });
+
+  it('says "Assists used" only when an aim assist was on', () => {
+    expect(resultRows(newStats(1, 0)).map(([label]) => label)).not.toContain('Assists used');
+    const rows = resultRows(markAssistsUsed(newStats(1, 0)));
+    expect(rows).toContainEqual(['Assists used', 'Yes']);
+    expect(rows[rows.length - 1][0]).toBe('Assists used'); // after the score lines
   });
 });

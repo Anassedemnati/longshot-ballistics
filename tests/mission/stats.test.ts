@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ImpactEvent } from '../../src/game/bullets';
 import type { ZoneName } from '../../src/game/hit';
-import { accuracy, elapsedMs, isComplete, newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
+import { accuracy, elapsedMs, isComplete, markAssistsUsed, newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
 import type { MissionStats } from '../../src/mission/stats';
 
 const P = { x: 0, y: 0, z: -500 };
@@ -28,7 +28,26 @@ describe('newStats', () => {
       longestHitM: 0,
       startMs: 1000,
       endMs: null,
+      assistsUsed: false,
     });
+  });
+});
+
+describe('markAssistsUsed', () => {
+  it('flags the mission once an aim assist was ever on, without touching the rest', () => {
+    const s = recordShot(newStats(2, 500));
+    const used = markAssistsUsed(s);
+    expect(used.assistsUsed).toBe(true);
+    expect({ ...used, assistsUsed: false }).toEqual(s);
+    expect(s.assistsUsed).toBe(false); // immutable
+    expect(markAssistsUsed(used)).toBe(used); // already flagged: same object
+  });
+
+  it('survives later shots and impacts', () => {
+    let s = markAssistsUsed(newStats(1, 0));
+    s = recordShot(s);
+    s = recordImpact(s, target('head'), true, 400, 9000);
+    expect(s.assistsUsed).toBe(true);
   });
 });
 

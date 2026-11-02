@@ -19,11 +19,13 @@ export interface MissionStats {
    */
   startMs: number | null;
   endMs: number | null;
+  /** An aim assist (trajectory preview, aim marker, spotter) was on at some point of the mission. */
+  assistsUsed: boolean;
 }
 
 /** Fresh stats. The clock is stopped (`startMs` null) unless `nowMs` is given. */
 export function newStats(targetsTotal: number, nowMs: number | null = null): MissionStats {
-  return { shots: 0, hits: 0, headshots: 0, targetsDown: 0, targetsTotal, longestHitM: 0, startMs: nowMs, endMs: null };
+  return { shots: 0, hits: 0, headshots: 0, targetsDown: 0, targetsTotal, longestHitM: 0, startMs: nowMs, endMs: null, assistsUsed: false };
 }
 
 /** Start the mission clock at `nowMs` if it is not running yet; a running clock keeps its start. */
@@ -35,6 +37,11 @@ export function startClock(s: MissionStats, nowMs: number): MissionStats {
 export function elapsedMs(s: MissionStats): number {
   if (s.startMs === null) return 0;
   return Math.max(0, (s.endMs ?? s.startMs) - s.startMs);
+}
+
+/** An aim assist was switched on: the results say so. Already flagged: the same object. */
+export function markAssistsUsed(s: MissionStats): MissionStats {
+  return s.assistsUsed ? s : { ...s, assistsUsed: true };
 }
 
 /** One more round fired. */

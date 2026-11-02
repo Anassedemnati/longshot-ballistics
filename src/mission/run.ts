@@ -14,6 +14,7 @@ import {
 } from '../audio/sounds';
 import { windAmbienceGain } from '../audio/timing';
 import { muzzleLaunch } from '../game/aim';
+import type { AimTarget } from '../game/assistance';
 import { BulletSystem } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
 import type { HitTarget } from '../game/hit';
@@ -23,6 +24,7 @@ import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
+import { Assists } from '../ui/assists';
 import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
 import { menuSearch } from '../ui/menuModel';
@@ -31,7 +33,7 @@ import { windVector } from './config';
 import type { MissionConfig } from './config';
 import { installDebugHook } from './debugHook';
 import { applyImpact } from './impact';
-import { isComplete, newStats, recordShot, startClock } from './stats';
+import { isComplete, markAssistsUsed, newStats, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
 
@@ -150,6 +152,31 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   const hud = new Hud(document.body, config, targetsTotal, menuHref);
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
+
+  // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's chest, a vehicle's engine.
+  const assistTargets = (): AimTarget[] => {
+    const list: AimTarget[] = [];
+    for (const s of soldiers.values()) if (!s.dummy.down) list.push({ id: s.placement.id, point: s.upperTorso });
+    for (const v of vehicles.values()) if (!v.target.disabled) list.push({ id: v.placement.id, point: v.engineCenter });
+    return list;
+  };
+  const assists = config.assists
+    ? new Assists({
+        parent: document.body,
+        scene,
+        view,
+        eye: shooter,
+        rifle,
+        atmo,
+        wind,
+        zero: zeroElevation,
+        groundHeight: field.height,
+        targets: assistTargets,
+        onUsed: () => {
+          stats = markAssistsUsed(stats);
+        },
+      })
+    : null;
 
   // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
   const audio = new AudioEngine();
@@ -284,6 +311,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   function showResultsScreen(): void {
     resultsShown = true;
+    assists?.dispose();
     // The input listeners sit on the document: take them off, or a click on a results button would grab the pointer again.
     unbindInput();
     input.onLockChange(false);
@@ -352,6 +380,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       hud.setRange(rangeUnderCrosshair(shooter, view.forward(), field, obstacles, liveTargets));
     }
 
+    assists?.update(dt);
+
     refreshSound(); // the context starts (or is suspended) asynchronously
     if (weapon.update(dt)) {
       hud.setRounds(weapon.ammo, weapon.magazine, false);
@@ -373,6 +403,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       // Stop the loop (no further frame is requested) and leave the player a way out.
       console.error(error);
       unbindInput();
+      assists?.dispose();
       showFatalError('The game stopped: ' + (error instanceof Error ? error.message : String(error)));
       return;
     }
