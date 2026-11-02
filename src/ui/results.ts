@@ -17,7 +17,7 @@ export function missionTimeText(ms: number): string {
 
 /** The result lines in display order: label and value text. */
 export function resultRows(s: MissionStats): Array<[string, string]> {
-  return [
+  const rows: Array<[string, string]> = [
     ['Shots fired', String(s.shots)],
     ['Hits', String(s.hits)],
     ['Accuracy', `${Math.round(accuracy(s) * 100)} %`],
@@ -25,6 +25,8 @@ export function resultRows(s: MissionStats): Array<[string, string]> {
     ['Longest hit', s.longestHitM > 0 ? `${Math.round(s.longestHitM)} m` : '—'],
     ['Mission time', missionTimeText(elapsedMs(s))],
   ];
+  if (s.assistsUsed) rows.push(['Assists used', 'Yes']);
+  return rows;
 }
 
 function el(parent: HTMLElement, tag: string, className: string, text = ''): HTMLElement {
