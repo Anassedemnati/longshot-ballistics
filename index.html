@@ -26,6 +26,17 @@
       .hud-menu:hover, .hud-menu:focus-visible { background: rgba(255, 255, 255, 0.3); outline: none; }
       [hidden] { display: none !important; }
 
+      /* "Preparing mission…" while the terrain and layout are built; the error panel when the game cannot start or stops. */
+      .prep { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font: 600 14px/1.4 system-ui, sans-serif; letter-spacing: 0.04em; color: #fff; text-shadow: 0 1px 3px #000, 0 0 2px #000; user-select: none; }
+      .fatal { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+        padding: 24px; box-sizing: border-box; text-align: center; background: rgba(0, 0, 0, 0.92);
+        font: 600 15px/1.4 system-ui, sans-serif; color: #fff; }
+      .fatal-text { margin: 0; max-width: 60ch; overflow-wrap: anywhere; }
+      .fatal-link { padding: 8px 18px; color: #fff; text-decoration: none; cursor: pointer; font-size: 16px;
+        background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 6px; }
+      .fatal-link:hover, .fatal-link:focus-visible { background: rgba(255, 255, 255, 0.24); outline: none; }
+
       /* Results: a dark translucent panel over the frozen scene. It takes the mouse (the HUD does not). */
       .results { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
         background: rgba(0, 0, 0, 0.45); font: 600 15px/1.4 system-ui, sans-serif; color: #fff; user-select: none; }

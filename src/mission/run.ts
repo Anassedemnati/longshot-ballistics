@@ -33,6 +33,7 @@ import { DESERT_FIELD, createRocks, createTerrainMesh } from '../scene/terrain';
 import { createTerrainField } from '../scene/terrainField';
 import { createVehicleTarget } from '../scene/vehicleTarget';
 import type { VehicleTarget } from '../scene/vehicleTarget';
+import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
 import { menuSearch } from '../ui/menuModel';
 import { showResults } from '../ui/results';
@@ -128,15 +129,42 @@ function freezeStatic(root: THREE.Object3D): void {
 }
 
 /**
+ * Resolve once the browser has had a chance to paint what is in the DOM now: after the next animation
+ * frame's paint (a bare rAF callback runs just before it). A hidden tab draws no frames, so a timer
+ * backs it up and the mission still gets built.
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (): void => {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    };
+    requestAnimationFrame(() => setTimeout(finish, 0));
+    setTimeout(finish, 250);
+  });
+}
+
+/**
  * Play one mission: build the scene from the config (terrain, cover, soldiers, vehicle targets), run the
  * game loop (view, weapon, bullets, effects, HUD, rangefinder, sound) and show the results when every
  * target is down. `legacy` is the old `?range=...` practice range: one soldier that stands up again
  * after a few seconds, no props, and no results screen. `debug` exposes `window.__game`.
+ * Building the world takes a moment, so "Preparing mission…" is painted first; the returned promise
+ * resolves once the game loop is running. An error in a frame stops the loop and shows the error panel.
  */
-export function runMission(config: MissionConfig, opts: { legacy: boolean; debug: boolean }): void {
+export async function runMission(config: MissionConfig, opts: { legacy: boolean; debug: boolean }): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
   const { legacy } = opts;
+
+  const prep = document.createElement('div');
+  prep.className = 'prep';
+  prep.textContent = 'Preparing mission…';
+  app.appendChild(prep);
+  await nextPaint();
 
   const rifle = RIFLES[config.rifle];
   const atmo = themeAtmosphere(config.theme);
@@ -151,6 +179,7 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
 
   // Scene
   const renderer = createRenderer(app);
+  prep.remove(); // the canvas is in; the rest of the build runs before the next paint
   const scene = new THREE.Scene();
   createSky(scene, config.theme);
   scene.add(createTerrainMesh(field, renderer.capabilities.getMaxAnisotropy()));
@@ -451,7 +480,7 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
   let lastMs: number | null = null;
   let rangeTimer = RANGEFINDER_INTERVAL_S; // read it on the first frame
   let completeTimer = 0;
-  function frame(nowMs: number): void {
+  function tick(nowMs: number): void {
     // The first frame (and any bad timestamp) counts as 0 s; stalls are capped.
     const rawDt = lastMs === null ? 0 : (nowMs - lastMs) / 1000;
     lastMs = nowMs;
@@ -492,6 +521,17 @@ export function runMission(config: MissionConfig, opts: { legacy: boolean; debug
     }
 
     renderer.render(scene, view.camera);
+  }
+  function frame(nowMs: number): void {
+    try {
+      tick(nowMs);
+    } catch (error) {
+      // Stop the loop (no further frame is requested) and leave the player a way out.
+      console.error(error);
+      unbindInput();
+      showFatalError('The game stopped: ' + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

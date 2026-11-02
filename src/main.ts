@@ -1,8 +1,9 @@
 import { routeFromSearch } from './mission/config';
 import { runMission } from './mission/run';
+import { showFatalError } from './ui/fatal';
 import { showMenu } from './ui/menu';
 
-function start(): void {
+async function start(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
 
@@ -13,13 +14,11 @@ function start(): void {
     showMenu(app, { last: route.last, debug });
     return;
   }
-  runMission(route.config, { legacy: route.legacy, debug: route.debug });
+  await runMission(route.config, { legacy: route.legacy, debug: route.debug });
 }
 
-try {
-  start();
-} catch (error) {
+// A failed start (no WebGL, a layout that cannot be built, ...) gets a message and a way back to the menu.
+start().catch((error: unknown) => {
   console.error(error);
-  const app = document.getElementById('app');
-  if (app) app.textContent = 'Could not start the game: ' + (error instanceof Error ? error.message : String(error));
-}
+  showFatalError('Could not start the game: ' + (error instanceof Error ? error.message : String(error)));
+});

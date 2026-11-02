@@ -638,7 +638,16 @@ async function run() {
 
     // 9. The largest mission: 10 soldiers, 3 vehicle targets, many buildings and vehicles.
     const big = await openPage();
+    // Record whether the "Preparing mission…" text was ever in the page (the mission builds for a moment before the first frame).
+    await big.addInitScript(() => {
+      window.__sawPrep = false;
+      new MutationObserver(() => {
+        if (document.querySelector('.prep')?.textContent === 'Preparing mission…') window.__sawPrep = true;
+      }).observe(document, { childList: true, subtree: true });
+    });
     await startGame(big, `m=${MISSION_MAX}&debug=1`);
+    check((await big.evaluate(() => window.__sawPrep)) === true, 'the page said "Preparing mission…" while the mission was built');
+    check((await big.locator('.prep').count()) === 0, 'the "Preparing mission…" text is gone once the mission runs');
     st = await gameState(big);
     check(st.targetsLeft === 13 && st.soldiers.length === 10 && st.vehicles.length === 3, 'the largest mission has 13 targets (10 soldiers, 3 vehicles)');
     await animationFrames(big, 5);
@@ -919,10 +928,54 @@ async function run() {
     check((await hudPage.evaluate(() => window.__game)) === undefined, 'the menu from the HUD link runs no game');
     await hudPage.close();
 
+    // 13. A failed start and a failed frame leave a way out. These pages break on purpose, so they log errors the
+    // other pages must not: they are opened without the `problems` listeners.
+    const noGl = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+    await noGl.addInitScript(() => {
+      HTMLCanvasElement.prototype.getContext = () => null; // no WebGL: the renderer cannot be created
+    });
+    await noGl.goto(`${preview.url}?m=${MISSION_SINGLE}`, { waitUntil: 'load' });
+    await noGl.waitForSelector('.fatal');
+    check(/Could not start the game/.test((await noGl.locator('.fatal-text').textContent()) ?? ''), 'a failed start shows "Could not start the game: ..."');
+    check((await noGl.locator('.prep').count()) === 0, 'a failed start removes the "Preparing mission…" text');
+    check((await noGl.locator('.fatal-link').getAttribute('href')) === '/', 'the error panel links back to the menu (/)');
+    await noGl.screenshot({ path: join(OUT_DIR, 'fatal-start.png') });
+    await Promise.all([noGl.waitForURL((u) => u.pathname === '/' && u.search === ''), noGl.locator('.fatal-link').click()]);
+    await noGl.waitForSelector('.menu-start');
+    await imagesLoaded(noGl);
+    check((await noGl.locator('.menu-start').count()) === 1, 'Back to menu from a failed start opens the menu');
+    await noGl.close();
+
+    const brokenFrame = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+    const frameErrors = [];
+    brokenFrame.on('console', (message) => {
+      if (message.type() === 'error') frameErrors.push(message.text());
+    });
+    await brokenFrame.goto(`${preview.url}?m=${MISSION_SINGLE}&debug=1`, { waitUntil: 'load' });
+    await brokenFrame.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
+    await animationFrames(brokenFrame, 3);
+    await brokenFrame.waitForLoadState('networkidle');
+    await brokenFrame.evaluate(() => {
+      WebGL2RenderingContext.prototype.clear = () => {
+        throw new Error('smoke: broken frame');
+      };
+    });
+    await brokenFrame.waitForSelector('.fatal');
+    check(/The game stopped: smoke: broken frame/.test((await brokenFrame.locator('.fatal-text').textContent()) ?? ''), 'an error in a frame shows the error panel');
+    await brokenFrame.waitForTimeout(600);
+    check(frameErrors.filter((m) => /broken frame/.test(m)).length === 1, `the loop stopped after the first failed frame (${frameErrors.length} error logged)`);
+    check((await brokenFrame.locator('.fatal-link').getAttribute('href')) === '/', 'the frame-error panel links back to the menu too');
+    await brokenFrame.screenshot({ path: join(OUT_DIR, 'fatal-frame.png') });
+    await Promise.all([brokenFrame.waitForURL((u) => u.pathname === '/' && u.search === ''), brokenFrame.locator('.fatal-link').click()]);
+    await brokenFrame.waitForSelector('.menu-start');
+    await imagesLoaded(brokenFrame);
+    check((await brokenFrame.locator('.menu-start').count()) === 1, 'Back to menu from a failed frame opens the menu');
+    await brokenFrame.close();
+
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }
