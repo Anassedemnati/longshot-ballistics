@@ -76,6 +76,26 @@ export const boot = (side: -1 | 1): DummyBox => ({
   color: BOOT_COLOR,
 });
 
+/**
+ * Corner radius of the rounded box drawn for each DUMMY_BOXES entry, m (the neck is covered by the scarf and not
+ * drawn). The hit spheres are frozen against the sharp boxes and already reach MAX_OVERHANG past their faces, so
+ * the drawn corners may only trim what the spheres' own corners leave to spare: small radii, and no capsules.
+ * scene/target.ts builds the mesh with exactly these numbers and tests/scene/target.test.ts measures the result.
+ */
+export const DUMMY_CORNER_RADIUS: Readonly<Record<string, number>> = {
+  vest: 0.03,
+  pelvis: 0.025,
+  'left arm': 0.02,
+  'right arm': 0.02,
+  'left leg': 0.02,
+  'right leg': 0.02,
+  'left boot': 0.02,
+  'right boot': 0.02,
+};
+
+/** The corner radius the mesh of `box` is drawn with, m. */
+export const cornerRadius = (box: DummyBox): number => DUMMY_CORNER_RADIUS[box.name] ?? 0;
+
 /** Every box of the visible dummy (the head is a sphere of DUMMY_HEAD.radius, not listed here). */
 export const DUMMY_BOXES: readonly DummyBox[] = [
   NECK,
