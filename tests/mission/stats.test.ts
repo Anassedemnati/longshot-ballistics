@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { ImpactEvent } from '../../src/game/bullets';
 import type { ZoneName } from '../../src/game/hit';
-import { accuracy, elapsedMs, isComplete, newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
+import {
+  accuracy,
+  elapsedMs,
+  isComplete,
+  newStats,
+  recordFailure,
+  recordImpact,
+  recordShot,
+  startClock,
+} from '../../src/mission/stats';
 import type { MissionStats } from '../../src/mission/stats';
 
 const P = { x: 0, y: 0, z: -500 };
@@ -28,6 +37,7 @@ describe('newStats', () => {
       longestHitM: 0,
       startMs: 1000,
       endMs: null,
+      failed: false,
     });
   });
 });
@@ -196,5 +206,54 @@ describe('a scripted mission', () => {
     });
     expect(accuracy(s)).toBeCloseTo(0.6, 12);
     expect(isComplete(s)).toBe(true);
+  });
+});
+
+describe('a mission with enemy snipers', () => {
+  it('counts the snipers among the targets: the total is soldiers + vehicle targets + snipers', () => {
+    // 3 soldiers, 1 vehicle target, 2 snipers.
+    let s = newStats(6, 0);
+    expect(isComplete(s)).toBe(false);
+    for (let i = 0; i < 5; i++) s = recordImpact(s, target('upperTorso', `t-${i}`), true, 400, 100 + i);
+    expect(s).toMatchObject({ targetsDown: 5, targetsTotal: 6, endMs: null });
+    expect(isComplete(s)).toBe(false);
+    s = recordImpact(s, target('head', 'sniper-1'), true, 700, 900);
+    expect(isComplete(s)).toBe(true);
+    expect(s.endMs).toBe(900);
+    expect(s.failed).toBe(false);
+  });
+});
+
+describe('a failed mission', () => {
+  it('recordFailure marks it failed and stops the clock at that moment', () => {
+    let s = startClock(newStats(4), 1000);
+    s = recordShot(s);
+    const failed = recordFailure(s, 31_000);
+    expect(failed.failed).toBe(true);
+    expect(failed.endMs).toBe(31_000);
+    expect(elapsedMs(failed)).toBe(30_000);
+    expect(failed.shots).toBe(1);
+    expect(s.failed).toBe(false); // immutable
+  });
+
+  it('is never complete, even when the last target falls afterwards', () => {
+    let s = recordFailure(startClock(newStats(1), 0), 5000);
+    s = recordImpact(s, target('head'), true, 500, 6000);
+    expect(s.targetsDown).toBe(1);
+    expect(isComplete(s)).toBe(false);
+    expect(s.endMs).toBe(5000);
+  });
+
+  it('keeps the first end time when it is failed twice, and does not undo a completed mission', () => {
+    const failed = recordFailure(startClock(newStats(2), 0), 4000);
+    expect(recordFailure(failed, 9000).endMs).toBe(4000);
+    let done = startClock(newStats(1), 0);
+    done = recordImpact(done, target('head'), true, 500, 3000);
+    expect(isComplete(done)).toBe(true);
+    expect(recordFailure(done, 8000)).toBe(done);
+  });
+
+  it('with a stopped clock the failed mission lasted 0 s', () => {
+    expect(elapsedMs(recordFailure(newStats(2), 8000))).toBe(0);
   });
 });

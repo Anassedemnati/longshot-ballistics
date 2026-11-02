@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { newStats, recordImpact, recordShot, startClock } from '../../src/mission/stats';
-import { missionTimeText, resultRows } from '../../src/ui/results';
+import { newStats, recordFailure, recordImpact, recordShot, startClock } from '../../src/mission/stats';
+import { failedSummary, missionTimeText, resultRows, resultTitle } from '../../src/ui/results';
 
 describe('missionTimeText', () => {
   it('formats mm:ss', () => {
@@ -55,5 +55,57 @@ describe('resultRows', () => {
     expect(rows).toContainEqual(['Accuracy', '0 %']);
     expect(rows).toContainEqual(['Longest hit', '—']);
     expect(rows).toContainEqual(['Mission time', '00:00']);
+  });
+});
+
+describe('resultTitle', () => {
+  it('says Mission complete for a won mission and Mission failed for a lost one', () => {
+    let won = startClock(newStats(1), 0);
+    won = recordImpact(
+      won,
+      { bulletId: 1, kind: 'target', targetId: 'sniper-0', zone: 'head', point: { x: 0, y: 0, z: -400 }, time: 0.5 },
+      true,
+      400,
+      9000,
+    );
+    expect(resultTitle(won)).toBe('Mission complete');
+    expect(resultTitle(recordFailure(startClock(newStats(3), 0), 9000))).toBe('Mission failed');
+    expect(resultTitle(newStats(3))).toBe('Mission complete'); // only reached when the mission ended: nothing else to say
+  });
+});
+
+describe('the failed variant', () => {
+  it('still lists the stats, with the time stopped at the moment of failure', () => {
+    let s = startClock(newStats(4), 10_000);
+    for (let i = 0; i < 3; i++) s = recordShot(s);
+    s = recordImpact(
+      s,
+      { bulletId: 1, kind: 'target', targetId: 'soldier-0', zone: 'upperTorso', point: { x: 0, y: 0, z: -600 }, time: 0.7 },
+      true,
+      600,
+      20_000,
+    );
+    const failed = recordFailure(s, 75_000);
+    expect(resultRows(failed)).toEqual([
+      ['Shots fired', '3'],
+      ['Hits', '1'],
+      ['Accuracy', '33 %'],
+      ['Headshots', '0'],
+      ['Longest hit', '600 m'],
+      ['Mission time', '01:05'],
+    ]);
+  });
+
+  it('summarises how many targets were down', () => {
+    let s = newStats(4, 0);
+    s = recordImpact(
+      s,
+      { bulletId: 1, kind: 'target', targetId: 'soldier-0', zone: 'head', point: { x: 0, y: 0, z: -500 }, time: 0.7 },
+      true,
+      500,
+      1000,
+    );
+    expect(failedSummary(recordFailure(s, 5000))).toBe('1 of 4 targets down');
+    expect(failedSummary(recordFailure(newStats(1, 0), 5000))).toBe('0 of 1 target down');
   });
 });

@@ -27,6 +27,16 @@ export function resultRows(s: MissionStats): Array<[string, string]> {
   ];
 }
 
+/** The overlay's heading: the mission was won, or the player was killed by the enemy snipers. */
+export function resultTitle(s: MissionStats): string {
+  return s.failed ? 'Mission failed' : 'Mission complete';
+}
+
+/** "1 of 4 targets down": what a failed mission got done. */
+export function failedSummary(s: MissionStats): string {
+  return `${s.targetsDown} of ${s.targetsTotal} target${s.targetsTotal === 1 ? '' : 's'} down`;
+}
+
 function el(parent: HTMLElement, tag: string, className: string, text = ''): HTMLElement {
   const node = document.createElement(tag);
   node.className = className;
@@ -44,7 +54,8 @@ export function showResults(parent: HTMLElement, stats: MissionStats, actions: R
   const root = el(parent, 'div', 'results');
   root.addEventListener('mousedown', (e) => e.stopPropagation());
   const panel = el(root, 'div', 'results-panel');
-  el(panel, 'h1', 'results-title', 'Mission complete');
+  el(panel, 'h1', stats.failed ? 'results-title results-failed' : 'results-title', resultTitle(stats));
+  if (stats.failed) el(panel, 'div', 'results-summary', failedSummary(stats));
   for (const [label, value] of resultRows(stats)) {
     const row = el(panel, 'div', 'results-row');
     el(row, 'span', 'results-label', label);
