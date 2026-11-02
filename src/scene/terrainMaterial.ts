@@ -56,7 +56,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'sand',
     rock: 'rock',
     cap: null,
-    tileM: [3.2, 2.3, 11, 150],
+    tileM: [5.5, 3.9, 11, 150],
     fallbackColor: 0xcfb083,
     roughness: 0.94,
     bumpScale: 0.045,
@@ -76,7 +76,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'snow',
     rock: 'rock',
     cap: null, // the ground is snow already: caps simply keep the rock off the high gentle ground
-    tileM: [4, 2.9, 12, 160],
+    tileM: [6.5, 4.6, 12, 160],
     fallbackColor: 0xd3dae3,
     roughness: 0.82,
     bumpScale: 0.05,
@@ -96,7 +96,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     ground: 'grass',
     rock: 'rock',
     cap: 'snow',
-    tileM: [3.6, 2.6, 11, 150],
+    tileM: [5.5, 3.9, 11, 150],
     fallbackColor: 0x70793f,
     roughness: 0.96,
     bumpScale: 0.06,
@@ -241,9 +241,8 @@ vec3 triNormal(sampler2D t, vec3 p, vec3 dx, vec3 dy, vec3 w, float tile, vec3 n
   return normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
 }
 
-// Normal map seen from above, in world space.
+// Tangent-space normal (-1..1) seen from above, in world space.
 vec3 topNormal(vec3 tn, vec3 n, float k) {
-  tn = tn * 2.0 - 1.0;
   tn = vec3(tn.xy * k + n.xz, abs(tn.z) * n.y);
   return normalize(tn.xzy);
 }
@@ -295,7 +294,7 @@ function colorChunk(look: TerrainMaterialLook): string {
       vec2 gp = vGround.xz;
       mat2 turn = mat2(0.8, -0.6, 0.6, 0.8);
       float fineG = 1.0 - smoothstep(0.3, 1.5, pixelM);
-      float pickD = mix(0.5, smoothstep(0.3, 0.7, vnoise(turn * gp / 17.0)), fineG);
+      float pickD = mix(0.5, smoothstep(0.3, 0.7, vnoise(turn * gp / 11.0)), fineG);
       vec3 gDetail = mix(texture2D(tGroundDiff, gp / uTile.x).rgb, texture2D(tGroundDiff, turn * gp / uTile.y + 0.29).rgb, pickD);
       vec3 gMean = textureLod(tGroundDiff, gp / uTile.x, 10.0).rgb;
       float lumaMean = dot(gMean, vec3(0.3, 0.59, 0.11));
@@ -306,9 +305,15 @@ function colorChunk(look: TerrainMaterialLook): string {
                   + 0.20 * mix(0.5, vnoise(gp / 75.0 + 9.7), 1.0 - smoothstep(9.0, 25.0, pixelM))
                   + 0.12 * vnoise(turn * gp / 210.0 + 1.3);
       albedo *= (0.78 + 0.44 * cloud) * uGroundTint;
-      float nFadeG = 1.0 - smoothstep(uTile.x / 60.0, uTile.x / 16.0, pixelM);
+      // The normal map takes both copies too (the turned one rotated back), and fades out early: its bumps are what shows a repeating tile first.
+      float nFadeG = 1.0 - smoothstep(uTile.x / 120.0, uTile.x / 35.0, pixelM);
       rough = texture2D(tGroundRough, gp / uTile.x).g;
-      shadeN = topNormal(texture2D(tGroundNor, gp / uTile.x).xyz, gN, 0.9 * nFadeG);
+      if (nFadeG > 0.01) {
+        vec3 tnA = texture2D(tGroundNor, gp / uTile.x).xyz * 2.0 - 1.0;
+        vec3 tnB = texture2D(tGroundNor, turn * gp / uTile.y + 0.29).xyz * 2.0 - 1.0;
+        tnB.xy = tnB.xy * turn;
+        shadeN = topNormal(mix(tnA, tnB, pickD), gN, 0.9 * nFadeG);
+      }
 
       // Rock on the steep ground: triplanar, so cliffs show no stretched texture. Each layer is sampled only where it shows (the
       // explicit gradients make that legal inside a branch): detail near, macro (two scales mixed by a noise, against repetition) far,
@@ -346,7 +351,7 @@ function colorChunk(look: TerrainMaterialLook): string {
         float nFadeC = 1.0 - smoothstep(0.05, 0.2, pixelM);
         albedo = mix(albedo, snow, capW);
         rough = mix(rough, texture2D(tCapRough, gp / 4.5).g, capW);
-        shadeN = normalize(mix(shadeN, topNormal(texture2D(tCapNor, gp / 4.5).xyz, gN, 0.8 * nFadeC), capW));
+        shadeN = normalize(mix(shadeN, topNormal(texture2D(tCapNor, gp / 4.5).xyz * 2.0 - 1.0, gN, 0.8 * nFadeC), capW));
       }
       #endif
       diffuseColor.rgb *= albedo;

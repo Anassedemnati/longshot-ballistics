@@ -284,9 +284,10 @@ function wallHeight(wall: WallShape, noise: Noise, detail: Noise, x: number, z: 
   const wz = z + 60 * signed(detail(x / 240 - 5.7, z / 240 + 1.9));
   const ridgeHeight = wall.ridge * ridge;
   const higher = 0.3 + 0.7 * ridge; // the deepest gullies and the tallest crags are on the high ridges
-  const gully = Math.pow(ridged(detail(wx / wall.gully.cell[0] + 1.7, wz / wall.gully.cell[1] - 6.3)), 2);
-  const cut = Math.min(wall.gully.depth * gully * higher, ridgeHeight + strata);
-  const crag = wall.crag.height * Math.pow(ridged(detail(wx / wall.crag.cell[0] + 8.9, wz / wall.crag.cell[1] + 2.2)), 3) * higher;
+  const g = ridged(detail(wx / wall.gully.cell[0] + 1.7, wz / wall.gully.cell[1] - 6.3));
+  const c = ridged(detail(wx / wall.crag.cell[0] + 8.9, wz / wall.crag.cell[1] + 2.2));
+  const cut = Math.min(wall.gully.depth * g * g * higher, ridgeHeight + strata);
+  const crag = wall.crag.height * c * c * c * higher;
   return smoothstep(WALL_START, WALL_FULL, sd) * (wall.base + ridgeHeight + strata - cut + crag);
 }
 

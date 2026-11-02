@@ -106,8 +106,8 @@ function rockness(outcrops: ReadonlyArray<RockOutcrop>, x: number, z: number): n
   return best;
 }
 
-/** Spacing of the baked-lighting grid, m: 16 m resolves the walls' shadows and gullies, and keeps the bake at about 0.1 s. */
-const BAKE_STEP = 16;
+/** Spacing of the baked-lighting grid, m: 20 m resolves the walls' shadows and gullies, and keeps the bake near 0.2 s. */
+const BAKE_STEP = 20;
 
 /**
  * Share of a wall's shadow kept on the engagement sector's floor: the targets and props standing there are lit by the
@@ -126,7 +126,7 @@ function themeSun(theme: ThemeId): SunVector {
  * The terrain surface of `field` on the shared grid. Vertex colours carry large-scale variation
  * (crests, hollows, rocky patches) so the detail tile does not read as a repeating pattern from afar.
  * The `bake` attribute (vec2) holds the baked lighting: sun visibility (0 in the shadow of the walls, 1 in the open)
- * and ambient occlusion (1 open sky .. 0 deep gully), for `sun` (default: the theme's sun), computed on a 16 m grid
+ * and ambient occlusion (1 open sky .. 0 deep gully), for `sun` (default: the theme's sun), computed on a 20 m grid
  * of the height field and interpolated to the vertices.
  */
 export function buildTerrainGeometry(field: TerrainField, sun: SunVector = themeSun(field.theme)): THREE.BufferGeometry {
