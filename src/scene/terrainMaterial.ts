@@ -102,7 +102,7 @@ export const TERRAIN_MATERIAL_LOOKS: Record<ThemeId, TerrainMaterialLook> = {
     roughness: 0.96,
     bumpScale: 0.06,
     bumpTileM: 4,
-    groundTint: [1.0, 1.2, 0.78],
+    groundTint: [0.86, 1.12, 0.82],
     rockTint: [1.0, 0.95, 0.88],
     capTint: [1.5, 1.55, 1.7],
     rockDesaturate: 0.55,

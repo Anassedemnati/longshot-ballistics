@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { ThemeId } from '../mission/themes';
-import { clampLuminance, findSunDirection, luminancePercentile, sampleHorizonColor, yawBetween } from './hdri';
+import { clampLuminance, findSunDirection, luminancePercentile, sampleHorizonColor, saturateSky, yawBetween } from './hdri';
 import type { EquirectImage, SunFind } from './hdri';
 
 // Each theme's sky is an HDRI photograph (Poly Haven, CC0) used twice: as the background, and, with its sun cut out,
@@ -56,10 +56,19 @@ export interface HdriLook {
   sunIntensity: number;
   /** Image-based light intensity (`scene.environmentIntensity`). */
   environmentIntensity: number;
+  /**
+   * How much more vivid the visible sky is than the photograph (1 = as shot): the sky above `SKY_SATURATION_FROM_DEG` is pushed away
+   * from grey, fading in towards `SKY_SATURATION_TO_DEG`, so a hazy photograph reads as a clear sky. The horizon band (the fog's colour)
+   * and the image-based light are untouched.
+   */
+  skySaturation: number;
   /** Hemisphere light kept as a ground-bounce tint on top of the HDRI's own (its lower half is a grey-blue reflection, not sand, snow or grass). */
   hemisphereIntensity: number;
 }
 
+/** The sky's extra saturation fades in between these elevations, degrees (the fog's horizon band is below the first). */
+export const SKY_SATURATION_FROM_DEG = 4;
+export const SKY_SATURATION_TO_DEG = 40;
 /** The HDRI's sun disc and glare are clamped to this luminance in the background copy (half floats allow 65504; the bloom would smear that over the screen). */
 export const BACKGROUND_MAX_LUMINANCE = 40;
 /** The lighting copy of the HDRI is clamped at this percentile of its luminance: the sky's own light stays, the sun leaves (the directional light is the sun). */
@@ -91,7 +100,7 @@ export const SKY_LOOKS: Record<ThemeId, SkyLook> = {
     groundLight: 0xc9ae80,
     hemisphereIntensity: 1.6,
     // qwantani_late_afternoon: a low sun (19.1 degrees in the file, 18 here: the difference is invisible) in a hazy sky.
-    hdri: { file: 'desert.hdr', exposure: 0.55, sunIntensity: 7.8, environmentIntensity: 1, hemisphereIntensity: 0.25 },
+    hdri: { file: 'desert.hdr', exposure: 0.72, sunIntensity: 7.8, environmentIntensity: 1, skySaturation: 1.7, hemisphereIntensity: 0.25 },
   },
   // Cold, pale and hazy: heavy Rayleigh and Mie scattering (slightly higher turbidity than the desert)
   // gives a pale, blue-white sky, and the haze colour is the sky's horizon colour (sampled from a render),
@@ -113,7 +122,7 @@ export const SKY_LOOKS: Record<ThemeId, SkyLook> = {
     hemisphereIntensity: 1.8,
     // snow_field_2: a solid overcast: no sun disc, so the light is nearly all sky and the directional light only adds
     // soft shadows (azimuth from the brightest patch of cloud, elevation as designed).
-    hdri: { file: 'arctic.hdr', exposure: 0.8, sunIntensity: 1.2, environmentIntensity: 1, hemisphereIntensity: 0.2 },
+    hdri: { file: 'arctic.hdr', exposure: 1.3, sunIntensity: 2.2, environmentIntensity: 1.6, skySaturation: 1.5, hemisphereIntensity: 0.2 },
   },
   // Clear and blue: a higher sun, very little haze (low turbidity and Rayleigh scattering give a clean
   // blue), light fog (about 87 % of the contrast left at 1500 m) that tints distant grass blue.
@@ -132,7 +141,7 @@ export const SKY_LOOKS: Record<ThemeId, SkyLook> = {
     groundLight: 0x7a8f58,
     hemisphereIntensity: 1.5,
     // kloofendal_48d_partly_cloudy: the sun stands 48 degrees high among small cumulus.
-    hdri: { file: 'valley.hdr', exposure: 0.85, sunIntensity: 4.7, environmentIntensity: 1, hemisphereIntensity: 0.3 },
+    hdri: { file: 'valley.hdr', exposure: 0.85, sunIntensity: 4.7, environmentIntensity: 1, skySaturation: 1, hemisphereIntensity: 0.3 },
   },
 };
 
@@ -281,7 +290,9 @@ export function planHdriSky(theme: ThemeId, image: EquirectImage): HdriPlan {
     measured,
     yawRad,
     hazeColor: new THREE.Color().setRGB(horizon.r, horizon.g, horizon.b, THREE.LinearSRGBColorSpace),
-    backgroundImage: clampLuminance(image, BACKGROUND_MAX_LUMINANCE),
+    backgroundImage: look.hdri.skySaturation === 1
+      ? clampLuminance(image, BACKGROUND_MAX_LUMINANCE)
+      : saturateSky(clampLuminance(image, BACKGROUND_MAX_LUMINANCE), look.hdri.skySaturation, SKY_SATURATION_FROM_DEG, SKY_SATURATION_TO_DEG),
     lightingImage: clampLuminance(image, luminancePercentile(image, ENVIRONMENT_CAP_PERCENTILE)),
   };
 }

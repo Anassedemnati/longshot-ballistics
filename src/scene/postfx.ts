@@ -69,8 +69,8 @@ export interface GradeParams {
 
 export const GRADES: Record<ThemeId, GradeParams> = {
   desert: { lift: [0.008, 0.004, 0], gamma: [1, 1, 1], gain: [1.03, 1.0, 0.95], saturation: 1.06 },
-  arctic: { lift: [0, 0.002, 0.006], gamma: [1, 1, 1], gain: [0.99, 1.0, 1.02], saturation: 0.88 },
-  valley: { lift: [0.002, 0.004, 0.004], gamma: [1, 1, 1], gain: [1.0, 1.02, 0.99], saturation: 1.1 },
+  arctic: { lift: [0, 0.002, 0.006], gamma: [1, 1, 1], gain: [0.99, 1.0, 1.02], saturation: 0.95 },
+  valley: { lift: [0.002, 0.004, 0.004], gamma: [1, 1, 1], gain: [1.0, 1.02, 0.99], saturation: 1.06 },
 };
 
 /** The neutral grade: changes nothing. */

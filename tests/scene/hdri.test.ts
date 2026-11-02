@@ -13,6 +13,7 @@ import {
   luminancePercentile,
   luminanceOf,
   sampleHorizonColor,
+  saturateSky,
   yawBetween,
 } from '../../src/scene/hdri';
 import type { Dir3, EquirectImage } from '../../src/scene/hdri';
@@ -200,6 +201,64 @@ describe('clamping the sun out of the lighting', () => {
     const dimmer = sky({ base: 0.4, blob: { elevationDeg: 30, phiDeg: 20, peak: 15000, sigmaDeg: 0.7 } });
     expect(irradianceAbove(dimmer, cap)).toBeLessThan(e * 0.6);
     expect(irradianceAbove(sky({ base: 0.4 }), cap)).toBe(0);
+  });
+});
+
+describe('saturateSky', () => {
+  /** A uniform bluish-grey sky. */
+  const grey = (half = false): EquirectImage => {
+    const g = sky({ base: 0.4, half });
+    for (let p = 0; p < W * H; p++) {
+      if (half) {
+        g.data[p * 4] = THREE.DataUtils.toHalfFloat(0.3);
+        g.data[p * 4 + 1] = THREE.DataUtils.toHalfFloat(0.4);
+        g.data[p * 4 + 2] = THREE.DataUtils.toHalfFloat(0.5);
+      } else {
+        g.data[p * 4] = 0.3;
+        g.data[p * 4 + 1] = 0.4;
+        g.data[p * 4 + 2] = 0.5;
+      }
+    }
+    return g;
+  };
+  const rgbAt = (img: EquirectImage, elevationDeg: number): [number, number, number] => {
+    const row = Math.min(H - 1, Math.max(0, Math.floor((0.5 - elevationDeg / 180) * H)));
+    const i = (row * W + 7) * 4;
+    const v = (k: number): number => (img.data instanceof Uint16Array ? THREE.DataUtils.fromHalfFloat(img.data[i + k]) : img.data[i + k]);
+    return [v(0), v(1), v(2)];
+  };
+
+  it('leaves the horizon band and everything below untouched, pushes the high sky away from grey, and keeps every pixel\'s luminance', () => {
+    const img = grey();
+    const out = saturateSky(img, 1.8, 4, 40);
+    expect(rgbAt(out, 2)).toEqual(rgbAt(img, 2)); // the fog's band
+    expect(rgbAt(out, -30)).toEqual(rgbAt(img, -30));
+    const high = rgbAt(out, 70);
+    expect(high[2] - high[0]).toBeCloseTo((0.5 - 0.3) * 1.8, 3); // the blue-red spread grows by the factor
+    const l = (c: readonly number[]): number => luminanceOf(c[0], c[1], c[2]);
+    expect(l(high)).toBeCloseTo(l(rgbAt(img, 70)), 4);
+    // it fades in: part of the way at 20 degrees
+    const mid = rgbAt(out, 20);
+    expect(mid[2] - mid[0]).toBeGreaterThan(0.2);
+    expect(mid[2] - mid[0]).toBeLessThan(high[2] - high[0]);
+  });
+
+  it('a factor of 1 is a plain copy; the input is never modified; half floats stay half floats', () => {
+    const img = grey();
+    const before = img.data.slice();
+    const same = saturateSky(img, 1, 4, 40);
+    expect(same.data).not.toBe(img.data);
+    expect(Array.from(same.data)).toEqual(Array.from(before));
+    saturateSky(img, 2, 4, 40);
+    expect(Array.from(img.data)).toEqual(Array.from(before));
+    const h = saturateSky(grey(true), 1.5, 4, 40);
+    expect(h.data).toBeInstanceOf(Uint16Array);
+    expect(rgbAt(h, 70)[2] - rgbAt(h, 70)[0]).toBeCloseTo(0.3, 2);
+  });
+
+  it('never makes a channel negative, however strong the factor', () => {
+    const out = saturateSky(grey(), 10, 4, 40);
+    for (let i = 0; i < out.data.length; i++) expect(out.data[i]).toBeGreaterThanOrEqual(0);
   });
 });
 

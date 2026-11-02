@@ -126,7 +126,7 @@ export function loadModelKit(loader: ModelLoader): Promise<ModelKit> {
 const FOLIAGE: Record<ThemeId, [number, number, number]> = {
   desert: [0.1, 0.2, 0.07],
   arctic: [0.07, 0.15, 0.12],
-  valley: [0.09, 0.2, 0.06],
+  valley: [0.055, 0.125, 0.045], // dark conifer green: lit by a 48 degree sun the lighter greens read as lime plastic
 };
 const BARK: Record<ThemeId, [number, number, number]> = {
   desert: [0.46, 0.37, 0.26], // silvery dry wood

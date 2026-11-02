@@ -38,6 +38,8 @@ describe('the HDRI looks of each theme', () => {
       expect(h.exposure).toBeLessThan(1.5);
       expect(h.sunIntensity).toBeGreaterThan(0);
       expect(h.environmentIntensity).toBeGreaterThan(0.3);
+      expect(h.skySaturation).toBeGreaterThanOrEqual(1);
+      expect(h.skySaturation).toBeLessThanOrEqual(2);
       expect(h.hemisphereIntensity).toBeLessThan(SKY_LOOKS[theme].hemisphereIntensity); // the HDRI carries the sky light now
     }
   });
@@ -88,6 +90,23 @@ describe('planHdriSky on the shipped skies', () => {
       expect(plan.backgroundImage.width).toBe(image.width);
     });
   }
+
+  it('the desert\'s visible sky is more vivid than the photograph above the horizon band, and the fog (the horizon band) is not touched by it', () => {
+    const image = shipped('desert');
+    expect(SKY_LOOKS.desert.hdri.skySaturation).toBeGreaterThan(1);
+    const plan = planHdriSky('desert', image);
+    const spread = (img: typeof image, row: number): number => {
+      const i = (row * img.width + Math.floor(img.width / 3)) * 4;
+      const v = (k: number): number => (img.data instanceof Uint16Array ? THREE.DataUtils.fromHalfFloat(img.data[i + k]) : img.data[i + k]);
+      const l = 0.2126 * v(0) + 0.7152 * v(1) + 0.0722 * v(2);
+      return Math.abs(v(2) - l) / Math.max(1e-6, l);
+    };
+    const row70 = Math.round((0.5 - 70 / 180) * image.height);
+    expect(spread(plan.backgroundImage, row70)).toBeGreaterThan(spread(image, row70) * 1.4);
+    // the horizon band (where the fog's colour is read) is the original's, so fogged ground still meets the sky without a seam
+    const row2 = Math.round((0.5 - 2 / 180) * image.height);
+    expect(spread(plan.backgroundImage, row2)).toBeCloseTo(spread(image, row2), 3);
+  });
 
   it('the fog colours differ by theme the way the skies do: neutral desert haze (the warm glare is on the sun side), bluish valley, neutral-cool arctic', () => {
     const haze = (t: ThemeId): THREE.Color => planHdriSky(t, shipped(t)).hazeColor;

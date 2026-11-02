@@ -270,6 +270,45 @@ export function clampLuminance(img: EquirectImage, cap: number): EquirectImage {
 }
 
 /**
+ * A copy of the image with the colour of the sky pushed away from grey by `factor` (1 = unchanged, above 1 = bluer / more
+ * vivid), growing smoothly from nothing at `fromDeg` of elevation to the full factor at `toDeg`: the horizon band (which
+ * the fog matches, so fogged ground meets the sky without a seam) and everything below it are untouched, and so is the
+ * luminance of every pixel. The input is not modified; the copy has the same data type.
+ */
+export function saturateSky(img: EquirectImage, factor: number, fromDeg: number, toDeg: number): EquirectImage {
+  const { width: w, height: h } = img;
+  const out = img.data.slice();
+  if (factor === 1) return { data: out, width: w, height: h };
+  const read = rgbReader(img);
+  const px: Rgb = { r: 0, g: 0, b: 0 };
+  const half = out instanceof Uint16Array;
+  for (let row = 0; row < h; row++) {
+    const elevation = (0.5 - (row + 0.5) / h) * 180;
+    const t = Math.min(1, Math.max(0, (elevation - fromDeg) / (toDeg - fromDeg)));
+    if (t <= 0) continue;
+    const k = 1 + (factor - 1) * t * t * (3 - 2 * t);
+    for (let column = 0; column < w; column++) {
+      const p = row * w + column;
+      read(p, px);
+      const l = luminanceOf(px.r, px.g, px.b);
+      const r = Math.max(0, l + (px.r - l) * k);
+      const g = Math.max(0, l + (px.g - l) * k);
+      const b = Math.max(0, l + (px.b - l) * k);
+      if (half) {
+        out[p * 4] = THREE.DataUtils.toHalfFloat(r);
+        out[p * 4 + 1] = THREE.DataUtils.toHalfFloat(g);
+        out[p * 4 + 2] = THREE.DataUtils.toHalfFloat(b);
+      } else {
+        out[p * 4] = r;
+        out[p * 4 + 1] = g;
+        out[p * 4 + 2] = b;
+      }
+    }
+  }
+  return { data: out, width: w, height: h };
+}
+
+/**
  * Irradiance the pixels above `cap` carry, in the image's own units: the sum over them of (luminance - cap) times
  * their solid angle (steradians). It is what `clampLuminance` removed, and so what the sun's directional light
  * has to supply for the scene to be lit as the HDRI says (with the surface facing the sun).
