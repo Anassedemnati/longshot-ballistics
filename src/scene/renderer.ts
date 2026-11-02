@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 
+/** Tone mapping exposure of the stage-1 look. The first-person rifle (its own lighting is tuned for it) is always drawn with it; the world's is per theme (`SKY_LOOKS[theme].hdri.exposure`). */
+export const LEGACY_EXPOSURE = 0.9;
+
 /** Pixel ratio cap: beyond 2x the extra pixels cost frame rate and add nothing visible. */
 const MAX_PIXEL_RATIO = 2;
 
@@ -14,7 +17,7 @@ export function createRenderer(parent: HTMLElement): THREE.WebGLRenderer {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.9;
+  renderer.toneMappingExposure = LEGACY_EXPOSURE;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.domElement.style.display = 'block';
