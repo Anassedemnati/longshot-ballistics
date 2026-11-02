@@ -1,6 +1,6 @@
 import { RIFLES } from '../ballistics/rifles';
 import { MISSION_LIMITS, clampMission, encodeMission } from '../mission/config';
-import type { Density, MissionConfig } from '../mission/config';
+import type { Density, FiringPosition, MissionConfig } from '../mission/config';
 import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 
@@ -58,6 +58,35 @@ export function rifleNote(rifle: MissionConfig['rifle']): string {
   return `G7 BC ${r.bcG7} · ${r.muzzleVelocity} m/s`;
 }
 
+/** The line under the firing position control: what the player sees from each position (spec B.2). Theme-neutral: it reads the same in every theme. */
+const POSITION_NOTE: Record<FiringPosition, string> = {
+  valley: 'Low ground. A near-level sightline across the valley floor.',
+  ridge: 'Elevated ridge. A clear view into the valley below.',
+  mountain: 'Steep rocky spur. A pronounced downhill shot into the basin.',
+};
+
+export function positionNote(position: FiringPosition): string {
+  return POSITION_NOTE[position];
+}
+
+/** "2 snipers", "1 sniper", or "0 · training" (no incoming fire at all). */
+export function snipersLabel(count: number): string {
+  if (count === 0) return '0 · training';
+  return count === 1 ? '1 sniper' : `${count} snipers`;
+}
+
+/** Under the enemy snipers slider: what the bottom of the scale means. */
+export const SNIPERS_NOTE = '0 = training, no incoming fire';
+/** Under the suppressor switch (spec B.3: quieter, no flash, slower detection). */
+export const SUPPRESSOR_NOTE = 'Reduced noise / flash, slower detection';
+/** Under the aim assists switch (spec B.5). */
+export const ASSISTS_NOTE = 'Trajectory, aim marker and spotter — training aid';
+
+/** What each rifle is, as the concept art captions it. */
+export function rifleTitle(rifle: MissionConfig['rifle']): string {
+  return rifle === '308' ? 'Compact precision rifle' : 'Long-range precision rifle';
+}
+
 /** How many buildings / scenery vehicles a density gives (spec A.4; the layout draws a count in this range). */
 const PROP_COUNT_TEXT = {
   buildings: { none: 'no buildings', few: '3–5 buildings', many: '8–12 buildings' },
@@ -66,6 +95,51 @@ const PROP_COUNT_TEXT = {
 
 export function densityNote(kind: 'buildings' | 'vehicles', density: Density): string {
   return PROP_COUNT_TEXT[kind][density];
+}
+
+// --- Rifle concept art ------------------------------------------------------------------------
+// `public/references/rifle-concept.png` shows both rifles side by side (.308 olive on top, .338 sand below it). The
+// menu cuts one rifle out of it in the browser: the picture sits in an `overflow: hidden` box and is scaled and
+// shifted by percentages, so no second image file is needed.
+
+/** Size of the concept art, px. */
+export const RIFLE_ART_IMAGE = { w: 1672, h: 941 } as const;
+
+/** A rectangle of the concept art, px. */
+export interface ArtCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Where each rifle sits in the art: the stock, receiver and scope of each (the long barrels are cut so the rifle
+ * fills the box), picked so the other rifle and the picture's captions stay out. Both are 3.1:1.
+ */
+export const RIFLE_ART: Record<MissionConfig['rifle'], ArtCrop> = {
+  '308': { x: 52, y: 0, w: 790, h: 255 },
+  '338': { x: 22, y: 248, w: 900, h: 290 },
+};
+
+/** CSS numbers that make a box of `aspect` (width / height) show only `crop` of the art. Percentages of the box. */
+export interface ArtStyle {
+  aspect: number;
+  /** Width of the whole picture, % of the box width. */
+  widthPct: number;
+  /** `left` of the picture, % of the box width (<= 0). */
+  leftPct: number;
+  /** `top` of the picture, % of the box height (<= 0). */
+  topPct: number;
+}
+
+export function rifleArtStyle(crop: ArtCrop): ArtStyle {
+  return {
+    aspect: crop.w / crop.h,
+    widthPct: (RIFLE_ART_IMAGE.w / crop.w) * 100,
+    leftPct: (-crop.x / crop.w) * 100 + 0, // + 0: no -0 for a crop at the edge
+    topPct: (-crop.y / crop.h) * 100 + 0,
+  };
 }
 
 // --- Wind dial -------------------------------------------------------------------------------
