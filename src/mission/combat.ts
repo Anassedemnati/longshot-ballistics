@@ -126,8 +126,10 @@ export class Combat {
     if (damage > 0) ui.flash(flashIntensity(damage));
     ui.update(dt);
 
-    // The last sniper fell while the player was ducked (a bullet in flight): he comes back up, the fight is over.
-    if (encounter.ended && !encounter.failed && this.covered) this.setCovered(false);
+    // No sniper is left (the encounter has ended, or the mission was just completed and the encounter is paused for
+    // good): the threat is over, and a player still ducked (a bullet in flight killed the last one) comes back up.
+    const cleared = !encounter.failed && (encounter.ended || alive === 0);
+    if (cleared && this.covered) this.setCovered(false);
 
     ui.setText(
       threatText({
@@ -140,7 +142,7 @@ export class Combat {
         fireIn: encounter.fireIn,
         paused,
         failed: encounter.failed,
-        cleared: encounter.ended && !encounter.failed,
+        cleared,
       }),
     );
     return encounter.failed;

@@ -995,14 +995,16 @@ async function run() {
     await fight.mouse.click(640, 360);
     await fight.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
     check(true, 'a click locks the pointer');
-    await fight.evaluate(() => window.__game.setDetection(0));
-    // Look at the nearer sniper through the scope for the glint screenshot.
+    // Look at the nearer sniper through the scope at 20x, detected (steady glint), for the close-up screenshot.
     const nearSniper = [...st.snipers].sort((a, b) => Math.hypot(a.head.x, a.head.z) - Math.hypot(b.head.x, b.head.z))[0];
     await fight.evaluate(([x, y, z]) => {
+      window.__game.setDetection(70);
       window.__game.toggleScope();
-      window.__game.aimAt(x, y, z);
+      for (let i = 0; i < 6; i++) window.__game.zoom(-1);
+      window.__game.aimAt(x, y - 0.1, z);
     }, [nearSniper.head.x, nearSniper.head.y, nearSniper.head.z]);
-    await animationFrames(fight, 5);
+    await animationFrames(fight, 8);
+    check((await gameState(fight)).snipers.find((k) => k.id === nearSniper.id).glint, 'the nearer sniper\'s glint is on in the scope');
     await fight.screenshot({ path: join(OUT_DIR, 'snipers-scoped.png') });
     await fight.evaluate(() => window.__game.toggleScope());
 
@@ -1093,6 +1095,32 @@ async function run() {
     await fight.screenshot({ path: join(OUT_DIR, 'snipers-complete.png') });
     await fight.close();
 
+    // The last target is a sniper: the soldier first, then him. The threat line over the results must say the threat is over
+    // (the mission completes in the tick of the kill, which pauses the fight): no "PAUSED", no frozen countdown.
+    const lastSniper = await openPage();
+    await startGame(lastSniper, `m=${MISSION_SNIPER_ONE}&debug=1`);
+    await lastSniper.evaluate(() => window.__game.unlockAudio());
+    await lastSniper.mouse.click(640, 360);
+    await lastSniper.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
+    st = await gameState(lastSniper);
+    const lastSoldier = st.soldiers[0];
+    const lastOne = st.snipers[0];
+    const soldierFirst = await shootAt(lastSniper, lastSoldier.upperTorso, holdFor(Math.hypot(lastSoldier.upperTorso.x, lastSoldier.upperTorso.z)));
+    check(/^HIT/.test(soldierFirst), 'the soldier is hit first');
+    await waitForTargetsLeft(lastSniper, 1);
+    await waitGameSeconds(lastSniper, BOLT_GAME_S);
+    await lastSniper.evaluate(() => window.__game.setDetection(60)); // a little noise, below the firing threshold
+    const sniperLast = await shootAt(lastSniper, lastOne.upperTorso, holdFor(Math.hypot(lastOne.upperTorso.x, lastOne.upperTorso.z)));
+    check(/^SNIPER DOWN/.test(sniperLast), 'the sniper is the last target and goes down');
+    await lastSniper.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    st = await gameState(lastSniper);
+    check(st.complete && !st.stats.failed, 'the mission is complete');
+    check(((await lastSniper.locator('.results-title').textContent()) ?? '') === 'Mission complete', 'the results say "Mission complete"');
+    const overResults = (await lastSniper.locator('.threat-panel').textContent()) ?? '';
+    check(/ALL SNIPERS DOWN/.test(overResults) && !/PAUSED|FIRING IN|BOMBARDMENT/.test(overResults), `the threat line over the results says the threat is over ("${overResults}")`);
+    await lastSniper.screenshot({ path: join(OUT_DIR, 'snipers-last-target.png') });
+    await lastSniper.close();
+
     // Mission failed: one sniper, little health, full detection: the first shot kills.
     const failing = await openPage();
     await startGame(failing, `m=${MISSION_SNIPER_ONE}&debug=1`);
@@ -1175,7 +1203,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-failed, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-last-target, snipers-failed, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }

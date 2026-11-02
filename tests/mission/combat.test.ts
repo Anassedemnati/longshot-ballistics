@@ -171,6 +171,61 @@ describe('Combat: snipers left and the end of the fight', () => {
   });
 });
 
+describe('Combat: the last target is a sniper', () => {
+  // Killing the last target completes the mission in the same tick: the loop then pauses the fight for good, before
+  // the encounter has seen that no sniper is left. The panel above the results must still say the threat is over.
+  it('says ALL SNIPERS DOWN, not PAUSED, when the mission completes with the encounter paused', () => {
+    const f = fixture(1);
+    f.encounter.setDetection(80);
+    f.combat.update(0.1, false);
+    f.sn[0].down = true;
+    f.combat.update(0.1, true);
+    expect(f.log.text).toContain('ALL SNIPERS DOWN');
+    expect(f.log.text).not.toContain('PAUSED');
+    expect(f.log.text).not.toContain('SNIPER FIRING IN');
+    expect(f.encounter.health).toBe(100);
+  });
+
+  it('shows no countdown frozen over the results, a pending bombardment included', () => {
+    const f = fixture(2);
+    f.encounter.setDetection(100);
+    f.encounter.mortarClock = 11.95;
+    f.combat.update(0.1, false);
+    expect(f.log.text).toContain('INCOMING BOMBARDMENT');
+    for (const s of f.sn) s.down = true;
+    f.combat.update(0.1, true);
+    expect(f.log.text).not.toContain('INCOMING BOMBARDMENT');
+    expect(f.log.text).toContain('ALL SNIPERS DOWN');
+  });
+
+  it('brings a ducked player back up even when the fight is paused', () => {
+    const f = fixture(1);
+    f.combat.toggleCover(false);
+    f.sn[0].down = true;
+    f.combat.update(0.1, true);
+    expect(f.combat.covered).toBe(false);
+    expect(f.log.covered).toBe(false);
+  });
+
+  it('still says PAUSED while a sniper is up', () => {
+    const f = fixture(2);
+    f.sn[0].down = true;
+    f.combat.update(0.1, true);
+    expect(f.log.text).toContain('PAUSED');
+    expect(f.log.text).toContain('1 sniper left');
+  });
+
+  it('a dead player is never "cleared", paused or not', () => {
+    const f = fixture(1);
+    f.encounter.setDetection(100);
+    f.encounter.health = 10;
+    run(f.combat, 5);
+    f.sn[0].down = true;
+    f.combat.update(0.1, true);
+    expect(f.log.text).toBe('MISSION FAILED · you were killed');
+  });
+});
+
 describe('Combat: cover', () => {
   it('C ducks (mask on, scope dropped), C again comes back up', () => {
     const f = fixture();
