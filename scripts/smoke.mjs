@@ -56,9 +56,13 @@ const MENU_TAB_ORDER = [
   'menu-range-max',
   'menu-soldiers',
   'menu-vehicle-targets',
+  'menu-snipers',
   'menu-wind-speed',
   'menu-dial-pos is-selected',
   'radio:rifle',
+  'checkbox:suppressed',
+  'checkbox:assists',
+  'radio:position',
   'radio:buildings',
   'radio:vehicles',
   'menu-button menu-random',
@@ -311,7 +315,48 @@ const menuDom = (page) =>
       rifle: checked('rifle'),
       buildings: checked('buildings'),
       vehicles: checked('vehicles'),
+      position: checked('position'),
+      positionNote: document.querySelector('input[name=position]')?.closest('.menu-field')?.querySelector('.menu-seg-note')?.textContent,
+      suppressed: document.querySelector('input[name=suppressed]')?.checked,
+      suppressedText: document.querySelector('input[name=suppressed]')?.closest('label')?.querySelector('.menu-toggle-state')?.textContent,
+      assists: document.querySelector('input[name=assists]')?.checked,
+      assistsText: document.querySelector('input[name=assists]')?.closest('label')?.querySelector('.menu-toggle-state')?.textContent,
+      snipers: text('menu-snipers-value'),
+      rifleArt: document.querySelector('.menu-rifle-art')?.dataset.rifle,
     };
+  });
+
+/** Whether the menu's rifle art really shows only its crop: the picture covers the whole box on every side, and has loaded. */
+const rifleArtCovers = (page) =>
+  page.evaluate(() => {
+    const art = document.querySelector('.menu-rifle-art');
+    const outer = art.getBoundingClientRect();
+    // The picture is placed inside the box's border: the inner (padding) box is what it has to cover.
+    const box = { left: outer.left + art.clientLeft, top: outer.top + art.clientTop, width: art.clientWidth };
+    box.right = box.left + art.clientWidth;
+    box.bottom = box.top + art.clientHeight;
+    const img = document.querySelector('.menu-rifle-img');
+    const r = img.getBoundingClientRect();
+    const eps = 0.75;
+    return {
+      loaded: img.complete && img.naturalWidth > 0,
+      covers: r.left <= box.left + eps && r.top <= box.top + eps && r.right >= box.right - eps && r.bottom >= box.bottom - eps,
+      // The crop is a strip, not the whole picture: the image is much bigger than the box.
+      zoomed: r.width > box.width * 1.5,
+    };
+  });
+
+/** Click a segmented-control option (the radio's label) by the radio's name and value. */
+const clickSeg = (page, name, value) => page.locator('label.menu-seg-option', { has: page.locator(`input[name=${name}][value="${value}"]`) }).click();
+
+/** Click a switch (the checkbox's label) by the checkbox's name. */
+const clickSwitch = (page, name) => page.locator('label.menu-toggle', { has: page.locator(`input[name=${name}]`) }).click();
+
+/** Does the menu fit its window without scrolling right now? */
+const menuFits = (page) =>
+  page.evaluate(() => {
+    const m = document.querySelector('.menu');
+    return { scroll: m.scrollHeight, client: m.clientHeight };
   });
 
 const menuConfig = (page) => page.evaluate(() => window.__menu.get());
@@ -777,6 +822,15 @@ async function run() {
         defaults.buildings === 'few' && defaults.vehicles === 'few',
       'the menu opens with the defaults (4.5 m/s · 10 mph from 9 o\'clock, .308, few buildings, few vehicles)',
     );
+    check(
+      defaults.position === 'ridge' && defaults.suppressed === false && defaults.assists === false && defaults.snipers === '1 sniper' &&
+        defaults.suppressedText === 'Off' && defaults.assistsText === 'Off',
+      'the menu opens with ridge, suppressor off, 1 enemy sniper, aim assists off',
+    );
+    check(defaults.positionNote === 'Elevated ridge. A clear view into the valley below.', `the ridge description shows under the firing position (${defaults.positionNote})`);
+    check(defaults.rifleArt === '308', 'the rifle panel shows the .308 concept art');
+    const artDefault = await rifleArtCovers(plainMenu);
+    check(artDefault.loaded && artDefault.covers && artDefault.zoomed, `the .308 art is a crop of the concept picture (${JSON.stringify(artDefault)})`);
     const menuPng = await plainMenu.screenshot({ path: join(OUT_DIR, 'menu.png') });
     const menuLook = await analyzePng(plainMenu, menuPng);
     check(menuLook.distinctAll >= 20, `the menu screenshot has content (${menuLook.distinctAll} distinct sampled colours)`);
@@ -820,7 +874,7 @@ async function run() {
       tabbed.push(
         await controls.evaluate(() => {
           const e = document.activeElement;
-          return e.matches('input[type=radio]') ? `radio:${e.name}` : e.id || e.getAttribute('class');
+          return e.matches('input[type=radio], input[type=checkbox]') ? `${e.type}:${e.name}` : e.id || e.getAttribute('class');
         }),
       );
     }
@@ -870,10 +924,104 @@ async function run() {
     await controls.screenshot({ path: join(OUT_DIR, 'menu-controls.png') });
 
     // __menu.set redraws the controls.
-    await controls.evaluate(() => window.__menu.set({ soldiers: 5, theme: 'valley', windSpeedMps: 0 }));
+    await controls.evaluate(() =>
+      window.__menu.set({ soldiers: 5, theme: 'valley', windSpeedMps: 0, position: 'mountain', suppressed: true, enemySnipers: 3, assists: true }),
+    );
     const afterSet = await menuDom(controls);
     check(afterSet.soldiers === '5' && afterSet.theme === 'valley' && afterSet.wind === '0.0 m/s · 0 mph', '__menu.set updates the controls');
+    check(
+      afterSet.position === 'mountain' && afterSet.suppressed === true && afterSet.snipers === '3 snipers' && afterSet.assists === true,
+      '__menu.set updates the new controls (mountain, suppressor on, 3 snipers, assists on)',
+    );
     await controls.close();
+
+    // The new controls, each by real input: the firing position, the enemy snipers slider, the suppressor and aim assists switches
+    // and the rifle (whose concept art follows it). `__menu.get()` reflects every one, and Start carries them in the v2 mission code.
+    const added = await openPage();
+    await added.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
+    await added.waitForSelector('.menu-start');
+    await imagesLoaded(added);
+    // Firing position: click an option, then the arrow keys move the native radio group.
+    await clickSeg(added, 'position', 'mountain');
+    check((await menuConfig(added)).position === 'mountain', 'clicking Mountain sets the firing position');
+    check(
+      (await menuDom(added)).positionNote === 'Steep rocky spur. A pronounced downhill shot into the basin.',
+      'the mountain description shows under the firing position',
+    );
+    await added.keyboard.press('ArrowLeft');
+    check((await menuConfig(added)).position === 'ridge', 'ArrowLeft on the firing position moves to Ridge');
+    await clickSeg(added, 'position', 'valley');
+    check((await menuConfig(added)).position === 'valley', 'clicking Valley sets the firing position');
+    const valleyNote = (await menuDom(added)).positionNote ?? '';
+    check(/near-level sightline/.test(valleyNote) && !/sand|wash|dune/i.test(valleyNote), `the valley description is theme-neutral (${valleyNote})`);
+    // Enemy snipers: the real slider, by keyboard.
+    await added.locator('#menu-snipers').focus();
+    await added.keyboard.press('End');
+    check((await menuConfig(added)).enemySnipers === 3, 'End on the enemy snipers slider gives 3');
+    check((await added.locator('#menu-snipers-value').textContent()) === '3 snipers', 'the snipers value reads "3 snipers"');
+    await added.keyboard.press('Home');
+    check((await menuConfig(added)).enemySnipers === 0, 'Home on the enemy snipers slider gives 0 (training)');
+    check((await added.locator('#menu-snipers-value').textContent()) === '0 · training', 'the snipers value reads "0 · training"');
+    check(((await added.locator('.menu-slider-note').textContent()) ?? '').includes('0 = training, no incoming fire'), 'the slider explains "0 = training, no incoming fire"');
+    await added.keyboard.press('ArrowRight');
+    await added.keyboard.press('ArrowRight');
+    check((await menuConfig(added)).enemySnipers === 2, 'two ArrowRights on the snipers slider give 2');
+    // Suppressor and aim assists: click the switch, then Space on the focused checkbox.
+    await clickSwitch(added, 'suppressed');
+    check((await menuConfig(added)).suppressed === true && (await menuDom(added)).suppressedText === 'On', 'clicking the suppressor switch turns it on');
+    await clickSwitch(added, 'suppressed');
+    check((await menuConfig(added)).suppressed === false && (await menuDom(added)).suppressedText === 'Off', 'clicking it again turns it off');
+    await added.locator('input[name=suppressed]').focus();
+    await added.keyboard.press('Space');
+    check((await menuConfig(added)).suppressed === true, 'Space on the focused suppressor checkbox turns it on');
+    check(((await added.locator('label.menu-toggle', { has: added.locator('input[name=suppressed]') }).locator('xpath=..').textContent()) ?? '').includes('Reduced noise / flash'), 'the suppressor switch says "Reduced noise / flash"');
+    await clickSwitch(added, 'assists');
+    check((await menuConfig(added)).assists === true && (await menuDom(added)).assistsText === 'On', 'clicking the aim assists switch turns it on');
+    check(((await added.locator('label.menu-toggle', { has: added.locator('input[name=assists]') }).locator('xpath=..').textContent()) ?? '').includes('Trajectory, aim marker and spotter'), 'the aim assists switch says what it gives');
+    // The rifle art follows the rifle.
+    await clickSeg(added, 'rifle', '338');
+    check((await menuDom(added)).rifleArt === '338', 'choosing the .338 shows the .338 concept art');
+    const art338 = await rifleArtCovers(added);
+    check(art338.loaded && art338.covers && art338.zoomed, `the .338 art is a crop of the concept picture (${JSON.stringify(art338)})`);
+    const artBox = await added.locator('.menu-rifle-art').boundingBox();
+    await clickSeg(added, 'rifle', '308');
+    check(Math.abs(((await added.locator('.menu-rifle-art').boundingBox())?.height ?? 0) - artBox.height) < 0.5, 'the art box keeps its height when the rifle changes');
+    await clickSeg(added, 'rifle', '338');
+    // The longest texts everywhere (3 snipers, valley note, the longest direction label) still fit 1280x720 without scrolling.
+    await added.locator('#menu-snipers').focus();
+    await added.keyboard.press('End');
+    await added.evaluate(() => window.__menu.set({ windClock: 10, position: 'mountain' }));
+    const worstFit = await menuFits(added);
+    check(worstFit.scroll <= worstFit.client, `the menu still fits 1280x720 with the longest texts (${worstFit.scroll} <= ${worstFit.client})`);
+    await clickSeg(added, 'position', 'valley');
+    await added.evaluate(() => window.__menu.set({ windClock: 9, enemySnipers: 2 }));
+    await added.waitForTimeout(450);
+    await added.screenshot({ path: join(OUT_DIR, 'menu-new-controls.png') });
+    // Start: the mission URL's v2 code carries valley, suppressed, 2 snipers, assists (fields 12..15 after the version).
+    await clickStart(added, { debug: true });
+    const addedCode = (missionCode(added) ?? '').split('.');
+    check(
+      addedCode[0] === 'v2' && addedCode[8] === '338' && addedCode[12] === 'v' && addedCode[13] === '1' && addedCode[14] === '2' && addedCode[15] === '1',
+      `Start puts the new controls in the v2 mission code (${addedCode.join('.')})`,
+    );
+    await animationFrames(added, 3);
+    check((await gameState(added)).targetsLeft >= 1, 'the mission started from the new controls runs');
+    await added.waitForLoadState('networkidle');
+    // And the code reads back into the menu: the way back (?last=) pre-fills the new controls too.
+    await added.goto(`${preview.url}?last=${addedCode.join('.')}&debug=1`, { waitUntil: 'load' });
+    await added.waitForSelector('.menu-start');
+    await imagesLoaded(added);
+    const addedBack = await menuConfig(added);
+    check(
+      addedBack.position === 'valley' && addedBack.suppressed === true && addedBack.enemySnipers === 2 && addedBack.assists === true && addedBack.rifle === '338',
+      `coming back to the menu pre-fills the new controls (${addedBack.position}, suppressed ${addedBack.suppressed}, ${addedBack.enemySnipers} snipers, assists ${addedBack.assists})`,
+    );
+    const addedDom = await menuDom(added);
+    check(
+      addedDom.position === 'valley' && addedDom.suppressed === true && addedDom.assists === true && addedDom.snipers === '2 snipers' && addedDom.rifleArt === '338',
+      'the pre-filled menu shows them: Valley, suppressor On, 2 snipers, assists On, .338 art',
+    );
+    await added.close();
 
     // Each theme: click its card (the background follows), set counts, press the real Start button.
     for (const [i, theme] of ['desert', 'arctic', 'valley'].entries()) {
@@ -882,7 +1030,8 @@ async function run() {
       await themed.waitForSelector('.menu-start');
       await imagesLoaded(themed);
       await themed.locator(`.menu-card[data-theme=${theme}]`).click();
-      await themed.evaluate(([soldiers, vehicleTargets]) => window.__menu.set({ soldiers, vehicleTargets }), [2 + i, i]);
+      // No enemy snipers here: this loop counts the soldiers and vehicle targets, and snipers are targets of their own.
+      await themed.evaluate(([soldiers, vehicleTargets]) => window.__menu.set({ soldiers, vehicleTargets, enemySnipers: 0 }), [2 + i, i]);
       cfg = await menuConfig(themed);
       check(cfg.theme === theme, `clicking the ${theme} card selects it`);
       await themed.waitForTimeout(450); // the background cross-fade
@@ -911,7 +1060,7 @@ async function run() {
     await random.locator('.menu-random').click();
     const rollA = await menuConfig(random);
     await random.locator('.menu-random').click();
-    const second = await menuConfig(random);
+    let second = await menuConfig(random);
     check(JSON.stringify(rollA) !== JSON.stringify(second), 'two Random clicks give different missions');
     log(`random mission: ${JSON.stringify(second)}`);
     const shown = await menuDom(random);
@@ -920,6 +1069,25 @@ async function run() {
         shown.buildings === second.buildings && shown.vehicles === second.vehicles,
       'Random mission redraws the controls with the new settings',
     );
+    check(
+      shown.position === second.position && shown.suppressed === second.suppressed && shown.assists === second.assists &&
+        shown.snipers === (second.enemySnipers === 0 ? '0 · training' : second.enemySnipers === 1 ? '1 sniper' : `${second.enemySnipers} snipers`) &&
+        shown.rifleArt === second.rifle,
+      'Random mission redraws the new controls too (position, suppressor, snipers, assists, rifle art)',
+    );
+    // Over many rolls Random reaches every kind of value of the new controls.
+    const rolls = [];
+    for (let i = 0; i < 24; i++) {
+      await random.locator('.menu-random').click();
+      rolls.push(await menuConfig(random));
+    }
+    check(new Set(rolls.map((r) => r.position)).size === 3, 'Random mission rolls every firing position');
+    check(new Set(rolls.map((r) => r.enemySnipers)).size >= 3, 'Random mission rolls different enemy sniper counts');
+    check(new Set(rolls.map((r) => r.suppressed)).size === 2 && new Set(rolls.map((r) => r.assists)).size === 2, 'Random mission rolls the suppressor and aim assists on and off');
+    await random.locator('.menu-random').click();
+    // The mission started below is this last roll, with its snipers pinned to 0: it counts soldiers and vehicle targets, and snipers are targets of their own.
+    await random.evaluate(() => window.__menu.set({ enemySnipers: 0 }));
+    second = await menuConfig(random);
     await clickStart(random, { debug: true });
     st = await gameState(random);
     check(st.targetsLeft === second.soldiers + second.vehicleTargets, `the random mission has the menu's targets (${st.targetsLeft})`);
@@ -943,7 +1111,7 @@ async function run() {
     // 12. Leaving a mission does not lose the settings. (Each page waits for its sound files before it leaves: navigating away
     // sooner aborts them, which would count as failed requests.)
     // 12a. The browser's Back button: Start rewrites the menu's own history entry to ?last=<settings>.
-    const custom = { theme: 'arctic', rangeMin: 400, rangeMax: 800, soldiers: 4, vehicleTargets: 1, windSpeedMps: 7.5, windClock: 3, rifle: '338', buildings: 'many', vehicles: 'none' };
+    const custom = { theme: 'arctic', rangeMin: 400, rangeMax: 800, soldiers: 4, vehicleTargets: 1, windSpeedMps: 7.5, windClock: 3, rifle: '338', buildings: 'many', vehicles: 'none', enemySnipers: 0 };
     const backPage = await openPage();
     await backPage.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
@@ -958,7 +1126,7 @@ async function run() {
     await backPage.goBack({ waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
     await imagesLoaded(backPage);
-    check(/\?last=v2\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+\.r\.0\.1\.0&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
+    check(/\?last=v2\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+\.r\.0\.0\.0&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
     const { seed: _s2, ...setAfter } = await menuConfig(backPage);
     check(JSON.stringify(setAfter) === JSON.stringify(setBefore), 'Back from the mission: the menu is pre-filled with the settings it started with');
     const afterDom = await menuDom(backPage);
@@ -987,6 +1155,11 @@ async function run() {
     await hudPage.waitForSelector('.hud-menu');
     check(await hudPage.locator('.hud-menu').isVisible(), 'the HUD shows a Menu link while the pointer is free');
     check((await hudPage.locator('.hud-menu').textContent()) === 'Menu', 'the HUD link reads "Menu"');
+    const hudLook = await hudPage.evaluate(() => {
+      const c = getComputedStyle(document.querySelector('.hud-panel'));
+      return { edge: c.borderLeftWidth, edgeColor: c.borderLeftColor, glass: c.backgroundImage.startsWith('linear-gradient'), lines: document.querySelectorAll('.hud-panel .hud-line').length };
+    });
+    check(hudLook.edge === '3px' && hudLook.glass && hudLook.lines >= 6, `the HUD panel has the slate-glass look with a brass edge and keeps its six lines (${JSON.stringify(hudLook)})`);
     check((await hudPage.locator('.hud-menu').getAttribute('href')) === `/?last=${asV2(MISSION_MENU_LINK)}&debug=1`, 'the HUD Menu link points at the menu with this mission and debug=1');
     await hudPage.screenshot({ path: join(OUT_DIR, 'hud-menu.png') });
     await hudPage.evaluate(() => window.__game.toggleScope()); // the link must not sit over the scope lens
@@ -1055,7 +1228,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-new-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }

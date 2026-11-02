@@ -1,19 +1,28 @@
 import './menu.css';
 import { DEFAULT_MISSION, MISSION_LIMITS, clampMission, randomMission, windClockLabel } from '../mission/config';
-import type { Density, MissionConfig } from '../mission/config';
+import type { Density, FiringPosition, MissionConfig } from '../mission/config';
 import { createRng } from '../mission/random';
 import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 import {
+  ASSISTS_NOTE,
   RANGE_STEP_M,
+  RIFLE_ART,
+  RIFLE_ART_IMAGE,
+  SNIPERS_NOTE,
+  SUPPRESSOR_NOTE,
   WIND_STEP_MPS,
   clockPoint,
   densityNote,
   linkRange,
   menuSearch,
+  positionNote,
   rangeLabel,
+  rifleArtStyle,
   rifleNote,
+  rifleTitle,
   seedFromBits,
+  snipersLabel,
   startSearch,
   stepClock,
   themeBlurb,
@@ -41,6 +50,11 @@ const DENSITY_OPTIONS: ReadonlyArray<{ value: Density; label: string }> = [
   { value: 'none', label: 'None' },
   { value: 'few', label: 'Few' },
   { value: 'many', label: 'Many' },
+];
+const POSITION_OPTIONS: ReadonlyArray<{ value: FiringPosition; label: string }> = [
+  { value: 'valley', label: 'Valley' },
+  { value: 'ridge', label: 'Ridge' },
+  { value: 'mountain', label: 'Mountain' },
 ];
 const RIFLE_OPTIONS: ReadonlyArray<{ value: MissionConfig['rifle']; label: string }> = [
   { value: '308', label: '.308 Win' },
@@ -125,6 +139,8 @@ function segmented<T extends string>(
   options: ReadonlyArray<{ value: T; label: string }>,
   onChange: (value: T) => void,
   noteFor: (value: T) => string,
+  /** Lines the note reserves, so a longer note in one state does not make the panel grow. */
+  noteLines = 1,
 ): (value: T) => void {
   const field = el(parent, 'div', 'menu-field');
   const captionId = `menu-${name}-label`;
@@ -146,10 +162,38 @@ function segmented<T extends string>(
     inputs.set(option.value, input);
   }
   const note = el(field, 'p', 'menu-note menu-seg-note');
+  if (noteLines > 1) note.style.minHeight = `${noteLines * 1.2}em`;
   return (value) => {
     const input = inputs.get(value);
     if (input) input.checked = true;
     note.textContent = noteFor(value);
+  };
+}
+
+/**
+ * An on/off switch: a native checkbox (Space toggles it, Tab reaches it) drawn as a switch, the caption on the left and
+ * the state on the right, a fixed note under it. Returns the function that shows a value.
+ */
+function toggle(
+  parent: HTMLElement,
+  name: string,
+  label: string,
+  note: string,
+  onChange: (on: boolean) => void,
+): (on: boolean) => void {
+  const field = el(parent, 'div', 'menu-field');
+  const row = el(field, 'label', 'menu-toggle');
+  el(row, 'span', 'menu-label', label);
+  const state = el(row, 'span', 'menu-value menu-toggle-state');
+  const input = el(row, 'input', 'menu-sr');
+  input.type = 'checkbox';
+  input.name = name;
+  input.addEventListener('change', () => onChange(input.checked));
+  el(row, 'span', 'menu-switch').setAttribute('aria-hidden', 'true');
+  el(field, 'p', 'menu-note menu-toggle-note', note);
+  return (on) => {
+    input.checked = on;
+    state.textContent = on ? 'On' : 'Off';
   };
 }
 
@@ -302,6 +346,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     write: (v: number) => void,
     text: (v: number) => string,
     scale: [string, string],
+    note?: string,
   ): void {
     const field = el(parent, 'div', 'menu-field');
     const { value } = fieldHead(field, label, id, `${id}-value`);
@@ -310,6 +355,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     const ends = el(field, 'div', 'menu-scale');
     el(ends, 'span', '', scale[0]);
     el(ends, 'span', '', scale[1]);
+    if (note) el(field, 'p', 'menu-note menu-slider-note', note);
     input.addEventListener('input', () => write(Number(input.value)));
     syncers.push(() => {
       const v = read();
@@ -342,6 +388,19 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     (v) => apply({ vehicleTargets: v }),
     String,
     ['0', String(L.vehicleTargetsMax)],
+  );
+  slider(
+    targets,
+    'menu-snipers',
+    'Enemy snipers',
+    L.enemySnipers.min,
+    L.enemySnipers.max,
+    1,
+    () => cfg.enemySnipers,
+    (v) => apply({ enemySnipers: v }),
+    snipersLabel,
+    [String(L.enemySnipers.min), String(L.enemySnipers.max)],
+    SNIPERS_NOTE,
   );
 
   // --- Wind panel: speed slider and the clock dial ---
@@ -414,14 +473,52 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     });
   });
 
-  // --- Equipment panel: rifle, buildings, scenery vehicles ---
+  // --- Rifle panel: the rifle (with its concept art), suppressor and aim assists ---
   const gear = el(columns, 'section', 'menu-panel');
-  el(gear, 'h2', 'menu-panel-title', 'Rifle and scenery');
+  el(gear, 'h2', 'menu-panel-title', 'Rifle and aids');
+  const art = el(gear, 'figure', 'menu-rifle-art');
+  art.style.aspectRatio = String(rifleArtStyle(RIFLE_ART['308']).aspect);
+  const artImg = el(art, 'img', 'menu-rifle-img');
+  artImg.src = `${base}references/rifle-concept.png`;
+  artImg.width = RIFLE_ART_IMAGE.w;
+  artImg.height = RIFLE_ART_IMAGE.h;
+  artImg.alt = '';
+  artImg.decoding = 'async';
+  const artCaption = el(art, 'figcaption', 'menu-rifle-caption');
   const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) => apply({ rifle: v }), rifleNote);
-  const syncBuildings = segmented(gear, 'buildings', 'Buildings', DENSITY_OPTIONS, (v) => apply({ buildings: v }), (v) => densityNote('buildings', v));
-  const syncVehicles = segmented(gear, 'vehicles', 'Scenery vehicles', DENSITY_OPTIONS, (v) => apply({ vehicles: v }), (v) => densityNote('vehicles', v));
+  const syncSuppressor = toggle(gear, 'suppressed', 'Suppressor', SUPPRESSOR_NOTE, (on) => apply({ suppressed: on }));
+  const syncAssists = toggle(gear, 'assists', 'Aim assists', ASSISTS_NOTE, (on) => apply({ assists: on }));
   syncers.push(
+    () => {
+      const style = rifleArtStyle(RIFLE_ART[cfg.rifle]);
+      art.dataset.rifle = cfg.rifle;
+      artImg.style.width = `${style.widthPct}%`;
+      artImg.style.left = `${style.leftPct}%`;
+      artImg.style.top = `${style.topPct}%`;
+      artCaption.textContent = rifleTitle(cfg.rifle);
+      art.setAttribute('aria-label', `${rifleTitle(cfg.rifle)}, concept art`);
+    },
     () => syncRifle(cfg.rifle),
+    () => syncSuppressor(cfg.suppressed),
+    () => syncAssists(cfg.assists),
+  );
+
+  // --- Position panel: where the shooter lies, and the scenery around ---
+  const place = el(columns, 'section', 'menu-panel');
+  el(place, 'h2', 'menu-panel-title', 'Position and scenery');
+  const syncPosition = segmented(
+    place,
+    'position',
+    'Firing position',
+    POSITION_OPTIONS,
+    (v) => apply({ position: v }),
+    positionNote,
+    2,
+  );
+  const syncBuildings = segmented(place, 'buildings', 'Buildings', DENSITY_OPTIONS, (v) => apply({ buildings: v }), (v) => densityNote('buildings', v));
+  const syncVehicles = segmented(place, 'vehicles', 'Scenery vehicles', DENSITY_OPTIONS, (v) => apply({ vehicles: v }), (v) => densityNote('vehicles', v));
+  syncers.push(
+    () => syncPosition(cfg.position),
     () => syncBuildings(cfg.buildings),
     () => syncVehicles(cfg.vehicles),
   );

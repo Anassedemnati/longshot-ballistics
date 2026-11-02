@@ -3,15 +3,22 @@ import { DEFAULT_MISSION, MISSION_LIMITS, decodeMission, randomMission, routeFro
 import { createRng } from '../../src/mission/random';
 import { THEMES } from '../../src/mission/themes';
 import type { ThemeId } from '../../src/mission/themes';
+import type { FiringPosition } from '../../src/mission/config';
 import {
   clockPoint,
   densityNote,
   linkRange,
   menuSearch,
   mpsToMph,
+  positionNote,
   rangeLabel,
+  RIFLE_ART,
+  RIFLE_ART_IMAGE,
+  rifleArtStyle,
   rifleNote,
+  rifleTitle,
   seedFromBits,
+  snipersLabel,
   startSearch,
   stepClock,
   themeBlurb,
@@ -230,6 +237,92 @@ describe('starting a mission', () => {
       const cfg = randomMission(rng);
       const back = routeFromSearch(menuSearch(cfg, false));
       expect(back.kind === 'menu' && back.last).toEqual(cfg);
+    }
+  });
+});
+
+describe('firing position, enemy snipers and rifle art labels', () => {
+  const POSITIONS: FiringPosition[] = ['valley', 'ridge', 'mountain'];
+
+  it('positionNote gives each firing position its one-sentence description', () => {
+    expect(positionNote('ridge')).toBe('Elevated ridge. A clear view into the valley below.');
+    expect(positionNote('mountain')).toBe('Steep rocky spur. A pronounced downhill shot into the basin.');
+    expect(positionNote('valley')).toMatch(/near-level sightline/);
+  });
+
+  it('positionNote is theme-neutral (the position is offered in the desert, arctic and valley themes alike)', () => {
+    for (const p of POSITIONS) expect(positionNote(p)).not.toMatch(/sand|wash|dune|snow|desert|arctic|grass/i);
+  });
+
+  it('positionNote gives three different descriptions of a similar length (the note box has a fixed height)', () => {
+    const notes = POSITIONS.map(positionNote);
+    expect(new Set(notes).size).toBe(3);
+    for (const n of notes) expect(n.length).toBeLessThanOrEqual(64);
+  });
+
+  it('snipersLabel says training for 0 and counts the snipers with the right plural', () => {
+    expect(snipersLabel(0)).toMatch(/training/i);
+    expect(snipersLabel(1)).toBe('1 sniper');
+    expect(snipersLabel(2)).toBe('2 snipers');
+    expect(snipersLabel(MISSION_LIMITS.enemySnipers.max)).toBe('3 snipers');
+  });
+
+  it('rifleTitle names each rifle as the concept art does', () => {
+    expect(rifleTitle('308')).toBe('Compact precision rifle');
+    expect(rifleTitle('338')).toBe('Long-range precision rifle');
+  });
+});
+
+describe('rifle concept art crop', () => {
+  const RIFLES = ['308', '338'] as const;
+
+  it('stays inside the picture', () => {
+    for (const r of RIFLES) {
+      const c = RIFLE_ART[r];
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + c.w).toBeLessThanOrEqual(RIFLE_ART_IMAGE.w);
+      expect(c.y + c.h).toBeLessThanOrEqual(RIFLE_ART_IMAGE.h);
+    }
+  });
+
+  it('both crops have the same shape, so the art box keeps its height when the rifle changes', () => {
+    const a = RIFLE_ART['308'];
+    const b = RIFLE_ART['338'];
+    expect(a.w / a.h).toBeCloseTo(b.w / b.h, 1);
+  });
+
+  it('the .308 crop shows the upper rifle and the .338 crop the middle one', () => {
+    expect(RIFLE_ART['308'].y).toBeLessThan(RIFLE_ART['338'].y);
+    expect(RIFLE_ART['308'].y + RIFLE_ART['308'].h).toBeLessThanOrEqual(RIFLE_ART['338'].y + RIFLE_ART['338'].h);
+  });
+
+  it('rifleArtStyle of a crop covering the whole picture is 100 % wide, with no offset', () => {
+    const whole = { x: 0, y: 0, w: RIFLE_ART_IMAGE.w, h: RIFLE_ART_IMAGE.h };
+    expect(rifleArtStyle(whole)).toEqual({ aspect: RIFLE_ART_IMAGE.w / RIFLE_ART_IMAGE.h, widthPct: 100, leftPct: 0, topPct: 0 });
+  });
+
+  it('rifleArtStyle scales and shifts the picture so the crop fills the box', () => {
+    // A crop one quarter as wide and tall as the picture, in the picture's second half: 4x the box width, shifted left and up by the offset.
+    const crop = { x: RIFLE_ART_IMAGE.w / 2, y: RIFLE_ART_IMAGE.h / 4, w: RIFLE_ART_IMAGE.w / 4, h: RIFLE_ART_IMAGE.h / 4 };
+    const s = rifleArtStyle(crop);
+    expect(s.widthPct).toBeCloseTo(400, 6);
+    expect(s.leftPct).toBeCloseTo(-200, 6);
+    expect(s.topPct).toBeCloseTo(-100, 6);
+    expect(s.aspect).toBeCloseTo(RIFLE_ART_IMAGE.w / RIFLE_ART_IMAGE.h, 6);
+  });
+
+  it('a crop never reaches outside the box: the picture covers it on every side', () => {
+    for (const r of RIFLES) {
+      const s = rifleArtStyle(RIFLE_ART[r]);
+      const c = RIFLE_ART[r];
+      // The picture (100 * widthPct % of the box wide) must extend left of the box's left edge and right of its right edge...
+      expect(s.leftPct).toBeLessThanOrEqual(0);
+      expect(s.leftPct + s.widthPct).toBeGreaterThanOrEqual(100 - 1e-9);
+      // ...and the same vertically: the picture is widthPct * (imageH / imageW) of the box width tall = that fraction / aspect of the box height.
+      const imageHeightPct = (s.widthPct * RIFLE_ART_IMAGE.h) / RIFLE_ART_IMAGE.w * (c.w / c.h);
+      expect(s.topPct).toBeLessThanOrEqual(0);
+      expect(s.topPct + imageHeightPct).toBeGreaterThanOrEqual(100 - 1e-9);
     }
   });
 });
