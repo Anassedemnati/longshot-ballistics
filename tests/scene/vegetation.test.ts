@@ -6,7 +6,7 @@ import type { ScatterItem } from '../../src/mission/scatter';
 import { createNest, padGeometry, sandbagGeometry } from '../../src/scene/nest';
 import { createVegetation, firGeometry, loadModelKit, meshGroundOf, modelParts, rockGeometry, shrubGeometry, snagGeometry } from '../../src/scene/vegetation';
 import type { ModelLoader, ModelName } from '../../src/scene/vegetation';
-import { POSITIONS, THEMES, bigMission } from '../helpers/missions';
+import { POSITIONS, THEMES, aimPoints, bigMission } from '../helpers/missions';
 
 /** A stand-in for the glTF scenes: meshes named like the real files', with the real files' sizes, placed away from the origin like the real ones. */
 const FAKE_SCENES: Record<ModelName, () => THREE.Object3D> = {
@@ -304,6 +304,33 @@ describe('createNest', () => {
     expect(rocks.count).toBe(nest.plan.rocks.length);
     rocks.geometry.computeBoundingBox();
     expect(((rocks.geometry.boundingBox as THREE.Box3).max.y)).toBeCloseTo(BOULDER_UNIT.ly, 5);
+  });
+
+  it('the built platform mesh never crosses an eye -> target line (raycast against the geometry, both faces)', () => {
+    for (const theme of THEMES) {
+      for (const seed of [3, 7]) {
+        const m = bigMission(theme, seed, 'mountain');
+        const nest = createNest(m.field, seed, 'mountain', { loadModel: failingLoader() });
+        const mesh = new THREE.Mesh(padGeometry(nest.plan), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+        mesh.updateMatrixWorld(true);
+        const eye = new THREE.Vector3(m.field.shooter.x, m.field.shooter.y, m.field.shooter.z);
+        const ray = new THREE.Raycaster();
+        const points = aimPoints(m.layout, m.field);
+        expect(points.length).toBeGreaterThan(10);
+        for (const p of points) {
+          const to = new THREE.Vector3(p.x, p.y, p.z);
+          ray.set(eye, to.clone().sub(eye).normalize());
+          ray.far = eye.distanceTo(to);
+          expect(ray.intersectObject(mesh), `${theme}/${seed}`).toHaveLength(0);
+        }
+        // and the raycast does see the platform: straight down from the eye it meets the pad a few cm under the body
+        ray.set(eye, new THREE.Vector3(0, -1, 0));
+        ray.far = 3;
+        const down = ray.intersectObject(mesh);
+        expect(down.length).toBeGreaterThan(0);
+        expect(eye.y - down[0].point.y).toBeLessThan(0.5);
+      }
+    }
   });
 
   it('the platform follows the plan surface (a few cm above the terrain mesh outside it) and faces up', () => {

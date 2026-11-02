@@ -52,6 +52,9 @@ export const EYE_CLEAR_RADIUS = 60;
 export const EYE_CLEARANCE = 0.25;
 /** Inside the engagement sector a boulder is at most this scale (about a metre high). */
 const SECTOR_BOULDER_SCALE = 1.0;
+/** The shrubs round the compounds (which stand inside the sector) are at most this wide and high, m. */
+export const LOW_SHRUB_WIDTH = 0.8;
+export const LOW_SHRUB_HEIGHT = 0.8;
 /** Items stay inside this part of the 4 km map (the map's own edge is 2000 / -3000 / 1000). */
 export const SCATTER_BOUNDS = { xMin: -1950, xMax: 1950, zMin: -2950, zMax: 950 } as const;
 
@@ -525,18 +528,17 @@ export function planScatter(inputs: ScatterInputs): ScatterPlan {
     const rng = mk(5);
     const compounds: Array<{ x: number; z: number }> = layout.props;
     for (let attempts = 0; plan.shrubs.length < budget.shrubs && attempts < budget.shrubs * 120; attempts++) {
-      // a third of them round the compounds, the rest over the slopes and the near field
-      const p =
-        compounds.length > 0 && rng() < 0.3
-          ? around(rng, compounds[Math.floor(rng() * compounds.length)], 4, 24, 1.2)
-          : nearField(rng, 22, 900, 1.9, 0.6, 100 * DEG);
+      // a third of them round the compounds (low ones: the compounds stand inside the sector, where only low things may grow,
+      // off the lines of sight), the rest over the slopes and the near field
+      const atCompound = compounds.length > 0 && rng() < 0.3;
+      const p = atCompound ? around(rng, compounds[Math.floor(rng() * compounds.length)], 4, 24, 1.2) : nearField(rng, 22, 900, 1.9, 0.6, 100 * DEG);
       const g = ground(p.x, p.z);
       if (placer.slope(p.x, p.z) > 0.75 || g > 90) continue;
-      const w = 0.45 + 0.9 * Math.pow(rng(), 1.5);
-      const h = w * (0.55 + 0.5 * rng());
+      const w = Math.min(0.45 + 0.9 * Math.pow(rng(), 1.5), atCompound ? LOW_SHRUB_WIDTH : Infinity);
+      const h = Math.min(w * (0.55 + 0.5 * rng()), atCompound ? LOW_SHRUB_HEIGHT : Infinity);
       const sz = w * (0.85 + 0.3 * rng());
       const radius = Math.max(w, sz); // the shrub's unit model has radius 1
-      if (!placer.free(p.x, p.z, radius, true, 0.9) || placer.onMound(p.x, p.z, radius)) continue;
+      if (!placer.free(p.x, p.z, radius, !atCompound, 0.9) || placer.onMound(p.x, p.z, radius)) continue;
       if (g - 0.1 + h > placer.ceiling(p.x, p.z)) continue;
       placer.claim(p.x, p.z, radius);
       plan.shrubs.push({

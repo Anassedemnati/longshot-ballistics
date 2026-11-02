@@ -4,6 +4,8 @@ import {
   EYE_CLEARANCE,
   EYE_CLEAR_RADIUS,
   LANE_MARGIN,
+  LOW_SHRUB_HEIGHT,
+  LOW_SHRUB_WIDTH,
   MAX_BOULDERS,
   MAX_GRASS,
   MAX_NEAR_BOULDERS,
@@ -130,7 +132,8 @@ describe('planScatter', () => {
             ...layout.props.flatMap((q) => propColliders(q, field.height(q.x, q.z))),
             ...layout.vehicleTargets.flatMap((v) => vehicleTargetColliders(v, field.height(v.x, v.z)).body),
           ].map((o) => o.box);
-          const tallKinds = new Set<ScatterItem>([...p.firs, ...p.snags, ...p.logs, ...p.shrubs]);
+          // trees and logs, and the shrubs that are not the low ones round the compounds, stay out of the sector too
+          const tallKinds = new Set<ScatterItem>([...p.firs, ...p.snags, ...p.logs, ...p.shrubs.filter((sh) => sh.height > LOW_SHRUB_HEIGHT + 1e-9 || sh.radius > LOW_SHRUB_WIDTH * 1.15 + 1e-9)]);
           const bad: string[] = [];
           for (const it of allItems(p)) {
             const at = `(${it.x.toFixed(1)}, ${it.z.toFixed(1)}) r=${it.radius.toFixed(2)}`;
@@ -163,15 +166,23 @@ describe('planScatter', () => {
     }
   }
 
-  it('items inside the engagement sector are small boulders and grass only', () => {
+  it('items inside the engagement sector are small boulders, grass and low shrubs only (and low shrubs do stand round the compounds)', () => {
     const m = bigMission('valley', 3, 'valley');
     const p = plan(m);
     for (const it of allItems(p)) {
       if (sectorDistance(it.x, it.z) > 0) continue;
-      expect(p.boulders.includes(it) || p.grass.includes(it)).toBe(true);
+      expect(p.boulders.includes(it) || p.grass.includes(it) || p.shrubs.includes(it)).toBe(true);
       if (p.boulders.includes(it)) expect(it.sx).toBeLessThanOrEqual(1.0 * 1.15 + 1e-9);
+      if (p.shrubs.includes(it)) {
+        expect(it.height).toBeLessThanOrEqual(LOW_SHRUB_HEIGHT + 1e-9);
+        expect(it.sx).toBeLessThanOrEqual(LOW_SHRUB_WIDTH + 1e-9);
+      }
     }
     expect(allItems(p).some((it) => sectorDistance(it.x, it.z) === 0)).toBe(true); // grass does grow near the lanes
+    const nearProps = (it: ScatterItem): boolean => m.layout.props.some((q) => Math.hypot(it.x - q.x, it.z - q.z) < 30);
+    expect(m.layout.props.length).toBeGreaterThan(5);
+    expect(p.shrubs.filter(nearProps).length).toBeGreaterThan(20); // shrubs round the compounds
+    expect(p.boulders.filter(nearProps).length).toBeGreaterThan(20); // and boulders
   });
 
   it('works on a layout without props and without targets', () => {
