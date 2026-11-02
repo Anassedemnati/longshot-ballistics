@@ -51,6 +51,8 @@ export interface InputHandlers {
   userGesture?(): void;
   /** The M key; works whether or not the pointer is locked. */
   toggleMute?(): void;
+  /** The C key: duck into cover or come back up (missions with enemy snipers); works whether or not the pointer is locked. */
+  toggleCover?(): void;
 }
 
 /**
@@ -95,6 +97,7 @@ export function bindInput(
     handlers.userGesture?.();
     if (e.code === 'KeyR' && !e.repeat) handlers.reload();
     else if (e.code === 'KeyM' && !e.repeat) handlers.toggleMute?.();
+    else if (e.code === 'KeyC' && !e.repeat) handlers.toggleCover?.();
   });
   // One zoom step per notch. Trackpads fire a stream of tiny wheel events, so steps are rate limited.
   let lastNotchMs = -Infinity;

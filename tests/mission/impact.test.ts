@@ -12,7 +12,7 @@ const POINT = { x: 3, y: 1, z: -400 };
 
 /** A state with two soldiers and one vehicle target; `down` lists the ids that are already down. */
 function state(down: string[] = [], over: Partial<ImpactState> = {}): ImpactState {
-  const known: Record<string, ImpactTargetInfo['kind']> = { s1: 'soldier', s2: 'soldier', v1: 'vehicle' };
+  const known: Record<string, ImpactTargetInfo['kind']> = { s1: 'soldier', s2: 'soldier', v1: 'vehicle', k1: 'sniper', k2: 'sniper' };
   return {
     stats: newStats(3),
     shooter: SHOOTER,
@@ -102,6 +102,37 @@ describe('applyImpact: a vehicle target is hit', () => {
     expect(second.hud.result).toBe('VEHICLE DISABLED');
     expect(second.fx?.kind).toBe('sparks');
     expect(second.sound?.kind).toBe('metal');
+  });
+});
+
+describe('applyImpact: an enemy sniper is hit', () => {
+  it('knocks him down, counts the hit and says it was a sniper', () => {
+    const r = applyImpact(onTarget('k1', 'upperTorso'), state());
+    expect(r.killedTargetId).toBe('k1');
+    expect(r.stats.hits).toBe(1);
+    expect(r.stats.targetsDown).toBe(1);
+    expect(r.hud).toEqual({ result: 'SNIPER DOWN – Upper torso – 0.43 s', refreshTargets: true });
+    expect(r.fx).toBeNull();
+    expect(r.sound).toEqual({ kind: 'hit', delayS: DELAY, distanceM: RANGE });
+  });
+
+  it('counts a head hit as a headshot', () => {
+    const r = applyImpact(onTarget('k1', 'head'), state());
+    expect(r.stats.headshots).toBe(1);
+    expect(r.hud.result).toBe('SNIPER DOWN – Head – 0.43 s');
+  });
+
+  it('does not down him twice', () => {
+    const first = applyImpact(onTarget('k1', 'head'), state());
+    const second = applyImpact(onTarget('k1', 'limbs'), state(['k1'], { stats: first.stats }));
+    expect(second.killedTargetId).toBeNull();
+    expect(second.stats.hits).toBe(2);
+    expect(second.stats.targetsDown).toBe(1);
+  });
+
+  it('the last target of the mission may be a sniper: it stamps the end', () => {
+    const r = applyImpact(onTarget('k2', 'head'), state([], { stats: { ...newStats(1, 100) }, nowMs: 7000 }));
+    expect(r.stats.endMs).toBe(7000);
   });
 });
 

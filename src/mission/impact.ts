@@ -20,8 +20,8 @@ const ZONE_LABEL: Record<ZoneName, string> = {
 
 /** What the mission knows about a target id: what it is and whether it is already out of play. */
 export interface ImpactTargetInfo {
-  kind: 'soldier' | 'vehicle';
-  /** A soldier already knocked down, a vehicle already disabled (two bullets in flight can reach the same target). */
+  kind: 'soldier' | 'vehicle' | 'sniper';
+  /** A soldier or sniper already knocked down, a vehicle already disabled (two bullets in flight can reach the same target). */
   down: boolean;
 }
 
@@ -43,7 +43,7 @@ export type ImpactSoundKind = 'hit' | 'metal' | 'dust';
 export interface ImpactResult {
   /** The stats after this impact (the same object when the impact is not a hit). */
   stats: MissionStats;
-  /** The soldier to knock down or the vehicle to disable; null when this impact takes nothing out. */
+  /** The soldier or sniper to knock down or the vehicle to disable; null when this impact takes nothing out. */
   killedTargetId: string | null;
   hud: {
     /** The result line, or null to leave the last one. */
@@ -75,10 +75,10 @@ export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResul
     let result: string | null = null;
     let fx: ImpactResult['fx'] = null;
     let sound: ImpactResult['sound'] = null;
-    if (info?.kind === 'soldier') {
+    if (info?.kind === 'soldier' || info?.kind === 'sniper') {
       killed = !info.down;
       sound = { kind: 'hit', delayS, distanceM };
-      result = `HIT – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
+      result = `${info.kind === 'sniper' ? 'SNIPER DOWN' : 'HIT'} – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
     } else if (info?.kind === 'vehicle') {
       killed = !info.down;
       fx = { kind: 'sparks', point: event.point };

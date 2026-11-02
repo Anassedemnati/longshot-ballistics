@@ -1,6 +1,6 @@
 import type { Vec3 } from '../ballistics/types';
 import type { MissionStats } from './stats';
-import type { Soldier, Vehicle } from './world';
+import type { EnemySniper, Soldier, Vehicle } from './world';
 
 /** What `window.__game.state()` returns: the score and enough about the targets for the smoke check to aim. */
 export interface GameDebugState {
@@ -12,6 +12,16 @@ export interface GameDebugState {
   resultsShown: boolean;
   soldiers: Array<{ id: string; head: Vec3; upperTorso: Vec3; lowerTorso: Vec3; behindCover: boolean; down: boolean }>;
   vehicles: Array<{ id: string; engine: Vec3; disabled: boolean }>;
+  /** Enemy snipers: where to aim, whether the scope glint is on screen, whether he is down. */
+  snipers: Array<{ id: string; site: string; head: Vec3; upperTorso: Vec3; glint: boolean; down: boolean }>;
+  /** Player health, 0..100 (100 and never changing in a mission without snipers). */
+  health: number;
+  /** How well the snipers have found the player, 0..100 %. */
+  detection: number;
+  /** The player is ducked behind cover. */
+  covered: boolean;
+  /** Enemy snipers still up. */
+  snipersLeft: number;
   /** Draw calls and triangles of the last rendered frame. */
   render: { calls: number; triangles: number };
 }
@@ -30,6 +40,10 @@ export interface GameDebugHook {
   state(): GameDebugState;
   /** Point the view at a world position (the crosshair, not the bullet: it adds no hold-over). */
   aimAt(x: number, y: number, z: number): void;
+  /** Force the detection (0..100 %), so a check can bring on incoming fire without firing. No effect without snipers. */
+  setDetection(percent: number): void;
+  /** Set the player's health (1..100), so a check can reach the Mission failed screen quickly. No effect without snipers. */
+  setHealth(points: number): void;
 }
 
 declare global {
@@ -46,11 +60,20 @@ export interface DebugSources {
   resultsShown(): boolean;
   soldiers: ReadonlyMap<string, Soldier>;
   vehicles: ReadonlyMap<string, Vehicle>;
+  snipers: ReadonlyMap<string, EnemySniper>;
+  /** The fight with the snipers; null in a mission without any. */
+  combat: {
+    health(): number;
+    detection(): number;
+    covered(): boolean;
+    snipersLeft(): number;
+  } | null;
   render(): { calls: number; triangles: number };
 }
 
 /** Expose `window.__game`. The hook calls the handlers directly: it needs no pointer lock and does not touch the pointer. */
 export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources: DebugSources): void {
+  const fight = sources.combat;
   window.__game = {
     ...actions,
     state: () => ({
@@ -71,6 +94,18 @@ export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources:
         engine: v.engineCenter,
         disabled: v.target.disabled,
       })),
+      snipers: [...sources.snipers.values()].map((k) => ({
+        id: k.placement.id,
+        site: k.placement.site,
+        head: k.head,
+        upperTorso: k.upperTorso,
+        glint: k.sniper.glintVisible,
+        down: k.sniper.down,
+      })),
+      health: fight ? fight.health() : 100,
+      detection: fight ? fight.detection() : 0,
+      covered: fight ? fight.covered() : false,
+      snipersLeft: fight ? fight.snipersLeft() : 0,
       render: sources.render(),
     }),
   };

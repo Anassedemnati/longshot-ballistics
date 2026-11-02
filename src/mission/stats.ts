@@ -21,11 +21,24 @@ export interface MissionStats {
   endMs: number | null;
   /** An aim assist (trajectory preview, aim marker, spotter) was on at some point of the mission. */
   assistsUsed: boolean;
+  /** The player was killed by the enemy snipers or a bombardment: the mission is failed (never complete). */
+  failed: boolean;
 }
 
 /** Fresh stats. The clock is stopped (`startMs` null) unless `nowMs` is given. */
 export function newStats(targetsTotal: number, nowMs: number | null = null): MissionStats {
-  return { shots: 0, hits: 0, headshots: 0, targetsDown: 0, targetsTotal, longestHitM: 0, startMs: nowMs, endMs: null, assistsUsed: false };
+  return {
+    shots: 0,
+    hits: 0,
+    headshots: 0,
+    targetsDown: 0,
+    targetsTotal,
+    longestHitM: 0,
+    startMs: nowMs,
+    endMs: null,
+    assistsUsed: false,
+    failed: false,
+  };
 }
 
 /** Start the mission clock at `nowMs` if it is not running yet; a running clock keeps its start. */
@@ -42,6 +55,12 @@ export function elapsedMs(s: MissionStats): number {
 /** An aim assist was switched on: the results say so. Already flagged: the same object. */
 export function markAssistsUsed(s: MissionStats): MissionStats {
   return s.assistsUsed ? s : { ...s, assistsUsed: true };
+}
+
+/** The player is dead: the mission is failed and its clock stops now (a mission already complete or failed is left alone). */
+export function recordFailure(s: MissionStats, nowMs: number): MissionStats {
+  if (s.failed || isComplete(s)) return s;
+  return { ...s, failed: true, endMs: s.endMs ?? nowMs };
 }
 
 /** One more round fired. */
@@ -78,7 +97,7 @@ export function accuracy(s: MissionStats): number {
   return s.shots > 0 ? s.hits / s.shots : 0;
 }
 
-/** Every target is down (a mission with no targets is never complete). */
+/** Every target is down, soldiers, vehicle targets and enemy snipers alike (a mission with no targets is never complete; a failed one neither). */
 export function isComplete(s: MissionStats): boolean {
-  return s.targetsTotal > 0 && s.targetsDown >= s.targetsTotal;
+  return !s.failed && s.targetsTotal > 0 && s.targetsDown >= s.targetsTotal;
 }

@@ -17,6 +17,7 @@ import { muzzleLaunch } from '../game/aim';
 import type { AimTarget } from '../game/assistance';
 import { BulletSystem } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
+import { Encounter } from '../game/encounter';
 import type { HitTarget } from '../game/hit';
 import { rangeUnderCrosshair } from '../game/rangefinder';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
@@ -29,11 +30,13 @@ import { showFatalError } from '../ui/fatal';
 import { Hud } from '../ui/hud';
 import { menuSearch } from '../ui/menuModel';
 import { showResults } from '../ui/results';
+import { ThreatUi } from '../ui/threat';
+import { Combat } from './combat';
 import { windVector } from './config';
 import type { MissionConfig } from './config';
 import { installDebugHook } from './debugHook';
 import { applyImpact } from './impact';
-import { isComplete, markAssistsUsed, newStats, recordShot, startClock } from './stats';
+import { isComplete, markAssistsUsed, newStats, recordFailure, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
 
@@ -45,6 +48,8 @@ const RELOADING_TEXT = 'Reloading…';
 const RANGEFINDER_INTERVAL_S = 0.1;
 /** Pause after the last target goes down before the results appear, s of game time. */
 const RESULTS_DELAY_S = 1.5;
+/** Pause after the player is killed before "Mission failed" appears, s of game time. */
+const FAILED_DELAY_S = 1.2;
 
 /**
  * Resolve once the browser has had a chance to paint what is in the DOM now: after the next animation
@@ -104,7 +109,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     wind: windVec,
   });
   // `obstacles` and `liveTargets` are the world's single arrays, only ever edited in place.
-  const { scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, targetsTotal } = world;
+  const { scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal } = world;
 
   // Game state
   const bullets = new BulletSystem({
@@ -201,6 +206,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   }
 
   function toggleScope(): void {
+    if (combat?.covered) return; // ducked behind cover: no scope
     view.toggleScope();
     refreshView();
   }
@@ -216,7 +222,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   }
 
   function fire(): void {
-    if (missionDone()) return; // the score is final
+    if (missionDone() || stats.failed) return; // the score is final
+    if (combat?.covered) return; // no shooting from behind cover
     const shot = weapon.fire();
     if (!shot.fired) {
       // A click during the bolt cycle is ignored silently, so the last HIT/MISS stays on screen.
@@ -228,6 +235,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       return;
     }
     stats = recordShot(startClock(stats, performance.now()));
+    combat?.onShot(); // the muzzle blast gives the player away
     hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(shooter, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
@@ -262,6 +270,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         if (soldier) return { kind: 'soldier', down: soldier.dummy.down };
         const vehicle = vehicles.get(id);
         if (vehicle) return { kind: 'vehicle', down: vehicle.target.disabled };
+        const sniper = snipers.get(id);
+        if (sniper) return { kind: 'sniper', down: sniper.sniper.down };
         return undefined;
       },
     });
@@ -270,7 +280,12 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (result.killedTargetId !== null) {
       const soldier = soldiers.get(result.killedTargetId);
       const vehicle = vehicles.get(result.killedTargetId);
-      if (soldier) {
+      const sniper = snipers.get(result.killedTargetId);
+      if (sniper) {
+        sniper.sniper.knockDown();
+        sniper.live = false;
+        removeLive(sniper.sniper.hitTarget);
+      } else if (soldier) {
         soldier.dummy.knockDown();
         soldier.live = false;
         removeLive(soldier.dummy.hitTarget);
@@ -291,6 +306,30 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (result.hud.refreshTargets) hud.setTargets(liveTargets.length, targetsTotal);
   }
 
+  // Enemy snipers (spec B.4): the fight with them (detection, fire, bombardments, cover) and its threat line,
+  // damage flash and cover mask. A training mission (0 snipers) and the practice range have none of it.
+  const combat: Combat | null =
+    !legacy && snipers.size > 0
+      ? new Combat({
+          encounter: new Encounter(),
+          snipers: [...snipers.values()].map((k) => k.sniper),
+          ui: new ThreatUi(document.body),
+          field,
+          shooter,
+          suppressed: config.suppressed,
+          yaw: () => input.yaw,
+          fx: {
+            dust: (point) => dust.spawn(point),
+            impactSound: (distanceM) => playImpactDust(audio, 0, distanceM),
+          },
+          dropScope: () => {
+            if (!view.isScoped) return;
+            view.toggleScope();
+            refreshView();
+          },
+        })
+      : null;
+
   const unbindInput = bindInput(
     renderer.domElement,
     input,
@@ -302,6 +341,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       sensitivity: () => view.sensitivity,
       userGesture: unlockAudio,
       toggleMute,
+      toggleCover: () => combat?.toggleCover(missionDone() || stats.failed || resultsShown),
     },
     (locked) => {
       hud.setHintVisible(!locked);
@@ -327,7 +367,18 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   if (import.meta.env.DEV || opts.debug) {
     installDebugHook(
-      { toggleScope, zoom, fire, reload, unlockAudio, aimAt: lookAtPoint },
+      {
+        toggleScope,
+        zoom,
+        fire,
+        reload,
+        unlockAudio,
+        aimAt: lookAtPoint,
+        setDetection: (percent) => combat?.encounter.setDetection(percent),
+        setHealth: (points) => {
+          if (combat && Number.isFinite(points)) combat.encounter.health = Math.min(100, Math.max(1, points));
+        },
+      },
       {
         stats: () => stats,
         targetsLeft: () => liveTargets.length,
@@ -335,6 +386,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         resultsShown: () => resultsShown,
         soldiers,
         vehicles,
+        snipers,
+        combat: combat && {
+          health: () => combat.encounter.health,
+          detection: () => combat.encounter.detection,
+          covered: () => combat.covered,
+          snipersLeft: () => combat.snipersLeft,
+        },
         render: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
       },
     );
@@ -350,6 +408,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   let lastMs: number | null = null;
   let rangeTimer = RANGEFINDER_INTERVAL_S; // read it on the first frame
   let completeTimer = 0;
+  let failedTimer = 0;
   function tick(nowMs: number): void {
     // The first frame (and any bad timestamp) counts as 0 s; stalls are capped.
     const rawDt = lastMs === null ? 0 : (nowMs - lastMs) / 1000;
@@ -370,6 +429,11 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       }
     }
     for (const v of vehicles.values()) v.target.update(dt);
+    for (const k of snipers.values()) k.sniper.update(dt);
+    // The fight with the snipers stands still while the pointer is free and once the mission is over.
+    if (combat && combat.update(dt, !input.locked || resultsShown || missionDone() || stats.failed) && !stats.failed) {
+      stats = recordFailure(stats, frameNowMs);
+    }
     dust.update(dt);
     sparks.update(dt);
     rifleModel.update(dt);
@@ -391,6 +455,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (missionDone() && !resultsShown) {
       completeTimer += dt;
       if (completeTimer >= RESULTS_DELAY_S) showResultsScreen();
+    }
+    if (stats.failed && !resultsShown) {
+      failedTimer += dt;
+      if (failedTimer >= FAILED_DELAY_S) showResultsScreen();
     }
 
     renderer.render(scene, view.camera);
