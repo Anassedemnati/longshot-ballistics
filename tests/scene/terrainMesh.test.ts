@@ -114,3 +114,56 @@ describe('terrain mesh grid', () => {
     });
   }
 });
+
+describe('terrain mesh baked lighting', () => {
+  const stats = (geometry: ReturnType<typeof buildTerrainGeometry>) => {
+    const bake = geometry.getAttribute('bake');
+    let sunMin = 1;
+    let sunMax = 0;
+    let aoMin = 1;
+    let aoMax = 0;
+    let shaded = 0;
+    for (let k = 0; k < bake.count; k++) {
+      const sun = bake.getX(k);
+      const ao = bake.getY(k);
+      sunMin = Math.min(sunMin, sun);
+      sunMax = Math.max(sunMax, sun);
+      aoMin = Math.min(aoMin, ao);
+      aoMax = Math.max(aoMax, ao);
+      if (sun < 0.5) shaded++;
+    }
+    return { bake, sunMin, sunMax, aoMin, aoMax, shadedShare: shaded / bake.count };
+  };
+
+  for (const theme of THEME_IDS) {
+    it(`${theme}: stores sun visibility and ambient occlusion per vertex, in 0..1, with the walls casting shadows`, { timeout: 30_000 }, () => {
+      const { xs, zs } = terrainGridAxes();
+      const geometry = buildTerrainGeometry(createTerrainField(theme, 1));
+      const { bake, sunMin, sunMax, aoMin, aoMax, shadedShare } = stats(geometry);
+      expect(bake.itemSize).toBe(2);
+      expect(bake.count).toBe(xs.length * zs.length);
+      expect(sunMin).toBeGreaterThanOrEqual(0);
+      expect(sunMax).toBeLessThanOrEqual(1);
+      expect(aoMin).toBeGreaterThanOrEqual(0);
+      expect(aoMax).toBeLessThanOrEqual(1);
+      // Both the walls' shade and the open sun are there; the valley's floor is mostly in the sun for the clear-sky valley sun.
+      expect(sunMin).toBeLessThan(0.05);
+      expect(sunMax).toBeGreaterThan(0.99);
+      expect(shadedShare).toBeGreaterThan(0.02);
+      expect(shadedShare).toBeLessThan(0.7);
+      // Gullies and wall feet are occluded, open ground and ridges are not.
+      expect(aoMin).toBeLessThan(0.75);
+      expect(aoMax).toBeGreaterThan(0.99);
+    });
+  }
+
+  it('follows the sun it is given: an overhead sun shades nothing, a sun below the horizon everything outside the sector (inside it the shade is softened), and the AO does not depend on it', { timeout: 30_000 }, () => {
+    const field = createTerrainField('desert', 1);
+    const overhead = stats(buildTerrainGeometry(field, { x: 0, y: 1, z: 0 }));
+    const night = stats(buildTerrainGeometry(field, { x: 0.6, y: -0.2, z: 0.77 }));
+    expect(overhead.sunMin).toBe(1);
+    expect(night.sunMin).toBe(0);
+    expect(night.sunMax).toBeLessThan(0.5); // only the sector's floor, which keeps just part of a shadow, is lighter than that
+    for (let k = 0; k < overhead.bake.count; k += 997) expect(night.bake.getY(k)).toBe(overhead.bake.getY(k));
+  });
+});

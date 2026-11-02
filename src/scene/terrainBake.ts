@@ -48,19 +48,25 @@ export function sampleHeightGrid(
 }
 
 /** Bilinear value of node-parallel `values` (laid out like `grid.heights`) at (x, z); positions outside the grid clamp to its edge. */
-export function interpolateGrid(grid: HeightGrid, values: ArrayLike<number>, x: number, z: number): number {
-  const fx = Math.min(grid.nx - 1, Math.max(0, (x - grid.x0) / grid.dx));
-  const fz = Math.min(grid.nz - 1, Math.max(0, (z - grid.z0) / grid.dz));
-  const i = Math.min(grid.nx - 2, Math.floor(fx));
-  const j = Math.min(grid.nz - 2, Math.floor(fz));
+export function interpolateGrid(grid: HeightGrid, values: Float32Array, x: number, z: number): number {
+  // Hot path of the bake (millions of calls): no Math.min/max/floor, one monomorphic typed-array read pattern.
+  let fx = (x - grid.x0) / grid.dx;
+  let fz = (z - grid.z0) / grid.dz;
+  const limX = grid.nx - 1.000001;
+  const limZ = grid.nz - 1.000001;
+  if (fx < 0) fx = 0;
+  else if (fx > limX) fx = limX;
+  if (fz < 0) fz = 0;
+  else if (fz > limZ) fz = limZ;
+  const i = fx | 0;
+  const j = fz | 0;
   const u = fx - i;
   const v = fz - j;
   const k = j * grid.nx + i;
   const a = values[k];
   const b = values[k + 1];
   const c = values[k + grid.nx];
-  const d = values[k + grid.nx + 1];
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  return a + (b - a) * u + (c - a) * v + (a - b - c + values[k + grid.nx + 1]) * u * v;
 }
 
 /** Terrain height of the grid at (x, z), m (bilinear, clamped at the edges). */
@@ -111,7 +117,7 @@ export function sunVisibility(grid: HeightGrid, x: number, z: number, sun: SunVe
 export interface OcclusionOptions {
   /** How far the horizon is searched, m. */
   radius?: number;
-  /** Directions around the point (evenly spaced). */
+  /** Directions around the point (evenly spaced; 6 is enough for the smooth terrain this is meant for). */
   directions?: number;
   /** Scales the mean occlusion before it is subtracted from 1. */
   strength?: number;
@@ -124,7 +130,7 @@ export interface OcclusionOptions {
  */
 export function ambientOcclusion(grid: HeightGrid, x: number, z: number, options: OcclusionOptions = {}): number {
   const radius = options.radius ?? 200;
-  const directions = options.directions ?? 8;
+  const directions = options.directions ?? 6;
   const strength = options.strength ?? 1.6;
   const h0 = gridHeight(grid, x, z);
   const gx = (gridHeight(grid, x + grid.dx, z) - gridHeight(grid, x - grid.dx, z)) / (2 * grid.dx);
@@ -137,7 +143,7 @@ export function ambientOcclusion(grid: HeightGrid, x: number, z: number, options
     const dirZ = Math.sin(angle);
     const tangent = gx * dirX + gz * dirZ; // slope of the ground itself in this direction
     let horizon = tangent;
-    for (let s = step0; s <= radius; s *= 1.6) {
+    for (let s = step0; s <= radius; s *= 1.75) {
       const tan = (gridHeight(grid, x + dirX * s, z + dirZ * s) - h0) / s;
       if (tan > horizon) horizon = tan;
     }
