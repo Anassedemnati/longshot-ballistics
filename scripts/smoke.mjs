@@ -22,10 +22,24 @@ const RESULT_TIMEOUT_MS = 90_000;
 const SOFTWARE_GL_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
 /** Lets the audio context start without a real click, so `unlockAudio()` from the page really starts audio. */
 const AUDIO_ARGS = ['--autoplay-policy=no-user-gesture-required'];
-/** The game's own frame-time cap (MAX_FRAME_DT in src/main.ts): game time advances at most this per frame. */
+/** The game's own frame-time cap (MAX_FRAME_DT in src/mission/run.ts): game time advances at most this per frame. */
 const MAX_FRAME_DT_S = 0.1;
 /** Dummy fall (0.4 s) plus the 3 s it lies there before standing up again (src/scene/target.ts), with a margin. */
 const DUMMY_RESET_GAME_S = 3.8;
+/** Bolt cycle (BOLT_TIME_S in src/game/weapon.ts) plus a margin: a trigger pull sooner than this is ignored. */
+const BOLT_GAME_S = 1.3;
+/** The results appear this long (RESULTS_DELAY_S in src/mission/run.ts) after the last target goes down. */
+const RESULTS_GAME_S = 1.5;
+/**
+ * Hold-over, m, that puts a .308 bullet (desert air, no wind, zeroed at 100 m) on the aim point at 300 m: the
+ * drop there is about 0.45 m. Worked out with the real ballistics for the missions below; a chest aim plus this lands in the vest.
+ */
+const HOLD_300M = 0.45;
+/** Missions of the smoke (URL codec in src/mission/config.ts: v1.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>). */
+const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
+const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier straight ahead
+const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
+const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
 function log(message) {
   console.log(`[smoke] ${message}`);
@@ -210,6 +224,54 @@ async function waitForResult(page) {
   return (await page.locator('.hud-result').textContent()) ?? '';
 }
 
+const gameState = (page) => page.evaluate(() => window.__game.state());
+
+/** Wait until the mission has exactly `n` targets standing. */
+async function waitForTargetsLeft(page, n) {
+  try {
+    await page.waitForFunction((wanted) => window.__game.state().targetsLeft === wanted, n, { timeout: RESULT_TIMEOUT_MS });
+  } catch (error) {
+    throw new Error(`timed out waiting for targetsLeft = ${n}: ${error.message}`);
+  }
+}
+
+/**
+ * Point the view at `point` raised by `hold` metres, pull the trigger, and return the HUD text once the bullet
+ * has landed. Fails if the trigger pull was ignored (no new shot in the stats).
+ */
+async function shootAt(page, point, hold) {
+  const before = (await gameState(page)).stats.shots;
+  await page.evaluate(
+    ([x, y, z]) => {
+      window.__game.aimAt(x, y, z);
+      window.__game.fire();
+    },
+    [point.x, point.y + hold, point.z],
+  );
+  check((await gameState(page)).stats.shots === before + 1, `the shot was fired (shot ${before + 1})`);
+  await page.waitForFunction(
+    () => {
+      const text = document.querySelector('.hud-result')?.textContent ?? '';
+      return text !== '' && text !== 'Shot away…';
+    },
+    undefined,
+    { timeout: RESULT_TIMEOUT_MS },
+  );
+  return (await page.locator('.hud-result').textContent()) ?? '';
+}
+
+/** The text of each results row, as { label: value }. */
+async function resultsRows(page) {
+  return page.evaluate(() =>
+    Object.fromEntries(
+      [...document.querySelectorAll('.results-row')].map((row) => [
+        row.querySelector('.results-label')?.textContent,
+        row.querySelector('.results-value')?.textContent,
+      ]),
+    ),
+  );
+}
+
 async function run() {
   check(existsSync(join(ROOT, 'dist', 'index.html')), 'dist/index.html exists (run `npm run build` first)');
   mkdirSync(OUT_DIR, { recursive: true });
@@ -368,10 +430,142 @@ async function run() {
     check((await near.locator('.hud-line', { hasText: 'Rounds 5/5' }).count()) === 1, 'the reload refilled the magazine (Rounds 5/5)');
     check(((await near.locator('.hud-result').textContent()) ?? '') === '', 'the "Reloading…" message is gone once the reload is done');
 
+    await near.close();
+    await page.close();
+
+    // 6. A real mission: three soldiers at 300 m, calm air. Down them one by one.
+    const mission = await openPage();
+    await startGame(mission, `m=${MISSION_OPEN}&debug=1`);
+    await mission.evaluate(() => window.__game.unlockAudio());
+    let st = await gameState(mission);
+    check(st.targetsLeft === 3 && st.soldiers.length === 3, 'a non-legacy mission starts with 3 targets standing');
+    check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
+    check((await mission.locator('.hud-line', { hasText: "Wind calm" }).count()) === 1, 'HUD says "Wind calm" at 0 m/s');
+    await animationFrames(mission, 5);
+    const missionPng = await analyzePng(mission, await shoot(mission, { hideHud: true, path: join(OUT_DIR, 'mission-start.png') }));
+    check(missionPng.distinctAll >= 6, `the mission canvas is not one colour (${missionPng.distinctAll} distinct sampled colours)`);
+    check(Math.abs(missionPng.skyLuma - missionPng.groundLuma) > 10, 'the mission shows sky and ground');
+    log(`mission draw calls ${st.render.calls}, triangles ${st.render.triangles}`);
+
+    // Rangefinder: aim at a soldier's chest and the HUD reads about 300 m.
+    await mission.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [st.soldiers[1].upperTorso.x, st.soldiers[1].upperTorso.y, st.soldiers[1].upperTorso.z]);
+    await mission.waitForFunction(() => /Range (29\d|30\d) m/.test(document.querySelector('.hud-panel')?.textContent ?? ''), undefined, {
+      timeout: RESULT_TIMEOUT_MS,
+    });
+    check(true, 'the rangefinder reads about 300 m on a soldier at 300 m');
+
+    const first = await shootAt(mission, st.soldiers[0].upperTorso, HOLD_300M);
+    log(`mission shot 1: "${first}"`);
+    check(/HIT/.test(first), 'a chest shot with hold-over hits the first soldier');
+    await waitForTargetsLeft(mission, 2);
+    check((await mission.locator('.hud-line', { hasText: 'Targets 2/3' }).count()) === 1, 'HUD says "Targets 2/3"');
+    await mission.screenshot({ path: join(OUT_DIR, 'mission-hit.png') });
+    await waitGameSeconds(mission, DUMMY_RESET_GAME_S + 1); // a practice dummy would stand up again by now
+    st = await gameState(mission);
+    check(st.targetsLeft === 2 && st.soldiers[0].down, 'the downed soldier stays down (no auto-reset in a mission)');
+
+    for (const index of [1, 2]) {
+      const result = await shootAt(mission, st.soldiers[index].upperTorso, HOLD_300M);
+      log(`mission shot ${index + 1}: "${result}"`);
+      check(/HIT/.test(result), `a chest shot with hold-over hits soldier ${index + 1}`);
+      await waitForTargetsLeft(mission, 2 - index);
+      if (index < 2) await waitGameSeconds(mission, BOLT_GAME_S);
+    }
+    st = await gameState(mission);
+    check(st.complete && st.stats.endMs !== null, 'all targets down: the mission is complete');
+    check(!st.resultsShown, 'the results wait 1.5 s after the last target');
+    await mission.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    const rows = await resultsRows(mission);
+    log(`results: ${JSON.stringify(rows)}`);
+    check(rows['Shots fired'] === '3' && rows['Hits'] === '3' && rows['Accuracy'] === '100 %', 'results: 3 shots, 3 hits, 100 % accuracy');
+    check(/^(29\d|30\d) m$/.test(rows['Longest hit'] ?? ''), `results: longest hit about 300 m (${rows['Longest hit']})`);
+    check(/^\d\d:\d\d$/.test(rows['Mission time'] ?? ''), `results: mission time as mm:ss (${rows['Mission time']})`);
+    check((await mission.locator('.results-button').count()) === 2, 'results: Restart and Menu buttons');
+    check((await mission.evaluate(() => document.pointerLockElement)) === null, 'the pointer is not locked on the results screen');
+    await mission.screenshot({ path: join(OUT_DIR, 'mission-results.png') });
+    await Promise.all([mission.waitForURL(/\?last=v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1/), mission.locator('.results-menu').click()]);
+    check((await mission.locator('.menu-placeholder-start').count()) === 1, 'Menu returns to the start screen with the mission in ?last=');
+    check((await mission.evaluate(() => window.__game)) === undefined, 'the start screen runs no game');
+    await mission.close();
+
+    // 7. Restart reloads the same mission from scratch.
+    const single = await openPage();
+    await startGame(single, `m=${MISSION_SINGLE}&debug=1`);
+    st = await gameState(single);
+    check(st.targetsLeft === 1 && st.soldiers.length === 1, 'a one-soldier mission has one target');
+    const single1 = await shootAt(single, st.soldiers[0].upperTorso, HOLD_300M);
+    check(/HIT/.test(single1), 'the single soldier is hit');
+    await single.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    await Promise.all([single.waitForNavigation({ waitUntil: 'load' }), single.locator('.results-restart').click()]);
+    await single.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
+    st = await gameState(single);
+    check(st.targetsLeft === 1 && st.stats.shots === 0 && !st.resultsShown, 'Restart reloads the mission: target standing, score reset');
+    check((await single.locator('.results').count()) === 0, 'the results are gone after Restart');
+    await single.close();
+
+    // 8. Cover and vehicle targets: 3 soldiers + 2 vehicle targets among many buildings and vehicles.
+    const cover = await openPage();
+    await startGame(cover, `m=${MISSION_COVER}&debug=1`);
+    await cover.evaluate(() => window.__game.unlockAudio());
+    st = await gameState(cover);
+    check(st.targetsLeft === 5 && st.vehicles.length === 2, 'the cover mission has 5 targets (3 soldiers, 2 vehicles)');
+    await animationFrames(cover, 5);
+    log(`cover mission draw calls ${st.render.calls}, triangles ${st.render.triangles}`);
+    const perf = await animationFrames(cover, 60);
+    log(`cover mission: ${perf.frames} frames in ${Math.round(perf.ms)} ms (${((perf.frames / perf.ms) * 1000).toFixed(0)} fps, ${launched.renderer}, headless)`);
+    const coverPng = await analyzePng(cover, await shoot(cover, { hideHud: true, path: join(OUT_DIR, 'mission-cover.png') }));
+    check(coverPng.distinctAll >= 6, `the cover mission canvas is not one colour (${coverPng.distinctAll} distinct sampled colours)`);
+
+    // A soldier behind cover: aiming at the hidden lower torso is stopped by the cover.
+    const covered = st.soldiers.find((s) => s.behindCover);
+    check(covered !== undefined, 'one soldier of the cover mission stands behind cover');
+    await cover.evaluate(([x, y, z]) => {
+      window.__game.toggleScope();
+      window.__game.aimAt(x, y, z);
+    }, [covered.upperTorso.x, covered.upperTorso.y, covered.upperTorso.z]);
+    await animationFrames(cover, 5);
+    await cover.screenshot({ path: join(OUT_DIR, 'mission-cover-scoped.png') });
+    await cover.evaluate(() => window.__game.toggleScope());
+    const blocked = await shootAt(cover, covered.lowerTorso, HOLD_300M);
+    log(`shot at the lower torso behind cover: "${blocked}"`);
+    check(/^Hit cover/.test(blocked), 'a shot at a soldier\'s hidden lower torso is stopped by the cover');
+    check((await gameState(cover)).targetsLeft === 5, 'the cover took the bullet: no target down');
+    await waitGameSeconds(cover, BOLT_GAME_S);
+
+    // A vehicle target: the engine hit disables it; the dead engine block then stops bullets.
+    const engine = st.vehicles[0].engine;
+    const vehicleHit = await shootAt(cover, engine, HOLD_300M);
+    log(`shot at the engine: "${vehicleHit}"`);
+    check(vehicleHit === 'VEHICLE DISABLED', 'a shot into the engine disables the vehicle');
+    st = await gameState(cover);
+    check(st.targetsLeft === 4 && st.vehicles[0].disabled, 'the disabled vehicle counts as a target down (4 left)');
+    await waitGameSeconds(cover, BOLT_GAME_S);
+    const again = await shootAt(cover, engine, HOLD_300M);
+    log(`second shot at the dead engine: "${again}"`);
+    check(again === 'Hit cover (metal)', 'the disabled engine is solid metal: the next bullet is stopped, not passed through');
+    check((await gameState(cover)).targetsLeft === 4, 'a bullet on the dead engine downs nothing more');
+    await waitGameSeconds(cover, 1);
+    await cover.screenshot({ path: join(OUT_DIR, 'mission-vehicle.png') });
+    await cover.close();
+
+    // 9. The other themes load and draw (wind, props, a vehicle target).
+    for (const code of MISSION_THEMES) {
+      const themed = await openPage();
+      await startGame(themed, `m=${code}&debug=1`);
+      st = await gameState(themed);
+      check(st.targetsLeft === 5, `mission ${code}: 5 targets standing`);
+      await animationFrames(themed, 5);
+      const name = code.split('.')[1] === 'a' ? 'arctic' : 'valley';
+      const themedPng = await analyzePng(themed, await shoot(themed, { hideHud: true, path: join(OUT_DIR, `mission-${name}.png`) }));
+      check(themedPng.distinctAll >= 6, `the ${name} mission canvas is not one colour (${themedPng.distinctAll} distinct sampled colours)`);
+      log(`${name} mission draw calls ${(await gameState(themed)).render.calls}`);
+      await themed.close();
+    }
+
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-arctic, mission-valley (.png)');
   } finally {
     await cleanup();
   }
