@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ThemeId } from '../../src/mission/themes';
 import { buildTerrainGeometry, terrainGridAxes } from '../../src/scene/terrain';
-import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE, createTerrainField } from '../../src/scene/terrainField';
+import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE, createTerrainField, sectorDistance } from '../../src/scene/terrainField';
 import type { TerrainField } from '../../src/scene/terrainField';
 
 const THEME_IDS: ThemeId[] = ['desert', 'arctic', 'valley'];
@@ -54,7 +54,49 @@ describe('terrain mesh grid', () => {
     expect(zs[zs.length - 1]).toBeGreaterThanOrEqual(1000);
   });
 
+  it('spaces vertices at most 3 m apart around the origin (the mountain spur) and at most 25 m apart anywhere', () => {
+    for (const lines of [xs, zs]) {
+      for (let k = 0; k + 1 < lines.length; k++) {
+        const step = lines[k + 1] - lines[k];
+        expect(step).toBeLessThanOrEqual(25 + 1e-9);
+        if (lines[k] >= -100 && lines[k + 1] <= 100) expect(step).toBeLessThanOrEqual(3 + 1e-9);
+      }
+    }
+  });
+
   for (const theme of THEME_IDS) {
+    it(`${theme}: the mountain spur and the valley walls are rendered, not smoothed away`, () => {
+      const field = createTerrainField(theme, 1, 'mountain');
+      const positions = buildTerrainGeometry(field).getAttribute('position').array;
+      // The spur: crags within a metre of height() on its steep, rough flanks (a 3 m grid on 60 degree slopes).
+      let spur = 0;
+      for (let r = 7; r < 90; r += 1.3) {
+        for (let k = 0; k < 40; k++) {
+          const a = (k / 40) * 2 * Math.PI + r;
+          const x = r * Math.cos(a);
+          const z = r * Math.sin(a);
+          spur = Math.max(spur, Math.abs(meshHeight(xs, zs, positions, x, z) - field.height(x, z)));
+        }
+      }
+      expect(spur, `${theme} spur`).toBeLessThanOrEqual(1.2);
+      // The walls: on the coarse 25 m grid the surface is within 20 m of height() at worst (strata are the finest feature)
+      // and within 1.5 m on average (rms), so the ridgelines are all there.
+      let worst = 0;
+      let sumSquares = 0;
+      let n = 0;
+      for (let x = -1990; x < 1990; x += 37) {
+        for (let z = -2990; z < 990; z += 41) {
+          if (sectorDistance(x, z) < 200) continue;
+          const e = Math.abs(meshHeight(xs, zs, positions, x, z) - field.height(x, z));
+          worst = Math.max(worst, e);
+          sumSquares += e * e;
+          n++;
+        }
+      }
+      expect(worst, `${theme} wall worst`).toBeLessThanOrEqual(20);
+      expect(Math.sqrt(sumSquares / n), `${theme} wall rms`).toBeLessThanOrEqual(1.5);
+    });
+
     it(`${theme}: the rendered surface agrees with height() within 0.1 m at any target spot`, () => {
       for (const seed of [1, 20261101]) {
         const field: TerrainField = createTerrainField(theme, seed);

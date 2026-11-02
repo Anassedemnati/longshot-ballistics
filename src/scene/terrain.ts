@@ -15,25 +15,27 @@ const Z_MAX = 1000;
  * The fine mesh covers the engagement sector (out to 1600 m, +-12 deg) with a margin, plus the
  * shooter's rise; spacing grows with distance beyond it. Fine spacing is well under the 6 m the
  * sector needs: the surface and `height()` then agree to a few centimetres at any target spot.
+ * Beyond the sector the grid coarsens to 25 m within 250 m of the focus box: the valley walls (up to
+ * 250 m high, ridgelines 300-500 m apart, strata 85-210 m) still read as eroded ridges at that spacing.
  */
 const FOCUS_X = 450; // 1650 m * sin(15 deg) = 427 m
 const FOCUS_Z_MIN = -1700;
 const FOCUS_Z_MAX = 120;
 const FINE_STEP = 4;
-/** Extra-fine ring around the origin: the prone view sits right over the rise. */
-const NEAR_HALF = 60;
-const NEAR_STEP = 2.5;
-const COARSE_STEP = 70;
-const FALLOFF_DISTANCE = 700;
+/** Extra-fine ring around the origin: the prone view sits right over the rise, and the mountain's 90 m spur needs it to read as crags. */
+const NEAR_HALF = 100;
+const NEAR_STEP = 3;
+const COARSE_STEP = 25;
+const FALLOFF_DISTANCE = 250;
 
-/** Grid line positions from min to max; step grows from FINE_STEP inside [focusMin, focusMax] to COARSE_STEP. */
+/** Grid line positions from min to max; step grows linearly from FINE_STEP inside [focusMin, focusMax] to COARSE_STEP, FALLOFF_DISTANCE beyond it. */
 function gridAxis(min: number, max: number, focusMin: number, focusMax: number): number[] {
   const lines = [min];
   let p = min;
   while (p < max) {
     const outside = Math.max(focusMin - p, p - focusMax, 0);
     const t = Math.min(1, outside / FALLOFF_DISTANCE);
-    let step = FINE_STEP + (COARSE_STEP - FINE_STEP) * t * t;
+    let step = FINE_STEP + (COARSE_STEP - FINE_STEP) * t;
     if (Math.abs(p) < NEAR_HALF) step = Math.min(step, NEAR_STEP);
     p = Math.min(max, p + step);
     lines.push(p);
