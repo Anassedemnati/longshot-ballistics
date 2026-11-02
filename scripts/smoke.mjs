@@ -58,6 +58,8 @@ const MENU_TAB_ORDER = [
   'menu-button menu-start',
 ];
 const THEME_NAMES = { d: 'desert', a: 'arctic', v: 'valley' };
+/** Draw-call budget of the largest mission (it draws about 300 today). */
+const MAX_DRAW_CALLS = 400;
 const MISSION_MAX = 'v1.d.100.1500.10.3.120.3.338.m.m.1'; // the largest mission: 10 soldiers + 3 vehicle targets, many buildings and vehicles, 12 m/s
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
@@ -656,6 +658,7 @@ async function run() {
     log(
       `largest mission: ${st.render.calls} draw calls, ${st.render.triangles} triangles; ${bigPerf.frames} frames in ${Math.round(bigPerf.ms)} ms (${((bigPerf.frames / bigPerf.ms) * 1000).toFixed(0)} fps, ${launched.renderer}, headless)`,
     );
+    check(st.render.calls <= MAX_DRAW_CALLS, `the largest mission stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
     const bigPng = await analyzePng(big, await shoot(big, { hideHud: true, path: join(OUT_DIR, 'mission-max.png') }));
     check(bigPng.distinctAll >= 6, `the largest mission canvas is not one colour (${bigPng.distinctAll} distinct sampled colours)`);
     await big.close();
