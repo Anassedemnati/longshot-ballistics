@@ -135,7 +135,7 @@ describe('createPostFx (built without WebGL)', () => {
   const camera = new THREE.PerspectiveCamera(60, 16 / 9);
 
   for (const theme of THEMES) {
-    it(`${theme}, high: render, bloom, output (with the grade) in that order, on a 4x multisampled half-float target`, () => {
+    it(`${theme}, high: render, bloom, output (with the grade) in that order, on a 2x multisampled half-float target`, () => {
       const renderer = stubRenderer();
       const post = createPostFx({ renderer, scene, camera, theme, quality: 'high' });
       const [render, bloom, output] = post.passes;
@@ -182,7 +182,7 @@ describe('createPostFx (built without WebGL)', () => {
     expect(post.bloom!.renderTargetBright.height).toBe(360);
   });
 
-  it('low: 2x multisampling and no bloom pass', () => {
+  it('low: no multisampling and no bloom pass', () => {
     const post = createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'desert', quality: 'low' });
     expect(post.bloom).toBeNull();
     expect(post.passes).toHaveLength(2);

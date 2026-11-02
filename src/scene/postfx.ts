@@ -17,7 +17,7 @@ import { SKY_LOOKS, sunDirectionOf } from './sky';
 // and the reticle are DOM and untouched. The logarithmic depth buffer works in the composer: the render target has
 // its own depth buffer and the materials' log-depth shader code is the same.
 
-/** `high`: 4x multisampling, bloom and grade; `low`: 2x multisampling and grade, no bloom; `off`: no composer at all (today's direct render and sky, no grade). */
+/** `high` (the default): 2x multisampling, bloom and grade; `low`: no multisampling, no bloom, grade only; `off`: no composer at all (today's direct render and sky, no grade). */
 export type PostQuality = 'high' | 'low' | 'off';
 
 /** `?post=low` or `?post=off` in the page URL picks the cheaper path; anything else is `high`. (A separate parameter: the mission code is not touched.) */
@@ -26,8 +26,12 @@ export function postQualityFromSearch(search: string): PostQuality {
   return value === 'low' || value === 'off' ? value : 'high';
 }
 
-/** Multisampling of the composer's render target by quality (measured on an integrated GPU: 4 samples on a half-float target cost about 5 ms more than 2). */
-export const POST_SAMPLES = { high: 4, low: 2 } as const;
+/**
+ * Multisampling of the composer's render target by quality. Measured on an integrated GPU (Intel Iris Plus, the largest
+ * mission, 1280 x 720): a 4x half-float target cost 3-7 ms more than a 2x one, while 2x costs about what the direct render's
+ * own 4x canvas does; the frame budget is 16.7 ms, so 2x is the default.
+ */
+export const POST_SAMPLES = { high: 2, low: 0 } as const;
 /** Bloom is drawn only while the sun is within this many degrees of the view (the glare reaches that far past the frame's edge). */
 export const BLOOM_MARGIN_DEG = 25;
 /** The bloom's own targets are half the output's resolution (UnrealBloomPass); divided once more by this: bloom is soft, so a quarter of the pixels costs nothing visible. */
