@@ -39,7 +39,24 @@ const HOLD_300M = 0.45;
 const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
 const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier straight ahead
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
-const MISSION_DEFAULT = 'v1.d.600.1000.3.0.45.9.308.f.f.1'; // DEFAULT_MISSION: what the placeholder start screen's link opens
+/** The menu's defaults (DEFAULT_MISSION) as a mission code: the menu starts them with a fresh seed, so any seed matches. */
+const MISSION_DEFAULT_RE = /^v1\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+$/;
+/** The order Tab visits the menu's controls in. */
+const MENU_TAB_ORDER = [
+  'radio:theme',
+  'menu-range-min',
+  'menu-range-max',
+  'menu-soldiers',
+  'menu-vehicle-targets',
+  'menu-wind-speed',
+  'menu-dial-pos is-selected',
+  'radio:rifle',
+  'radio:buildings',
+  'radio:vehicles',
+  'menu-button menu-random',
+  'menu-button menu-start',
+];
+const THEME_NAMES = { d: 'desert', a: 'arctic', v: 'valley' };
 const MISSION_MAX = 'v1.d.100.1500.10.3.120.3.338.m.m.1'; // the largest mission: 10 soldiers + 3 vehicle targets, many buildings and vehicles, 12 m/s
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
@@ -235,6 +252,44 @@ async function waitForTargetsLeft(page, n) {
   } catch (error) {
     throw new Error(`timed out waiting for targetsLeft = ${n}: ${error.message}`);
   }
+}
+
+/** Wait until every image of the page has loaded: leaving while the menu pictures load aborts them, which would count as failed requests. */
+const imagesLoaded = (page) =>
+  page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0), undefined, { timeout: 15_000 });
+
+/** What the menu's controls show (read from the DOM, so it works without ?debug=1 too). */
+const menuDom = (page) =>
+  page.evaluate(() => {
+    const checked = (name) => document.querySelector(`input[name=${name}]:checked`)?.value;
+    const text = (id) => document.getElementById(id)?.textContent;
+    return {
+      theme: checked('theme'),
+      range: text('menu-range-value'),
+      soldiers: text('menu-soldiers-value'),
+      vehicleTargets: text('menu-vehicle-targets-value'),
+      wind: text('menu-wind-speed-value'),
+      clock: text('menu-dial-value'),
+      rifle: checked('rifle'),
+      buildings: checked('buildings'),
+      vehicles: checked('vehicles'),
+    };
+  });
+
+const menuConfig = (page) => page.evaluate(() => window.__menu.get());
+
+/** The mission code (the `m=` value) in the page's URL. */
+const missionCode = (page) => new URL(page.url()).searchParams.get('m');
+
+/**
+ * Press the real Start button and wait for the mission page. With `debug` the menu carries `&debug=1` into
+ * the URL, so the debug hook comes up and we wait for it.
+ */
+async function clickStart(page, { debug }) {
+  const url = debug ? /\?m=v1\.[^&]+&debug=1$/ : /\?m=v1\.[^&]+$/;
+  await Promise.all([page.waitForURL(url), page.locator('.menu-start').click()]);
+  if (debug) await page.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
+  else await page.waitForSelector('.hud');
 }
 
 /**
@@ -486,22 +541,30 @@ async function run() {
     check((await mission.evaluate(() => document.pointerLockElement)) === null, 'the pointer is not locked on the results screen');
     await mission.screenshot({ path: join(OUT_DIR, 'mission-results.png') });
     await Promise.all([mission.waitForURL(/\?last=v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1/), mission.locator('.results-menu').click()]);
-    check((await mission.locator('.menu-placeholder-start').count()) === 1, 'Menu returns to the start screen with the mission in ?last=');
-    check((await mission.evaluate(() => window.__game)) === undefined, 'the start screen runs no game');
-
-    // The start screen's link opens the default mission (no ?debug=1 in it, so no debug hook either).
-    await Promise.all([mission.waitForURL(`**/?m=${MISSION_DEFAULT}`), mission.locator('.menu-placeholder-start').click()]);
-    await mission.waitForSelector('.hud');
-    const defaultFrames = await animationFrames(mission, 3);
-    check(defaultFrames.frames >= 3, 'the default mission runs');
-    check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'default mission: HUD says "Targets 3/3"');
+    await mission.waitForSelector('.menu-start');
+    await imagesLoaded(mission);
+    check((await mission.locator('.menu-start').count()) === 1, 'Menu returns to the start menu with the mission in ?last=');
+    check((await mission.evaluate(() => window.__game)) === undefined, 'the start menu runs no game');
+    const prefilled = await menuDom(mission);
+    log(`menu pre-filled from ?last=: ${JSON.stringify(prefilled)}`);
     check(
-      (await mission.locator('.hud-line', { hasText: "Wind 4.5 m/s from 9 o'clock (left)" }).count()) === 1,
-      'default mission: HUD says "Wind 4.5 m/s from 9 o\'clock (left)"',
+      prefilled.theme === 'desert' && prefilled.range === '300 m' && prefilled.soldiers === '3' && prefilled.vehicleTargets === '0',
+      'the menu is pre-filled with the last mission (desert, 300 m, 3 soldiers, no vehicle targets)',
     );
-    check((await mission.evaluate(() => window.__game)) === undefined, 'a mission URL without ?debug=1 exposes no debug hook');
-    const defaultPng = await analyzePng(mission, await shoot(mission, { hideHud: true, path: join(OUT_DIR, 'mission-default.png') }));
-    check(defaultPng.distinctAll >= 6, `the default mission canvas is not one colour (${defaultPng.distinctAll} distinct sampled colours)`);
+    check(
+      prefilled.wind === '0.0 m/s · 0 mph' && prefilled.clock === "from 9 o'clock (left)" && prefilled.rifle === '308',
+      'the menu is pre-filled with the last mission\'s calm wind and .308',
+    );
+    check(prefilled.buildings === 'none' && prefilled.vehicles === 'none', 'the menu is pre-filled with the last mission\'s no buildings, no vehicles');
+
+    // Start from the pre-filled menu: the same mission with a new seed (no ?debug=1, so no debug hook either).
+    await clickStart(mission, { debug: false });
+    check(/^v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.\d+$/.test(missionCode(mission) ?? ''), `Start runs the pre-filled mission (${missionCode(mission)})`);
+    check(missionCode(mission) !== 'v1.d.300.300.3.0.0.9.308.n.n.1', 'Start rolls a fresh seed');
+    const restartedFrames = await animationFrames(mission, 3);
+    check(restartedFrames.frames >= 3, 'the mission started from the menu runs');
+    check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'menu start: HUD says "Targets 3/3"');
+    check((await mission.evaluate(() => window.__game)) === undefined, 'a mission started from a menu without ?debug=1 exposes no debug hook');
     await mission.close();
 
     // 7. Restart reloads the same mission from scratch.
@@ -593,10 +656,196 @@ async function run() {
       await themed.close();
     }
 
+    // 11. The start menu. First without ?debug=1: it shows, fits 1280x720, exposes no hook and starts the defaults.
+    const plainMenu = await openPage();
+    await plainMenu.goto(preview.url, { waitUntil: 'load' });
+    await plainMenu.waitForSelector('.menu-start'); // built: only now does "no hook" mean something
+    await imagesLoaded(plainMenu);
+    check((await plainMenu.locator('.menu-start').count()) === 1, 'the start menu shows a Start button');
+    check((await plainMenu.locator('.menu-random').count()) === 1, 'the start menu shows a Random mission button');
+    check((await plainMenu.locator('.menu-card').count()) === 3, 'the start menu shows 3 theme cards');
+    check((await plainMenu.evaluate(() => window.__menu)) === undefined, 'window.__menu is undefined without ?debug=1');
+    check((await plainMenu.evaluate(() => window.__game)) === undefined, 'the start menu runs no game');
+    const fit = await plainMenu.evaluate(() => ({ scroll: document.querySelector('.menu').scrollHeight, client: document.querySelector('.menu').clientHeight }));
+    check(fit.scroll <= fit.client, `the menu fits 1280x720 without scrolling (${fit.scroll} <= ${fit.client})`);
+    const defaults = await menuDom(plainMenu);
+    log(`menu defaults: ${JSON.stringify(defaults)}`);
+    check(
+      defaults.theme === 'desert' && defaults.range === '600–1000 m' && defaults.soldiers === '3' && defaults.vehicleTargets === '0',
+      'the menu opens with the defaults (desert, 600–1000 m, 3 soldiers, 0 vehicle targets)',
+    );
+    check(
+      defaults.wind === '4.5 m/s · 10 mph' && defaults.clock === "from 9 o'clock (left)" && defaults.rifle === '308' &&
+        defaults.buildings === 'few' && defaults.vehicles === 'few',
+      'the menu opens with the defaults (4.5 m/s · 10 mph from 9 o\'clock, .308, few buildings, few vehicles)',
+    );
+    const menuPng = await plainMenu.screenshot({ path: join(OUT_DIR, 'menu.png') });
+    const menuLook = await analyzePng(plainMenu, menuPng);
+    check(menuLook.distinctAll >= 20, `the menu screenshot has content (${menuLook.distinctAll} distinct sampled colours)`);
+
+    // Smaller than 1280x720 it scrolls instead of clipping: Start can still be reached.
+    await plainMenu.setViewportSize({ width: 1280, height: 480 });
+    const short = await plainMenu.evaluate(() => ({ scroll: document.querySelector('.menu').scrollHeight, client: document.querySelector('.menu').clientHeight }));
+    check(short.scroll > short.client, `at 1280x480 the menu scrolls (${short.scroll} > ${short.client})`);
+    await plainMenu.locator('.menu-start').scrollIntoViewIfNeeded();
+    const startBox = await plainMenu.locator('.menu-start').boundingBox();
+    check(startBox !== null && startBox.y >= 0 && startBox.y + startBox.height <= 480, 'at 1280x480 Start can be scrolled into view');
+    await plainMenu.screenshot({ path: join(OUT_DIR, 'menu-short.png') });
+    await plainMenu.setViewportSize(VIEWPORT);
+
+    // Keyboard only: Enter on the focused Start button starts the default mission (no debug hook without ?debug=1).
+    await plainMenu.locator('.menu-start').focus();
+    await Promise.all([plainMenu.waitForURL(/\?m=v1\.[^&]+$/), plainMenu.keyboard.press('Enter')]);
+    await plainMenu.waitForSelector('.hud');
+    check(MISSION_DEFAULT_RE.test(missionCode(plainMenu) ?? ''), `Enter on Start runs the default mission (${missionCode(plainMenu)})`);
+    const enterFrames = await animationFrames(plainMenu, 3);
+    check(enterFrames.frames >= 3, 'the default mission runs');
+    check((await plainMenu.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'default mission: HUD says "Targets 3/3"');
+    check(
+      (await plainMenu.locator('.hud-line', { hasText: "Wind 4.5 m/s from 9 o'clock (left)" }).count()) === 1,
+      'default mission: HUD says "Wind 4.5 m/s from 9 o\'clock (left)"',
+    );
+    check((await plainMenu.evaluate(() => window.__game)) === undefined, 'a mission URL without ?debug=1 exposes no debug hook');
+    const defaultPng = await analyzePng(plainMenu, await shoot(plainMenu, { hideHud: true, path: join(OUT_DIR, 'mission-default.png') }));
+    check(defaultPng.distinctAll >= 6, `the default mission canvas is not one colour (${defaultPng.distinctAll} distinct sampled colours)`);
+    await plainMenu.close();
+
+    // The controls (with ?debug=1, which exposes window.__menu): Tab order, then every control by real input.
+    const controls = await openPage();
+    await controls.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
+    await controls.waitForSelector('.menu-start');
+    await imagesLoaded(controls);
+    check((await controls.evaluate(() => typeof window.__menu?.get)) === 'function', 'window.__menu exists with ?debug=1');
+    const tabbed = [];
+    for (let i = 0; i < MENU_TAB_ORDER.length; i++) {
+      await controls.keyboard.press('Tab');
+      tabbed.push(
+        await controls.evaluate(() => {
+          const e = document.activeElement;
+          return e.matches('input[type=radio]') ? `radio:${e.name}` : e.id || e.getAttribute('class');
+        }),
+      );
+    }
+    check(JSON.stringify(tabbed) === JSON.stringify(MENU_TAB_ORDER), `Tab visits the controls in reading order (${tabbed.join(' > ')})`);
+
+    // Range band: min and max stay linked. Keyboard on the real sliders (End/Home).
+    await controls.locator('#menu-range-min').focus();
+    await controls.keyboard.press('End');
+    let cfg = await menuConfig(controls);
+    check(cfg.rangeMin === 1500 && cfg.rangeMax === 1500, 'moving min to the end pushes max along (1500–1500)');
+    check((await controls.locator('#menu-range-value').textContent()) === '1500 m', 'the range label shows one distance when both ends are equal');
+    await controls.locator('#menu-range-max').focus();
+    await controls.keyboard.press('Home');
+    cfg = await menuConfig(controls);
+    check(cfg.rangeMin === 100 && cfg.rangeMax === 100, 'moving max to the start pushes min along (100–100)');
+    await controls.keyboard.press('ArrowRight');
+    await controls.keyboard.press('ArrowRight');
+    cfg = await menuConfig(controls);
+    check(cfg.rangeMin === 100 && cfg.rangeMax === 120, 'max moves in 10 m steps without touching min (100–120)');
+    check((await controls.locator('#menu-range-value').textContent()) === '100–120 m', 'the range label reads 100–120 m');
+
+    // Wind: the clock dial by mouse and keyboard, and the speed with its mph.
+    await controls.locator('.menu-dial-pos[data-clock="3"]').click();
+    cfg = await menuConfig(controls);
+    check(cfg.windClock === 3, 'clicking 3 on the dial sets wind from 3 o\'clock');
+    check((await controls.locator('#menu-dial-value').textContent()) === "from 3 o'clock (right)", 'the dial label reads "from 3 o\'clock (right)"');
+    check((await controls.locator('.menu-dial-arrow').getAttribute('transform')) === 'rotate(90)', 'the wind arrow turns with the clock (3 o\'clock: 90 degrees)');
+    await controls.keyboard.press('ArrowRight');
+    check((await menuConfig(controls)).windClock === 4, 'ArrowRight on the dial moves one position clockwise');
+    await controls.locator('#menu-wind-speed').focus();
+    await controls.keyboard.press('End');
+    check((await controls.locator('#menu-wind-speed-value').textContent()) === '12.0 m/s · 27 mph', 'the wind speed shows m/s and mph (12.0 m/s · 27 mph)');
+    check((await menuConfig(controls)).windSpeedMps === 12, 'the speed slider reaches 12 m/s');
+
+    // Counts, rifle, densities.
+    await controls.locator('#menu-soldiers').focus();
+    await controls.keyboard.press('End');
+    await controls.locator('#menu-vehicle-targets').focus();
+    await controls.keyboard.press('End');
+    cfg = await menuConfig(controls);
+    check(cfg.soldiers === 10 && cfg.vehicleTargets === 3, 'the sliders reach 10 soldiers and 3 vehicle targets');
+    await controls.locator('label.menu-seg-option', { has: controls.locator('input[name=rifle][value="338"]') }).click();
+    await controls.locator('label.menu-seg-option', { has: controls.locator('input[name=buildings][value=many]') }).click();
+    await controls.locator('label.menu-seg-option', { has: controls.locator('input[name=vehicles][value=none]') }).click();
+    cfg = await menuConfig(controls);
+    check(cfg.rifle === '338' && cfg.buildings === 'many' && cfg.vehicles === 'none', 'the rifle toggle and the none/few/many controls work by mouse');
+    await controls.screenshot({ path: join(OUT_DIR, 'menu-controls.png') });
+
+    // __menu.set redraws the controls.
+    await controls.evaluate(() => window.__menu.set({ soldiers: 5, theme: 'valley', windSpeedMps: 0 }));
+    const afterSet = await menuDom(controls);
+    check(afterSet.soldiers === '5' && afterSet.theme === 'valley' && afterSet.wind === '0.0 m/s · 0 mph', '__menu.set updates the controls');
+    await controls.close();
+
+    // Each theme: click its card (the background follows), set counts, press the real Start button.
+    for (const [i, theme] of ['desert', 'arctic', 'valley'].entries()) {
+      const themed = await openPage();
+      await themed.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
+      await themed.waitForSelector('.menu-start');
+      await imagesLoaded(themed);
+      await themed.locator(`.menu-card[data-theme=${theme}]`).click();
+      await themed.evaluate(([soldiers, vehicleTargets]) => window.__menu.set({ soldiers, vehicleTargets }), [2 + i, i]);
+      cfg = await menuConfig(themed);
+      check(cfg.theme === theme, `clicking the ${theme} card selects it`);
+      await themed.waitForTimeout(450); // the background cross-fade
+      const activeBackground = await themed.evaluate(() => document.querySelector('.menu-bg-img.is-active')?.getAttribute('src'));
+      check(activeBackground?.includes(`card_${theme}`) === true, `the ${theme} card is the menu background (${activeBackground})`);
+      await themed.screenshot({ path: join(OUT_DIR, `menu-${theme}.png`) });
+
+      await clickStart(themed, { debug: true });
+      check(THEME_NAMES[(missionCode(themed) ?? '').split('.')[1]] === theme, `Start opens a ${theme} mission (${missionCode(themed)})`);
+      st = await gameState(themed);
+      check(
+        st.targetsLeft === cfg.soldiers + cfg.vehicleTargets && st.soldiers.length === cfg.soldiers && st.vehicles.length === cfg.vehicleTargets,
+        `the ${theme} mission has the menu's targets (${cfg.soldiers} soldiers + ${cfg.vehicleTargets} vehicle targets = ${st.targetsLeft})`,
+      );
+      await animationFrames(themed, 5);
+      const themedLook = await analyzePng(themed, await shoot(themed, { hideHud: true, path: join(OUT_DIR, `menu-${theme}-mission.png`) }));
+      check(themedLook.distinctAll >= 6, `the ${theme} mission from the menu is not one colour (${themedLook.distinctAll} distinct sampled colours)`);
+      await themed.close();
+    }
+
+    // Random mission: it fills every control; Start runs it; coming back pre-fills the menu with it (any off-grid values included).
+    const random = await openPage();
+    await random.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
+    await random.waitForSelector('.menu-start');
+    await imagesLoaded(random);
+    await random.locator('.menu-random').click();
+    const rollA = await menuConfig(random);
+    await random.locator('.menu-random').click();
+    const second = await menuConfig(random);
+    check(JSON.stringify(rollA) !== JSON.stringify(second), 'two Random clicks give different missions');
+    log(`random mission: ${JSON.stringify(second)}`);
+    const shown = await menuDom(random);
+    check(
+      shown.theme === second.theme && shown.soldiers === String(second.soldiers) && shown.rifle === second.rifle &&
+        shown.buildings === second.buildings && shown.vehicles === second.vehicles,
+      'Random mission redraws the controls with the new settings',
+    );
+    await clickStart(random, { debug: true });
+    st = await gameState(random);
+    check(st.targetsLeft === second.soldiers + second.vehicleTargets, `the random mission has the menu's targets (${st.targetsLeft})`);
+    await animationFrames(random, 5);
+    const randomLook = await analyzePng(random, await shoot(random, { hideHud: true, path: join(OUT_DIR, 'mission.png') }));
+    check(randomLook.distinctAll >= 6, `the random mission canvas is not one colour (${randomLook.distinctAll} distinct sampled colours)`);
+
+    const code = missionCode(random);
+    const seed = Number(code.split('.').at(-1));
+    check(Number.isInteger(seed) && seed >= 1 && seed <= 0xffffffff, `Start put a fresh 32-bit seed in the URL (${seed})`);
+    await random.goto(`${preview.url}?last=${code}&debug=1`, { waitUntil: 'load' });
+    await random.waitForSelector('.menu-start');
+    await imagesLoaded(random);
+    const back = await menuConfig(random);
+    const { seed: backSeed, ...backRest } = back;
+    const { seed: wasSeed, ...secondRest } = second;
+    check(backSeed === seed, 'the menu coming back from a mission carries that mission\'s seed');
+    check(wasSeed !== undefined && JSON.stringify(backRest) === JSON.stringify(secondRest), 'coming back from a random mission pre-fills the menu with exactly its settings');
+    await random.close();
+
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-default, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission (.png)');
   } finally {
     await cleanup();
   }
