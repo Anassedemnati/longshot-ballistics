@@ -57,6 +57,8 @@ const SHED: readonly LocalBox[] = [box('wall', 0, 1.0, 0, 1.75, 1.0, 1.5), box('
 // chest in view); the tall cab / windshield covers only part of the length. The engine block is its
 // own box at the front: it is NOT part of the body, so a bullet can reach it from the front or side
 // (BulletSystem takes the earliest contact; an engine inside a body box could never be hit).
+// Hull, cab and engine meet face to face (no slit between them: a lateral line at any height they
+// share hits a box from the rear of the hull to the front of the engine).
 //   truck  7 x 2.5 x 3 m   (bed, cab, engine block, four wheels)
 //   jeep   4.2 x 1.9 x 1.8 m (hull, windshield, engine block, four wheels)
 // ---------------------------------------------------------------------------------------------
@@ -79,7 +81,7 @@ const JEEP_BODY: readonly LocalBox[] = [
   box('wheel', -0.83, 0.33, 1.4, 0.12, 0.33, 0.33),
   box('wheel', 0.83, 0.33, 1.4, 0.12, 0.33, 0.33),
 ];
-const JEEP_ENGINE: LocalBox = box('engine', 0, 0.85, 1.45, 0.65, 0.3, 0.65); // z 0.8..2.1, y 0.55..1.15
+const JEEP_ENGINE: LocalBox = box('engine', 0, 0.85, 1.4, 0.65, 0.3, 0.7); // z 0.7..2.1, y 0.55..1.15 (starts where the tub ends: no slit)
 
 const VEHICLES: Record<'truck' | 'jeep', { body: readonly LocalBox[]; engine: LocalBox }> = {
   truck: { body: TRUCK_BODY, engine: TRUCK_ENGINE },

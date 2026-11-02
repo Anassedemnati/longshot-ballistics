@@ -307,24 +307,28 @@ interface Stage {
   /** Largest bearing from straight downrange, rad. */
   bearing: number;
   attempts: number;
-  /** False only for the last-resort stage: accept the first draw with no checks. */
-  checks: boolean;
 }
 
 const STRICT_BEARING = 10 * DEG;
 const MAX_BEARING = SECTOR_HALF_ANGLE_RAD;
 /** Up to 200 attempts per soldier: relax the spacing first, then the bearing (never beyond 12 degrees). */
 const SOLDIER_STAGES: readonly Stage[] = [
-  { spacing: 6, bearing: STRICT_BEARING, attempts: 50, checks: true },
-  { spacing: 3, bearing: STRICT_BEARING, attempts: 50, checks: true },
-  { spacing: 1.5, bearing: STRICT_BEARING, attempts: 50, checks: true },
-  { spacing: 1.5, bearing: MAX_BEARING, attempts: 50, checks: true },
+  { spacing: 6, bearing: STRICT_BEARING, attempts: 50 },
+  { spacing: 3, bearing: STRICT_BEARING, attempts: 50 },
+  { spacing: 1.5, bearing: STRICT_BEARING, attempts: 50 },
+  { spacing: 1.5, bearing: MAX_BEARING, attempts: 50 },
 ];
 const VEHICLE_STAGES: readonly Stage[] = [
-  { spacing: 3, bearing: STRICT_BEARING, attempts: 150, checks: true },
-  { spacing: 3, bearing: MAX_BEARING, attempts: 50, checks: true },
+  { spacing: 3, bearing: STRICT_BEARING, attempts: 150 },
+  { spacing: 3, bearing: MAX_BEARING, attempts: 50 },
 ];
-const LAST_RESORT: Stage = { spacing: 0, bearing: MAX_BEARING, attempts: 1, checks: false };
+/**
+ * The final pass (no props left) relaxes only the spacing between targets. Every other check stays:
+ * line of sight to the head and upper torso (the engine centre for a vehicle), not inside any box
+ * (engine blocks included), not hiding another target. If even this finds nothing, generateLayout
+ * throws rather than hand out an invalid soldier or vehicle.
+ */
+const LAST_RESORT: Stage = { spacing: 0, bearing: MAX_BEARING, attempts: 400 };
 
 /** Horizontal clearance a soldier keeps from every prop and vehicle box, m (arms and boots included). */
 const SOLDIER_CLEARANCE = 0.3;
@@ -435,8 +439,6 @@ function evaluateVehicle(
   const g = ctx.field.height(v.x, v.z);
   const { body, engineCenter } = vehicleTargetColliders(v, g);
   const engine = vehicleEngineObstacle(v, g);
-  if (!stage.checks) return { body, engine, engineCenter };
-
   const fr = propFootprintRadius(v.kind);
   for (const p of ctx.props) {
     if (Math.hypot(p.x - v.x, p.z - v.z) < fr + propFootprintRadius(p.kind) + stage.spacing) return null;
@@ -494,8 +496,6 @@ function evaluateSoldier(ctx: Ctx, x: number, z: number, yaw: number, stage: Sta
   const s: SoldierPlacement = { id: `soldier-${ctx.soldiers.length}`, x, z, yaw, range: Math.hypot(x, z), behindCover: false };
   const aim = soldierAimPoints(s, field);
   const bounds = soldierUprightBounds(s, field);
-  if (!stage.checks) return { s, aim, bounds };
-
   if (insideSolids(x, z, ctx.solids)) return null;
   if (requireCover && !hitsAny(eye, aim.lowerTorso, ctx.coverObs)) return null;
   if (hitsAny(eye, aim.head, ctx.staticObs) || hitsAny(eye, aim.upperTorso, ctx.staticObs)) return null;
@@ -605,6 +605,10 @@ function isBehindCover(ctx: Ctx, p: PlacedSoldier): boolean {
   return true;
 }
 
+function describeBand(config: MissionConfig): string {
+  return `${config.theme}, band ${config.rangeMin}-${config.rangeMax} m, seed ${config.seed}`;
+}
+
 /** One complete placement attempt with the given props; null when a target cannot be placed (the caller drops props). */
 function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: PropPlacement[], final: boolean): MissionLayout | null {
   const placedProps = props.map((p, i) => ({ ...p, id: `prop-${i}` }));
@@ -637,7 +641,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
 
   for (let i = 0; i < config.vehicleTargets; i++) {
     const v = placeVehicleTarget(ctx, final);
-    if (!v) return null;
+    if (!v) {
+      if (final) throw new Error(`generateLayout: no valid spot for vehicle target ${i + 1} of ${config.vehicleTargets} (${describeBand(config)})`);
+      return null;
+    }
     candidates.push({ kind: v.kind, x: v.x, z: v.z, yaw: v.yaw });
   }
 
@@ -651,7 +658,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
       if (placed) break;
       placed = placeOpen(ctx, stage);
     }
-    if (!placed) return null;
+    if (!placed) {
+      if (final) throw new Error(`generateLayout: no valid spot for soldier ${i + 1} of ${config.soldiers} (${describeBand(config)})`);
+      return null;
+    }
     acceptSoldier(ctx, placed);
   }
 
@@ -661,8 +671,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
 
 /**
  * The layout of one mission. Deterministic: the same config (seed included) and field give the same
- * layout. Every target is always placed; if the scenery blocks too much, props are dropped (tall
- * ones first) and the placement retried, never the targets.
+ * layout. Every target is always placed with its line-of-sight and not-inside-a-box checks intact;
+ * if the scenery blocks too much, props are dropped (tall ones first) and the placement retried,
+ * never the targets. If even the prop-free final pass finds no valid spot (it never has, in a fuzz of
+ * 8000 soldiers) this throws a descriptive Error instead of returning an invalid layout.
  */
 export function generateLayout(config: MissionConfig, field: TerrainField): MissionLayout {
   if (isLegacyShape(config)) return legacyLayout(config);
@@ -677,6 +689,6 @@ export function generateLayout(config: MissionConfig, field: TerrainField): Miss
     const layout = solve(config, field, rng, props.slice(0, keep), keep === 0);
     if (layout) return layout;
   }
-  // Unreachable: the last attempt has no props and ends in a stage that accepts any draw.
+  // Unreachable: the last attempt (no props) either returns a layout or throws its own, specific error.
   throw new Error('generateLayout: no layout found');
 }

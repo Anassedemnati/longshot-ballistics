@@ -6,6 +6,7 @@ import {
   propBoxes,
   propColliders,
   propFootprintRadius,
+  toWorldBox,
   vehicleEngineObstacle,
   vehicleTargetBoxes,
   vehicleTargetColliders,
@@ -137,6 +138,34 @@ describe('vehicle targets', () => {
       expect([...body, engine]).toEqual([...propBoxes(kind)]);
       expect(body.length).toBeGreaterThan(0);
       for (const b of body) expect(overlapVolume(b, engine)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('hull, cab and engine meet: a lateral (+/-X) line at any height they share, at every z from the rear to the engine front, hits a box', () => {
+    for (const kind of ['truck', 'jeep'] as const) {
+      const { body, engine } = vehicleTargetBoxes(kind);
+      const boxes = [...body, engine].map((b) => toWorldBox(b, 0, 0, 0, 0));
+      const hull = body.filter((b) => b.part === 'hull');
+      const rear = Math.min(...hull.map((b) => b.center.z - b.halfSize.z));
+      const front = engine.center.z + engine.halfSize.z;
+      // Heights where the hull (bed or tub) and the engine block both exist (a lateral line there must never find a slit).
+      const lo = Math.max(engine.center.y - engine.halfSize.y, ...hull.map((b) => b.center.y - b.halfSize.y));
+      const hi = Math.min(engine.center.y + engine.halfSize.y, ...hull.map((b) => b.center.y + b.halfSize.y));
+      expect(hi - lo).toBeGreaterThan(0.3);
+      const gaps: string[] = [];
+      for (let k = 0; k <= 4; k++) {
+        const y = lo + 0.01 + ((hi - lo - 0.02) * k) / 4;
+        const steps = Math.round((front - rear) / 0.02);
+        for (let i = 0; i <= steps; i++) {
+          const z = Math.min(front - 1e-9, rear + 1e-9 + i * 0.02); // 1e-9: the end faces themselves sit on a float knife edge
+          for (const dir of [-1, 1]) {
+            const a = { x: -dir * 5, y, z };
+            const b = { x: dir * 5, y, z };
+            if (!boxes.some((box) => segmentBox(a, b, box) !== null)) gaps.push(`${kind} y=${y.toFixed(2)} z=${z.toFixed(2)}`);
+          }
+        }
+      }
+      expect(gaps, `${kind} has see-through slits`).toEqual([]);
     }
   });
 

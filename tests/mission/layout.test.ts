@@ -316,6 +316,33 @@ describe('generateLayout', () => {
     checkLayout(config, field, layout);
   });
 
+  it('crowded worst case (band 100-100, 10 soldiers, 3 vehicle targets, many/many): every soldier keeps line of sight and stands outside every box', () => {
+    for (let k = 0; k < 36; k++) {
+      const config = base({
+        theme: THEMES[k % 3],
+        rangeMin: 100,
+        rangeMax: 100,
+        soldiers: 10,
+        vehicleTargets: 3,
+        buildings: 'many',
+        vehicles: 'many',
+        seed: 3000 + k * 29,
+      });
+      const { field, layout } = setup(config);
+      checkLayout(config, field, layout); // counts, bands, bearings, head and upper-torso line of sight, engines in view
+      const { cover, engines } = independentObstacles(layout, field);
+      for (const s of layout.soldiers) {
+        const aim = soldierAimPoints(s, field);
+        const g = field.height(s.x, s.z);
+        for (const y of [g + 0.05, aim.lowerTorso.y, aim.upperTorso.y, aim.head.y]) {
+          for (const o of [...cover, ...engines]) {
+            expect(segmentBox({ x: s.x, y, z: s.z }, { x: s.x, y, z: s.z }, o.box), `${s.id} inside ${o.id} (seed ${config.seed})`).toBeNull();
+          }
+        }
+      }
+    }
+  });
+
   it('with no props there is no cover; legacy config gives one soldier straight downrange', () => {
     const none = setup(base({ buildings: 'none', vehicles: 'none', soldiers: 6, seed: 9 })).layout;
     expect(none.props).toEqual([]);
