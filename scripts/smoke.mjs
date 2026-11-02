@@ -39,6 +39,8 @@ const HOLD_300M = 0.45;
 const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
 const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier straight ahead
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
+const MISSION_DEFAULT = 'v1.d.600.1000.3.0.45.9.308.f.f.1'; // DEFAULT_MISSION: what the placeholder start screen's link opens
+const MISSION_MAX = 'v1.d.100.1500.10.3.120.3.338.m.m.1'; // the largest mission: 10 soldiers + 3 vehicle targets, many buildings and vehicles, 12 m/s
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
 function log(message) {
@@ -486,6 +488,20 @@ async function run() {
     await Promise.all([mission.waitForURL(/\?last=v1\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1/), mission.locator('.results-menu').click()]);
     check((await mission.locator('.menu-placeholder-start').count()) === 1, 'Menu returns to the start screen with the mission in ?last=');
     check((await mission.evaluate(() => window.__game)) === undefined, 'the start screen runs no game');
+
+    // The start screen's link opens the default mission (no ?debug=1 in it, so no debug hook either).
+    await Promise.all([mission.waitForURL(`**/?m=${MISSION_DEFAULT}`), mission.locator('.menu-placeholder-start').click()]);
+    await mission.waitForSelector('.hud');
+    const defaultFrames = await animationFrames(mission, 3);
+    check(defaultFrames.frames >= 3, 'the default mission runs');
+    check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'default mission: HUD says "Targets 3/3"');
+    check(
+      (await mission.locator('.hud-line', { hasText: "Wind 4.5 m/s from 9 o'clock (left)" }).count()) === 1,
+      'default mission: HUD says "Wind 4.5 m/s from 9 o\'clock (left)"',
+    );
+    check((await mission.evaluate(() => window.__game)) === undefined, 'a mission URL without ?debug=1 exposes no debug hook');
+    const defaultPng = await analyzePng(mission, await shoot(mission, { hideHud: true, path: join(OUT_DIR, 'mission-default.png') }));
+    check(defaultPng.distinctAll >= 6, `the default mission canvas is not one colour (${defaultPng.distinctAll} distinct sampled colours)`);
     await mission.close();
 
     // 7. Restart reloads the same mission from scratch.
@@ -548,7 +564,22 @@ async function run() {
     await cover.screenshot({ path: join(OUT_DIR, 'mission-vehicle.png') });
     await cover.close();
 
-    // 9. The other themes load and draw (wind, props, a vehicle target).
+    // 9. The largest mission: 10 soldiers, 3 vehicle targets, many buildings and vehicles.
+    const big = await openPage();
+    await startGame(big, `m=${MISSION_MAX}&debug=1`);
+    st = await gameState(big);
+    check(st.targetsLeft === 13 && st.soldiers.length === 10 && st.vehicles.length === 3, 'the largest mission has 13 targets (10 soldiers, 3 vehicles)');
+    await animationFrames(big, 5);
+    const bigPerf = await animationFrames(big, 60);
+    st = await gameState(big);
+    log(
+      `largest mission: ${st.render.calls} draw calls, ${st.render.triangles} triangles; ${bigPerf.frames} frames in ${Math.round(bigPerf.ms)} ms (${((bigPerf.frames / bigPerf.ms) * 1000).toFixed(0)} fps, ${launched.renderer}, headless)`,
+    );
+    const bigPng = await analyzePng(big, await shoot(big, { hideHud: true, path: join(OUT_DIR, 'mission-max.png') }));
+    check(bigPng.distinctAll >= 6, `the largest mission canvas is not one colour (${bigPng.distinctAll} distinct sampled colours)`);
+    await big.close();
+
+    // 10. The other themes load and draw (wind, props, a vehicle target).
     for (const code of MISSION_THEMES) {
       const themed = await openPage();
       await startGame(themed, `m=${code}&debug=1`);
@@ -565,7 +596,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-arctic, mission-valley (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-default, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley (.png)');
   } finally {
     await cleanup();
   }
