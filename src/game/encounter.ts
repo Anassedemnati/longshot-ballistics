@@ -87,13 +87,13 @@ export class Encounter {
     const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
     this.detection = clamp100(this.detection + step * (covered ? -ENCOUNTER.coverPerS : ENCOUNTER.exposedPerS));
 
-    const events: EncounterEvent[] = [];
+    let events: EncounterEvent[] | null = null; // made only when something happens: most frames have no event
     if (this.warning > 0) {
       this.warning = Math.max(0, this.warning - step);
       if (this.warning <= TIMER_EPSILON) {
         this.warning = 0;
         this.health = Math.max(0, this.health - (covered ? ENCOUNTER.bombardDamageCover : ENCOUNTER.bombardDamage));
-        events.push('blast');
+        (events ??= []).push('blast');
       }
     }
     if (this.detection >= ENCOUNTER.fireThreshold) {
@@ -106,10 +106,14 @@ export class Encounter {
       if (this.sniperClock >= ENCOUNTER.sniperIntervalS - TIMER_EPSILON) {
         this.sniperClock = 0;
         if (!covered) this.health = Math.max(0, this.health - ENCOUNTER.sniperDamage);
-        events.push('shot');
+        (events ??= []).push('shot');
       }
+    } else {
+      // Below the threshold the snipers lose him: the aim and the next bombardment call start over.
+      this.sniperClock = 0;
+      this.mortarClock = 0;
     }
     if (this.health <= 0) this.ended = true;
-    return events.length > 0 ? events : NONE;
+    return events ?? NONE;
   }
 }

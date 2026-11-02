@@ -107,6 +107,29 @@ describe('Encounter: sniper fire', () => {
     expect(e.health).toBe(100);
   });
 
+  it('loses the aim when the detection falls below 65 %: the next shot takes the full 4 s again', () => {
+    const e = new Encounter();
+    e.setDetection(100);
+    run(e, 3, 1, false); // 3 s of aiming
+    expect(e.sniperClock).toBeCloseTo(3, 9);
+    e.setDetection(40);
+    expect(e.update(0.1, 1, true, false)).toEqual([]); // the snipers lose him: both clocks start over
+    expect(e.sniperClock).toBe(0);
+    expect(e.mortarClock).toBe(0);
+    e.setDetection(100);
+    expect(run(e, 3.8, 1, false)).toEqual([]); // not one second after he is found again, but four
+    expect(run(e, 0.3, 1, false)).toEqual(['shot']);
+  });
+
+  it('allocates nothing on a frame where nothing happens: the same empty list every time', () => {
+    const e = new Encounter();
+    const a = e.update(0.1, 1, false, false);
+    const b = e.update(0.1, 1, false, false);
+    expect(a).toEqual([]);
+    expect(b).toBe(a);
+    expect(e.update(0.1, 1, false, true)).toBe(a); // paused
+  });
+
   it('reports the seconds to the next shot', () => {
     const e = new Encounter();
     e.setDetection(100);
