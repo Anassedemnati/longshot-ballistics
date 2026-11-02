@@ -156,7 +156,7 @@ export interface TargetDummy {
   knockDown(): void;
   /** Stand it up again at once (upright, down = false), whatever state it is in. */
   reset(): void;
-  /** Advance the fall animation by frameDt seconds; it resets itself RESET_DELAY s after the fall ended. */
+  /** Advance the fall animation by frameDt seconds; with autoReset (the default) it resets itself RESET_DELAY s after the fall ended. */
   update(frameDt: number): void;
 }
 
@@ -167,9 +167,17 @@ const BOUNDS_MARGIN = 0.05;
  * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
  * `yaw` about +Y like three.js `rotation.y`: its front (+Z) points at (sin yaw, cos yaw), so
  * `yaw = facingYaw(x, z)` makes it look at a shooter at the origin. The hit spheres turn with it.
- * `id` is the HitTarget id the bullets report.
+ * `id` is the HitTarget id the bullets report. `autoReset` (default true, the stage-1 practice range)
+ * makes the dummy stand up again RESET_DELAY s after its fall; a mission passes false so a downed
+ * soldier stays down (reset() still works).
  */
-export function createTargetDummy(position: Vec3, yaw: number, id = 'dummy'): TargetDummy {
+export function createTargetDummy(
+  position: Vec3,
+  yaw: number,
+  id = 'dummy',
+  opts: { autoReset?: boolean } = {},
+): TargetDummy {
+  const autoReset = opts.autoReset ?? true;
   const groundY = position.y;
   const group = new THREE.Group();
   group.name = 'target-dummy';
@@ -247,7 +255,7 @@ export function createTargetDummy(position: Vec3, yaw: number, id = 'dummy'): Ta
       }
       if (fallTime >= FALL_DURATION) {
         lyingTime += dt;
-        if (lyingTime >= RESET_DELAY - TIMER_EPSILON) reset();
+        if (autoReset && lyingTime >= RESET_DELAY - TIMER_EPSILON) reset();
       }
     },
   };

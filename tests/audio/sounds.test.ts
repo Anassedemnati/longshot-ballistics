@@ -6,6 +6,7 @@ import {
   playDryFire,
   playImpactDust,
   playImpactHit,
+  playImpactMetal,
   playReload,
   playShot,
 } from '../../src/audio/sounds';
@@ -18,6 +19,7 @@ const CLIP: Clip = { buffer: { duration: 1.9 } as AudioBuffer, start: 0.1, lengt
 function fakeEngine(status: ClipStatus) {
   const created: string[] = [];
   const buffers: unknown[] = [];
+  const rates: Array<{ value: number }> = [];
   const param = () => ({
     value: 0,
     setValueAtTime: () => undefined,
@@ -39,6 +41,7 @@ function fakeEngine(status: ClipStatus) {
         buffers.push(b);
       },
     };
+    if (kind === 'source') rates.push(n.playbackRate);
     return n;
   };
   const ctx = {
@@ -57,7 +60,7 @@ function fakeEngine(status: ClipStatus) {
     clip: () => (status === 'ready' ? CLIP : null),
     clipFailed: () => status === 'failed',
   } as unknown as AudioEngine;
-  return { engine, created, buffers };
+  return { engine, created, buffers, rates };
 }
 
 const SOUNDS: Array<[string, (e: AudioEngine) => void]> = [
@@ -65,6 +68,7 @@ const SOUNDS: Array<[string, (e: AudioEngine) => void]> = [
   ['shot (.338)', (e) => playShot(e, '338')],
   ['impact on the target', (e) => playImpactHit(e, 0.5, 800)],
   ['impact in the dust', (e) => playImpactDust(e, 0.5, 800)],
+  ['impact on metal', (e) => playImpactMetal(e, 0.5, 800)],
   ['bolt cycle', (e) => playBoltCycle(e)],
   ['reload', (e) => playReload(e)],
   ['dry fire', (e) => playDryFire(e)],
@@ -95,4 +99,16 @@ describe('recording or synthesised sound', () => {
       });
     });
   }
+});
+
+describe('metal ping', () => {
+  it('is the hit recording pitched well above the normal hit', () => {
+    const metal = fakeEngine('ready');
+    playImpactMetal(metal.engine, 0, 300);
+    const hit = fakeEngine('ready');
+    playImpactHit(hit.engine, 0, 300);
+    expect(metal.buffers).toEqual(hit.buffers);
+    expect(metal.rates[0].value).toBeGreaterThan(1.5);
+    expect(hit.rates[0].value).toBeLessThan(1.1);
+  });
 });

@@ -5,6 +5,7 @@ import {
   FALL_DURATION,
   MAX_OVERHANG,
   RESET_DELAY,
+  createTargetDummy,
   createTargetDummyAtRange,
   dummyHitSpheres,
 } from '../../src/scene/target';
@@ -250,5 +251,23 @@ describe('dummy fall and reset', () => {
     const targets = dummy.down ? [] : [dummy.hitTarget];
     expect(targets).toHaveLength(1);
     expect(targets[0].zones[0].center.y).toBeCloseTo(groundY + DUMMY_HEAD.cy, 9);
+  });
+  it('with autoReset off (mission soldiers) it stays down for good, and reset() still stands it up', () => {
+    const dummy = createTargetDummy({ x: 0, y: groundY, z: -RANGE }, 0, 'soldier-0', { autoReset: false });
+    dummy.knockDown();
+    dummy.update(FALL_DURATION);
+    for (let i = 0; i < 100; i++) dummy.update(1);
+    expect(dummy.down).toBe(true);
+    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    dummy.reset();
+    expect(dummy.down).toBe(false);
+  });
+
+  it('autoReset defaults to on and the id is the hit target id', () => {
+    const dummy = createTargetDummy({ x: 0, y: groundY, z: -RANGE }, 0, 'soldier-7');
+    expect(dummy.hitTarget.id).toBe('soldier-7');
+    dummy.knockDown();
+    dummy.update(FALL_DURATION + RESET_DELAY);
+    expect(dummy.down).toBe(false);
   });
 });

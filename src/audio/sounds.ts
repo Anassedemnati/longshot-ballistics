@@ -25,7 +25,10 @@ const LEVELS = {
   dryFire: 0.6,
   impactHit: 0.8,
   impactDust: 0.6,
+  impactMetal: 0.7,
 };
+/** Playback-rate factor that turns the impact recording into a bright metallic ping (vehicle bodies, engines). */
+const METAL_PITCH = 1.8;
 /** Random playback-rate spread of a shot (+-3 %) and of an impact (+-5 %), so repeats differ. */
 const SHOT_RATE_SPREAD = 0.03;
 const IMPACT_RATE_SPREAD = 0.05;
@@ -281,6 +284,33 @@ export function playImpactDust(e: AudioEngine, delaySec: number, distanceM: numb
         cutoff: distanceCutoffHz(distanceM),
       }),
     () => synthImpactDust(s, distanceM),
+  );
+}
+
+/** Fallback metal ping: a bright click and a short ringing tone, `distanceM` away. */
+function synthImpactMetal(s: Stage, distanceM: number): void {
+  const level = distanceGain(distanceM) * IMPACT_LEVEL * 0.25;
+  metalClick(s, s.t, 2300, level);
+  tone(s, 'sine', s.t, 1500, 1350, 0.12, level * 0.5, 0.001, 0.14);
+}
+
+/**
+ * Bullet striking metal (a vehicle body or engine) `distanceM` away, heard `delaySec` later: the hit
+ * recording pitched up into a ping (no extra recording), with the same distance treatment as the others.
+ */
+export function playImpactMetal(e: AudioEngine, delaySec: number, distanceM: number): void {
+  const s = stage(e, delaySec);
+  if (!s) return;
+  recordingOrSynth(
+    e,
+    'impact_hit',
+    (clip) =>
+      playClip(s, clip, {
+        level: LEVELS.impactMetal * impactGain(distanceM),
+        rate: METAL_PITCH * jitterRate(IMPACT_RATE_SPREAD),
+        cutoff: Math.min(8000, distanceCutoffHz(distanceM) * 1.5),
+      }),
+    () => synthImpactMetal(s, distanceM),
   );
 }
 
