@@ -40,10 +40,13 @@ import { windVector } from './config';
 import type { MissionConfig } from './config';
 import { installDebugHook } from './debugHook';
 import { applyImpact } from './impact';
+import { settledWithin } from './preload';
 import { isComplete, markAssistsUsed, newStats, recordFailure, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
 
+/** Longest the mission start waits for the glTF models (logs, grass, boulders, the nest's rocks), ms; later they join the scene as they arrive. */
+const MODELS_TIMEOUT_MS = 8000;
 /** Frame time cap, s: a long stall (hidden tab) must not fast-forward bullets, dust or reloads. */
 const MAX_FRAME_DT = 0.1;
 /** HUD result shown when the trigger is pulled during a reload. */
@@ -141,7 +144,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   // Sky and post-processing: with the HDRI (background, image-based light, matched fog, exposure) the world is drawn
   // through the composer; without it (file missing, `?post=off`) the procedural sky stays and the render is direct.
-  const hdri = await hdriLoading;
+  // The glTF models were requested with the world: wait for them too (they load alongside the HDRI), so the vegetation is there on the first frame.
+  const [hdri] = await Promise.all([hdriLoading, settledWithin([world.vegetation.ready, world.nest.ready], MODELS_TIMEOUT_MS)]);
   if (hdri) applyHdriSky(renderer, scene, config.theme, hdri);
   const post = createPostFx({
     renderer,
