@@ -149,6 +149,10 @@ interface WallShape {
   /** Height of the fine layering on the walls (strata, bumps), m, and its cell size (x, z), m. */
   strata: number;
   strataCell: readonly [number, number];
+  /** Eroded gullies: channels cut into the ridges (depth, m, at most; cell size (x, z), m, sets their spacing). Never cut below the wall's base. */
+  gully: { depth: number; cell: readonly [number, number] };
+  /** Rocky crags: sharp ribs standing on the ridges (height, m, at most; cell size (x, z), m). */
+  crag: { height: number; cell: readonly [number, number] };
 }
 
 const signed = (n: number): number => (n - 0.5) * 2; // [0, 1] -> [-1, 1]
@@ -164,7 +168,16 @@ const THEME_SHAPES: Record<ThemeId, ThemeShape> = {
       0.3 * signed(n(x / 48 + 5.1, z / 33 - 2.9)),
     outcrops: { count: 8, minRadius: 6, maxRadius: 10, minHeight: 2.6, maxHeight: 4.4 },
     // Sandstone ridgelines with horizontal strata: 55-248 m.
-    wall: { base: 55, ridge: 175, ridgeCell: [320, 430], crest: 1, strata: 18, strataCell: [85, 110] },
+    wall: {
+      base: 55,
+      ridge: 175,
+      ridgeCell: [320, 430],
+      crest: 1,
+      strata: 18,
+      strataCell: [85, 110],
+      gully: { depth: 18, cell: [130, 170] },
+      crag: { height: 14, cell: [95, 115] },
+    },
   },
   arctic: {
     salt: 0x7a3c19,
@@ -176,7 +189,16 @@ const THEME_SHAPES: Record<ThemeId, ThemeShape> = {
       0.12 * signed(n(x / 70 + 1.7, z / 52 - 8.8)),
     outcrops: { count: 10, minRadius: 5, maxRadius: 9, minHeight: 2.2, maxHeight: 4.0 },
     // Broad snowy ridges, sharper crests and smoother flanks than the desert's: 55-213 m.
-    wall: { base: 55, ridge: 150, ridgeCell: [440, 560], crest: 1.4, strata: 8, strataCell: [170, 210] },
+    wall: {
+      base: 55,
+      ridge: 150,
+      ridgeCell: [440, 560],
+      crest: 1.4,
+      strata: 8,
+      strataCell: [170, 210],
+      gully: { depth: 12, cell: [170, 210] },
+      crag: { height: 9, cell: [130, 150] },
+    },
   },
   valley: {
     salt: 0x35b2d1,
@@ -188,7 +210,16 @@ const THEME_SHAPES: Record<ThemeId, ThemeShape> = {
       0.6 * signed(n(x / 80 + 3.1, z / 70 - 5.5)),
     outcrops: { count: 12, minRadius: 4, maxRadius: 8, minHeight: 1.6, maxHeight: 3.2 },
     // Rounded green hills that grow into mountains: 55-172 m.
-    wall: { base: 55, ridge: 105, ridgeCell: [380, 460], crest: 0.8, strata: 12, strataCell: [130, 150] },
+    wall: {
+      base: 55,
+      ridge: 105,
+      ridgeCell: [380, 460],
+      crest: 0.8,
+      strata: 12,
+      strataCell: [130, 150],
+      gully: { depth: 9, cell: [200, 240] },
+      crag: { height: 6, cell: [140, 160] },
+    },
   },
 };
 
@@ -239,11 +270,24 @@ function mountainRoughness(noise: Noise, x: number, z: number): number {
   );
 }
 
-/** Height of the valley walls at a point `sd` metres outside the sector: eroded ridgelines with strata, risen by `sd`. */
-function wallHeight(wall: WallShape, noise: Noise, x: number, z: number, sd: number): number {
+/**
+ * Height of the valley walls at a point `sd` metres outside the sector: eroded ridgelines with strata, risen by `sd`.
+ * On top of the ridges, domain-warped ridged noise cuts gullies down their flanks and stands crags on them. Both
+ * are 100 m or more across (the render mesh is 25 m out here, so finer relief would be lost or alias); the finer
+ * rock detail comes from the terrain shader. The gullies never cut below the wall's base, the crags stay inside the 275 m cap.
+ */
+function wallHeight(wall: WallShape, noise: Noise, detail: Noise, x: number, z: number, sd: number): number {
   const ridge = Math.pow(ridged(noise(x / wall.ridgeCell[0] + 4, z / wall.ridgeCell[1] - 2)), wall.crest);
   const strata = wall.strata * noise(x / wall.strataCell[0] + 9.1, z / wall.strataCell[1] - 3.7);
-  return smoothstep(WALL_START, WALL_FULL, sd) * (wall.base + wall.ridge * ridge + strata);
+  // Domain warp, so the gullies and ribs wander instead of following the lattice.
+  const wx = x + 60 * signed(detail(x / 240 + 3.3, z / 240 - 8.1));
+  const wz = z + 60 * signed(detail(x / 240 - 5.7, z / 240 + 1.9));
+  const ridgeHeight = wall.ridge * ridge;
+  const higher = 0.3 + 0.7 * ridge; // the deepest gullies and the tallest crags are on the high ridges
+  const gully = Math.pow(ridged(detail(wx / wall.gully.cell[0] + 1.7, wz / wall.gully.cell[1] - 6.3)), 2);
+  const cut = Math.min(wall.gully.depth * gully * higher, ridgeHeight + strata);
+  const crag = wall.crag.height * Math.pow(ridged(detail(wx / wall.crag.cell[0] + 8.9, wz / wall.crag.cell[1] + 2.2)), 3) * higher;
+  return smoothstep(WALL_START, WALL_FULL, sd) * (wall.base + ridgeHeight + strata - cut + crag);
 }
 
 /**
@@ -258,6 +302,7 @@ export function createTerrainField(theme: ThemeId, seed: number, position: Firin
   // Their own lattices, so the walls and the crags do not echo the dunes.
   const wallNoise = createNoise(mix ^ 0x68e31da4);
   const rockNoise = createNoise(mix ^ 0x2c1b3c6d);
+  const detailNoise = createNoise(mix ^ 0x4b1d9e07); // the gullies and crags on the walls
   const outcrops = placeOutcrops(shape, seed);
   const site = FIRING_POSITIONS[position];
   const smoothRise = position === 'ridge';
@@ -302,7 +347,7 @@ export function createTerrainField(theme: ThemeId, seed: number, position: Firin
 
     // The valley walls: nothing within WALL_START of the sector (the early-out keeps the bullets' and
     // the layout's calls inside the sector as cheap as before).
-    if (sd > WALL_START) h += wallHeight(shape.wall, wallNoise, x, z, sd);
+    if (sd > WALL_START) h += wallHeight(shape.wall, wallNoise, detailNoise, x, z, sd);
     return h;
   };
 

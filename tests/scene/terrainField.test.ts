@@ -397,6 +397,26 @@ describe('valley walls', () => {
     });
   }
 
+  for (const theme of THEME_IDS) {
+    it(`${theme}: stay rugged (gullies and crags on the ridges) without ever cutting below the wall's base`, () => {
+      for (const seed of [1, 20261101]) {
+        const field = createTerrainField(theme, seed);
+        // Along a line across the left wall: the height minus its 110 m moving mean (rms) is the ruggedness at 100 m scale.
+        const hs: number[] = [];
+        for (let x = -1950; x <= -700; x += 10) hs.push(field.height(x, -900));
+        let sumSquares = 0;
+        let counted = 0;
+        for (let k = 5; k < hs.length - 5; k++) {
+          const mean = hs.slice(k - 5, k + 6).reduce((a, b) => a + b, 0) / 11;
+          sumSquares += (hs[k] - mean) ** 2;
+          counted++;
+          expect(hs[k], `${theme} seed ${seed} x=${-1950 + 10 * k}`).toBeGreaterThanOrEqual(48);
+        }
+        expect(Math.sqrt(sumSquares / counted), `${theme} seed ${seed}`).toBeGreaterThan(1);
+      }
+    });
+  }
+
   it('differ per theme: the desert is the highest and sharpest, the valley the lowest and roundest', () => {
     const max = (theme: ThemeId): number => {
       const field = createTerrainField(theme, 1);
