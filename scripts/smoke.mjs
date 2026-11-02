@@ -36,6 +36,18 @@ const RESULTS_GAME_S = 1.5;
  */
 const HOLD_300M = 0.45;
 /**
+ * Hold-over, m, by range for the same round, from the same ballistics (desert air, no wind, zeroed at 100 m; the real drop
+ * less the few cm the sight line sits above the bore): the enemy snipers lie 150-450 m out in the missions below.
+ */
+const HOLD_TABLE = [[100, 0], [150, 0], [200, 0.09], [250, 0.24], [300, 0.45], [350, 0.72], [400, 1.06], [450, 1.47], [500, 1.96]];
+function holdFor(range) {
+  const i = HOLD_TABLE.findIndex(([r]) => r >= range);
+  if (i <= 0) return HOLD_TABLE[Math.max(i, 0)][1];
+  const [r0, h0] = HOLD_TABLE[i - 1];
+  const [r1, h1] = HOLD_TABLE[i];
+  return h0 + ((h1 - h0) * (range - r0)) / (r1 - r0);
+}
+/**
  * Missions of the smoke. The URL codec (src/mission/config.ts) writes v2.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>;
  * the hand-written missions below stay in the older v1 form (the first eleven fields), which must keep working: it decodes
  * to ridge, unsuppressed, 0 enemy snipers, no assists, and every code the game writes back is v2 (V1_TAIL below).
@@ -68,6 +80,11 @@ const THEME_NAMES = { d: 'desert', a: 'arctic', v: 'valley' };
 /** Draw-call budget of the largest mission (it draws about 300 today). */
 const MAX_DRAW_CALLS = 400;
 const MISSION_MAX = 'v1.d.100.1500.10.3.120.3.338.m.m.1'; // the largest mission: 10 soldiers + 3 vehicle targets, many buildings and vehicles, 12 m/s
+const MISSION_MAX_SNIPERS = 'v2.d.100.1500.10.3.120.3.338.m.m.1.r.0.3.0'; // the same with 3 enemy snipers
+/** 1 soldier at 300 m among many buildings, calm, 2 enemy snipers (seed 2 puts both on rooftops, 198 and 320 m out). */
+const MISSION_SNIPERS = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.2.0';
+/** The same with one enemy sniper, for the mission-failed path. */
+const MISSION_SNIPER_ONE = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0';
 const MISSION_THEMES = ['a', 'v'].map((t) => `v1.${t}.400.800.4.1.45.9.308.m.m.3`); // arctic, valley: wind, props, a vehicle target
 
 function log(message) {
@@ -512,6 +529,18 @@ async function run() {
     let st = await gameState(mission);
     check(st.targetsLeft === 3 && st.soldiers.length === 3, 'a non-legacy mission starts with 3 targets standing');
     check(st.stats.startMs === null, 'the mission clock is stopped before the first pointer lock or shot');
+    check(
+      st.snipers.length === 0 && st.snipersLeft === 0 && st.health === 100 && st.detection === 0 && !st.covered,
+      'a mission without enemy snipers: no snipers, full health, no detection',
+    );
+    check(
+      (await mission.locator('.threat-panel').count()) === 0 && (await mission.locator('.cover-mask').count()) === 0,
+      'a mission without enemy snipers has no threat panel and no cover mask',
+    );
+    await mission.keyboard.press('KeyC');
+    check(!(await gameState(mission)).covered, 'C does nothing in a mission without enemy snipers');
+    await mission.evaluate(() => window.__game.setDetection(100)); // no encounter: the call changes nothing
+    check((await gameState(mission)).detection === 0, 'setDetection does nothing without enemy snipers');
     check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
     check((await mission.locator('.hud-line', { hasText: "Wind calm" }).count()) === 1, 'HUD says "Wind calm" at 0 m/s');
     await animationFrames(mission, 5);
@@ -728,7 +757,8 @@ async function run() {
     check(MISSION_DEFAULT_RE.test(missionCode(plainMenu) ?? ''), `Enter on Start runs the default mission (${missionCode(plainMenu)})`);
     const enterFrames = await animationFrames(plainMenu, 3);
     check(enterFrames.frames >= 3, 'the default mission runs');
-    check((await plainMenu.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'default mission: HUD says "Targets 3/3"');
+    check((await plainMenu.locator('.hud-line', { hasText: 'Targets 4/4' }).count()) === 1, 'default mission: HUD says "Targets 4/4" (3 soldiers + 1 enemy sniper)');
+    check((await plainMenu.locator('.threat-panel').count()) === 1, 'the default mission (1 enemy sniper) has a threat panel');
     check(
       (await plainMenu.locator('.hud-line', { hasText: "Wind 4.5 m/s from 9 o'clock (left)" }).count()) === 1,
       'default mission: HUD says "Wind 4.5 m/s from 9 o\'clock (left)"',
@@ -824,8 +854,8 @@ async function run() {
       check(THEME_NAMES[(missionCode(themed) ?? '').split('.')[1]] === theme, `Start opens a ${theme} mission (${missionCode(themed)})`);
       st = await gameState(themed);
       check(
-        st.targetsLeft === cfg.soldiers + cfg.vehicleTargets && st.soldiers.length === cfg.soldiers && st.vehicles.length === cfg.vehicleTargets,
-        `the ${theme} mission has the menu's targets (${cfg.soldiers} soldiers + ${cfg.vehicleTargets} vehicle targets = ${st.targetsLeft})`,
+        st.targetsLeft === cfg.soldiers + cfg.vehicleTargets + cfg.enemySnipers && st.soldiers.length === cfg.soldiers && st.vehicles.length === cfg.vehicleTargets && st.snipers.length === cfg.enemySnipers,
+        `the ${theme} mission has the menu's targets (${cfg.soldiers} soldiers + ${cfg.vehicleTargets} vehicle targets + ${cfg.enemySnipers} enemy snipers = ${st.targetsLeft})`,
       );
       await animationFrames(themed, 5);
       const themedLook = await analyzePng(themed, await shoot(themed, { hideHud: true, path: join(OUT_DIR, `menu-${theme}-mission.png`) }));
@@ -852,7 +882,7 @@ async function run() {
     );
     await clickStart(random, { debug: true });
     st = await gameState(random);
-    check(st.targetsLeft === second.soldiers + second.vehicleTargets, `the random mission has the menu's targets (${st.targetsLeft})`);
+    check(st.targetsLeft === second.soldiers + second.vehicleTargets + second.enemySnipers, `the random mission has the menu's targets (${st.targetsLeft})`);
     await animationFrames(random, 5);
     const randomLook = await analyzePng(random, await shoot(random, { hideHud: true, path: join(OUT_DIR, 'mission.png') }));
     check(randomLook.distinctAll >= 6, `the random mission canvas is not one colour (${randomLook.distinctAll} distinct sampled colours)`);
@@ -883,7 +913,7 @@ async function run() {
     check(Object.entries(custom).every(([k, v]) => setBefore[k] === v), 'the menu holds the non-default settings before Start');
     await clickStart(backPage, { debug: true });
     st = await gameState(backPage);
-    check(st.targetsLeft === 5 && st.vehicles.length === 1, 'the mission started with those settings (4 soldiers + 1 vehicle target)');
+    check(st.targetsLeft === 6 && st.vehicles.length === 1 && st.snipers.length === 1, 'the mission started with those settings (4 soldiers + 1 vehicle target + the default enemy sniper)');
     await backPage.waitForLoadState('networkidle');
     await backPage.goBack({ waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
@@ -938,6 +968,166 @@ async function run() {
     check((await hudPage.evaluate(() => window.__game)) === undefined, 'the menu from the HUD link runs no game');
     await hudPage.close();
 
+    // 12c. Enemy snipers (spec B.4): 1 soldier + 2 snipers on rooftops. Glints, detection, incoming fire, cover, kills, results.
+    const fight = await openPage();
+    await startGame(fight, `m=${MISSION_SNIPERS}&debug=1`);
+    await fight.evaluate(() => window.__game.unlockAudio());
+    st = await gameState(fight);
+    check(st.snipers.length === 2 && st.snipersLeft === 2 && st.soldiers.length === 1, 'the sniper mission has 1 soldier and 2 enemy snipers');
+    check(st.targetsLeft === 3, 'the snipers are targets: 3 targets standing');
+    check((await fight.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
+    check(st.snipers.every((k) => k.site === 'roof'), `both snipers lie on rooftops (${st.snipers.map((k) => k.site).join(', ')})`);
+    check(st.health === 100 && st.detection === 0 && !st.covered, 'the fight starts at full health, undetected, exposed');
+    await animationFrames(fight, 5);
+    check((await fight.locator('.threat-panel').count()) === 1, 'the threat panel exists');
+    const searching = (await fight.locator('.threat-panel').textContent()) ?? '';
+    check(/EXPOSED/.test(searching) && /Health 100/.test(searching) && /2 snipers left/.test(searching) && /Enemy searching/.test(searching), `the threat line reads "${searching}"`);
+    check(/PAUSED/.test(searching), 'the threat line says PAUSED while the pointer is free');
+    st = await gameState(fight);
+    check(st.snipers.some((k) => k.glint), 'a sniper scope glint is on screen (the scope sweeps toward the player)');
+    // The aim points are where the bodies are: every sniper sits on a roof, so well above the ground.
+    check(st.snipers.every((k) => k.head.y > 3), 'the snipers lie on roofs (head 3+ m up)');
+    // Frozen while the pointer is free: nothing happens to the health even with the detection forced up.
+    await fight.evaluate(() => window.__game.setDetection(100));
+    await waitGameSeconds(fight, 5);
+    check((await gameState(fight)).health === 100, 'paused (pointer free): a 100 % detection does nothing');
+    // The real pointer lock (a click on the canvas) starts the clock.
+    await fight.mouse.click(640, 360);
+    await fight.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
+    check(true, 'a click locks the pointer');
+    await fight.evaluate(() => window.__game.setDetection(0));
+    // Look at the nearer sniper through the scope for the glint screenshot.
+    const nearSniper = [...st.snipers].sort((a, b) => Math.hypot(a.head.x, a.head.z) - Math.hypot(b.head.x, b.head.z))[0];
+    await fight.evaluate(([x, y, z]) => {
+      window.__game.toggleScope();
+      window.__game.aimAt(x, y, z);
+    }, [nearSniper.head.x, nearSniper.head.y, nearSniper.head.z]);
+    await animationFrames(fight, 5);
+    await fight.screenshot({ path: join(OUT_DIR, 'snipers-scoped.png') });
+    await fight.evaluate(() => window.__game.toggleScope());
+
+    // Detected: the snipers fire. Health drops while exposed.
+    await fight.evaluate(() => window.__game.setDetection(100));
+    await animationFrames(fight, 3);
+    const firing = (await fight.locator('.threat-panel').textContent()) ?? '';
+    check(/SNIPER FIRING IN \d\.\d s/.test(firing) || /INCOMING BOMBARDMENT/.test(firing), `at 100 % detection the threat line counts down ("${firing}")`);
+    check(!/PAUSED/.test(firing), 'the threat line is not paused once the pointer is locked');
+    st = await gameState(fight);
+    check(st.snipers.every((k) => k.glint), 'detected: the glints are steady (on for every sniper)');
+    await fight.waitForFunction(() => window.__game.state().health < 100, undefined, { timeout: RESULT_TIMEOUT_MS });
+    st = await gameState(fight);
+    log(`exposed at 100 % detection: health ${st.health}`);
+    check(st.health <= 82, `an exposed player is hit: -18 per sniper shot, -45 per bombardment (health ${st.health})`);
+    await fight.screenshot({ path: join(OUT_DIR, 'snipers-hit.png') });
+
+    // Cover (C): drops the scope, blocks firing, shows the cover mask; sniper fire no longer hurts.
+    await fight.evaluate(() => window.__game.toggleScope());
+    check((await fight.locator('.scope-overlay').isVisible()) === true, 'the scope is up before ducking');
+    await fight.keyboard.press('KeyC');
+    st = await gameState(fight);
+    check(st.covered === true, 'C ducks into cover');
+    check((await fight.locator('.scope-overlay').isVisible()) === false, 'ducking drops the scope');
+    check((await fight.locator('.cover-mask').isVisible()) === true, 'the cover mask is shown');
+    const shotsBefore = st.stats.shots;
+    await fight.evaluate(() => {
+      window.__game.fire();
+      window.__game.toggleScope(); // right click is ignored in cover too
+    });
+    st = await gameState(fight);
+    check(st.stats.shots === shotsBefore, 'no shooting from behind cover');
+    check((await fight.locator('.scope-overlay').isVisible()) === false, 'no scope from behind cover');
+    await fight.screenshot({ path: join(OUT_DIR, 'snipers-cover.png') });
+    const healthInCover = st.health;
+    // Keep the detection pinned at 100 %, as a player who keeps shooting would: the snipers keep firing, at the cover,
+    // and a bombardment is called (12 s of detection in all, a 4 s warning): it still costs 5 in cover, nothing else does.
+    await fight.evaluate(() => {
+      window.__pin = setInterval(() => window.__game.setDetection(100), 50);
+    });
+    await fight.waitForFunction(() => /INCOMING BOMBARDMENT \d\.\d s — C: COVER/.test(document.querySelector('.threat-panel')?.textContent ?? ''), undefined, {
+      timeout: RESULT_TIMEOUT_MS,
+    });
+    check(true, `a bombardment is announced with its countdown ("${await fight.locator('.threat-panel').textContent()}")`);
+    check(((await fight.locator('.threat-panel').textContent()) ?? '').startsWith('IN COVER'), 'the warning shows while IN COVER');
+    await fight.screenshot({ path: join(OUT_DIR, 'snipers-bombardment.png') });
+    check((await gameState(fight)).health === healthInCover, 'sniper fire at a player in cover cost nothing so far');
+    await fight.waitForFunction((was) => window.__game.state().health < was, healthInCover, { timeout: RESULT_TIMEOUT_MS });
+    await fight.evaluate(() => clearInterval(window.__pin));
+    st = await gameState(fight);
+    log(`bombardment in cover: health ${healthInCover} -> ${st.health}`);
+    check(healthInCover - st.health === 5, `the bombardment costs 5 in cover (health ${healthInCover} -> ${st.health})`);
+    await fight.keyboard.press('KeyC');
+    check((await gameState(fight)).covered === false && (await fight.locator('.cover-mask').isVisible()) === false, 'C again comes back up');
+
+    // Kill everything. Health is topped up and the detection reset so the kills are not a race against the snipers.
+    await fight.evaluate(() => {
+      window.__game.setHealth(100);
+      window.__game.setDetection(0);
+    });
+    st = await gameState(fight);
+    const byRange = [...st.snipers].sort((a, b) => Math.hypot(a.head.x, a.head.z) - Math.hypot(b.head.x, b.head.z));
+    for (const [n, sniper] of byRange.entries()) {
+      const range = Math.hypot(sniper.upperTorso.x, sniper.upperTorso.z);
+      const result = await shootAt(fight, sniper.upperTorso, holdFor(range));
+      log(`sniper ${sniper.id} at ${range.toFixed(0)} m: "${result}"`);
+      check(/^SNIPER DOWN/.test(result), `a shot at the upper torso of ${sniper.id} (${range.toFixed(0)} m) takes him out`);
+      await waitForTargetsLeft(fight, 2 - n);
+      st = await gameState(fight);
+      check(st.snipersLeft === 1 - n, `${1 - n} enemy sniper(s) left`);
+      check(st.snipers.find((k) => k.id === sniper.id).down && !st.snipers.find((k) => k.id === sniper.id).glint, 'the downed sniper has no glint');
+      await waitGameSeconds(fight, BOLT_GAME_S);
+    }
+    await animationFrames(fight, 3);
+    const cleared = (await fight.locator('.threat-panel').textContent()) ?? '';
+    check(/ALL SNIPERS DOWN/.test(cleared), `with both snipers down the threat line says so ("${cleared}")`);
+    check(st.complete === false, 'the soldier is still up: the mission is not complete yet');
+    const soldier = st.soldiers[0];
+    const soldierRange = Math.hypot(soldier.upperTorso.x, soldier.upperTorso.z);
+    const soldierResult = await shootAt(fight, soldier.upperTorso, holdFor(soldierRange));
+    check(/^HIT/.test(soldierResult), 'the soldier is hit');
+    await fight.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    st = await gameState(fight);
+    check(st.complete && st.targetsLeft === 0 && !st.stats.failed, 'all targets down (soldier and both snipers): the mission is complete');
+    check(((await fight.locator('.results-title').textContent()) ?? '') === 'Mission complete', 'the results say "Mission complete"');
+    const sniperRows = await resultsRows(fight);
+    check(sniperRows['Shots fired'] === '3' && sniperRows['Hits'] === '3', `results: 3 shots, 3 hits (${JSON.stringify(sniperRows)})`);
+    await fight.screenshot({ path: join(OUT_DIR, 'snipers-complete.png') });
+    await fight.close();
+
+    // Mission failed: one sniper, little health, full detection: the first shot kills.
+    const failing = await openPage();
+    await startGame(failing, `m=${MISSION_SNIPER_ONE}&debug=1`);
+    await failing.evaluate(() => window.__game.unlockAudio());
+    await failing.mouse.click(640, 360);
+    await failing.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
+    await failing.evaluate(() => {
+      window.__game.setHealth(10);
+      window.__game.setDetection(100);
+    });
+    await failing.waitForSelector('.results', { timeout: RESULT_TIMEOUT_MS });
+    st = await gameState(failing);
+    check(st.health === 0 && st.stats.failed && !st.complete && st.resultsShown, 'killed: the mission is failed, not complete, and the results are up');
+    check(((await failing.locator('.results-title').textContent()) ?? '') === 'Mission failed', 'the results say "Mission failed"');
+    check(/0 of 2 targets down/.test((await failing.locator('.results-summary').textContent()) ?? ''), 'the failed results say how many targets were down');
+    const failedRows = await resultsRows(failing);
+    check(failedRows['Shots fired'] === '0' && /^\d\d:\d\d$/.test(failedRows['Mission time'] ?? ''), `the failed results still show the stats (${JSON.stringify(failedRows)})`);
+    check((await failing.locator('.threat-panel').textContent()) === 'MISSION FAILED · you were killed', 'the threat line says MISSION FAILED');
+    const failedShots = st.stats.shots;
+    await failing.evaluate(() => window.__game.fire());
+    check((await gameState(failing)).stats.shots === failedShots, 'no shooting once the mission is failed');
+    check((await failing.locator('.results-button').count()) === 2, 'failed results: Restart and Menu buttons');
+    await failing.screenshot({ path: join(OUT_DIR, 'snipers-failed.png') });
+    await failing.close();
+
+    // The largest mission with 3 enemy snipers stays inside the draw-call budget.
+    const bigFight = await openPage();
+    await startGame(bigFight, `m=${MISSION_MAX_SNIPERS}&debug=1`);
+    await animationFrames(bigFight, 5);
+    st = await gameState(bigFight);
+    check(st.targetsLeft === 16 && st.snipers.length === 3, 'the largest mission with 3 enemy snipers has 16 targets');
+    log(`largest mission with 3 snipers: ${st.render.calls} draw calls, ${st.render.triangles} triangles`);
+    check(st.render.calls <= MAX_DRAW_CALLS, `with 3 enemy snipers it stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
+    await bigFight.close();
+
     // 13. A failed start and a failed frame leave a way out. These pages break on purpose, so they log errors the
     // other pages must not: they are opened without the `problems` listeners.
     const noGl = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
@@ -985,7 +1175,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-failed, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }
