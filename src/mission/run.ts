@@ -20,6 +20,7 @@ import type { HitTarget } from '../game/hit';
 import { rangeUnderCrosshair } from '../game/rangefinder';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
+import { FirstPersonRifle } from '../player/rifle';
 import { PlayerView } from '../player/view';
 import { createRenderer, resizeRenderer } from '../scene/renderer';
 import { showFatalError } from '../ui/fatal';
@@ -121,6 +122,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // Player
   const view = new PlayerView(document.body, shooter, window.innerWidth, window.innerHeight);
   const input = new InputState();
+  // The visible rifle: drawn over the world when not scoped, no flash when suppressed.
+  const rifleModel = new FirstPersonRifle(config.rifle, config.suppressed);
+  rifleModel.resize(window.innerWidth, window.innerHeight);
 
   /** Turn the view at a world point (also used by the debug hook). */
   function lookAtPoint(x: number, y: number, z: number): void {
@@ -200,7 +204,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(shooter, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
-    playShot(audio, config.rifle);
+    playShot(audio, config.rifle, config.suppressed);
+    rifleModel.fire(shot.boltCycle);
     if (shot.boltCycle) playBoltCycle(audio, BOLT_TIME_S);
     hud.setResult('Shot away…');
   }
@@ -209,6 +214,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (!weapon.reload()) return;
     hud.setRounds(weapon.ammo, weapon.magazine, true);
     playReload(audio, RELOAD_TIME_S);
+    rifleModel.reload(RELOAD_TIME_S);
   }
 
   /** Take a target out of the list the bullets see. */
@@ -309,6 +315,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   window.addEventListener('resize', () => {
     resizeRenderer(renderer, window.innerWidth, window.innerHeight);
     view.resize(window.innerWidth, window.innerHeight);
+    rifleModel.resize(window.innerWidth, window.innerHeight);
   });
 
   // Game loop
@@ -337,6 +344,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     for (const v of vehicles.values()) v.target.update(dt);
     dust.update(dt);
     sparks.update(dt);
+    rifleModel.update(dt);
 
     rangeTimer += dt;
     if (rangeTimer >= RANGEFINDER_INTERVAL_S) {
@@ -356,6 +364,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
 
     renderer.render(scene, view.camera);
+    if (!view.isScoped) rifleModel.render(renderer);
   }
   function frame(nowMs: number): void {
     try {

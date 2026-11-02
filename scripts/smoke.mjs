@@ -197,6 +197,34 @@ function analyzePng(page, png) {
   }, png.toString('base64'));
 }
 
+/**
+ * The fraction of a grid of points over the lower right of the picture that is NOT sky: where the sky is blue
+ * (blue well above red) a point of the rifle (black steel, olive polymer, sand chassis) is not. Aimed far above the
+ * horizon the whole lower half of the picture is sky, so only the rifle can make this fraction positive.
+ */
+function nonSkyFraction(page, png) {
+  return page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const { width, height } = bitmap;
+    const ctx = new OffscreenCanvas(width, height).getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+    const { data } = ctx.getImageData(0, 0, width, height);
+    let notSky = 0;
+    let total = 0;
+    for (let gy = 0; gy < 16; gy++) {
+      for (let gx = 0; gx < 32; gx++) {
+        const x = Math.floor(width * (0.6 + (0.35 * (gx + 0.5)) / 32));
+        const y = Math.floor(height * (0.55 + (0.4 * (gy + 0.5)) / 16));
+        const i = (y * width + x) * 4;
+        total++;
+        if (data[i + 2] - data[i] < 30) notSky++;
+      }
+    }
+    return notSky / total;
+  }, png.toString('base64'));
+}
+
 /** Screenshot the page, optionally with the HUD hidden so only the 3D canvas (and scope) is measured. */
 async function shoot(page, { hideHud, path }) {
   if (hideHud) await page.evaluate(() => document.querySelector('.hud')?.style.setProperty('visibility', 'hidden'));
@@ -505,6 +533,47 @@ async function run() {
     await near.close();
     await page.close();
 
+    // 5b. The first-person rifle: drawn over the lower right of the view while not scoped, hidden in the scope.
+    // Aimed far above the horizon the whole lower half of the picture is blue sky, so anything in its lower right that
+    // is not sky is the rifle. The scope's black DOM mask is hidden so it cannot stand in for "hidden".
+    const hand = await openPage();
+    await startGame(hand, 'range=300&wind=0&debug=1');
+    const handHead = (await gameState(hand)).soldiers[0].head;
+    await hand.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [handHead.x, handHead.y + 600, handHead.z]);
+    await animationFrames(hand, 5);
+    const handShown = await nonSkyFraction(hand, await shoot(hand, { hideHud: true, path: join(OUT_DIR, 'rifle-unscoped.png') }));
+    const handCallsShown = (await gameState(hand)).render.calls;
+    log(`rifle: unscoped, ${(handShown * 100).toFixed(0)} % of the lower-right points are not sky, ${handCallsShown} draw calls`);
+    check(handShown > 0.15, 'unscoped, the first-person rifle is drawn in the lower right of the view');
+    await hand.evaluate(() => {
+      window.__game.toggleScope();
+      document.querySelector('.scope-overlay')?.style.setProperty('display', 'none');
+    });
+    await animationFrames(hand, 5);
+    const handHidden = await nonSkyFraction(hand, await shoot(hand, { hideHud: true, path: join(OUT_DIR, 'rifle-scoped.png') }));
+    const handCallsHidden = (await gameState(hand)).render.calls;
+    log(`rifle: scoped, ${(handHidden * 100).toFixed(0)} % of the lower-right points are not sky, ${handCallsHidden} draw calls`);
+    check(handHidden === 0, 'scoped, the first-person rifle is hidden');
+    check(
+      handCallsShown > handCallsHidden && handCallsShown - handCallsHidden <= 15,
+      `the rifle adds a handful of draw calls to the reading (${handCallsHidden} -> ${handCallsShown})`,
+    );
+    await hand.close();
+
+    // A suppressed .338: the rifle shows, the shot goes off with the quiet sound, nothing throws (errors land in `problems`).
+    const quiet = await openPage();
+    await startGame(quiet, 'm=v2.d.300.300.3.0.0.9.338.n.n.1.r.1.0.0&debug=1');
+    await quiet.evaluate(() => window.__game.unlockAudio());
+    const quietHead = (await gameState(quiet)).soldiers[0].head;
+    await quiet.evaluate(([x, y, z]) => window.__game.aimAt(x, y, z), [quietHead.x, quietHead.y + 600, quietHead.z]);
+    await animationFrames(quiet, 5);
+    const quietShown = await nonSkyFraction(quiet, await shoot(quiet, { hideHud: true, path: join(OUT_DIR, 'rifle-suppressed.png') }));
+    check(quietShown > 0.15, `the suppressed .338 rifle is drawn too (${(quietShown * 100).toFixed(0)} % of the points)`);
+    await quiet.evaluate(() => window.__game.fire());
+    check((await gameState(quiet)).stats.shots === 1, 'a shot with the suppressor fitted goes off');
+    await animationFrames(quiet, 10);
+    await quiet.close();
+
     // 6. A real mission: three soldiers at 300 m, calm air. Down them one by one.
     const mission = await openPage();
     await startGame(mission, `m=${MISSION_OPEN}&debug=1`);
@@ -666,6 +735,7 @@ async function run() {
       `largest mission: ${st.render.calls} draw calls, ${st.render.triangles} triangles; ${bigPerf.frames} frames in ${Math.round(bigPerf.ms)} ms (${((bigPerf.frames / bigPerf.ms) * 1000).toFixed(0)} fps, ${launched.renderer}, headless)`,
     );
     check(st.render.calls <= MAX_DRAW_CALLS, `the largest mission stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
+    check(st.render.calls > 100, `the draw-call reading counts the world pass as well as the rifle (${st.render.calls} > 100)`);
     const bigPng = await analyzePng(big, await shoot(big, { hideHud: true, path: join(OUT_DIR, 'mission-max.png') }));
     check(bigPng.distinctAll >= 6, `the largest mission canvas is not one colour (${bigPng.distinctAll} distinct sampled colours)`);
     await big.close();
@@ -985,7 +1055,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }

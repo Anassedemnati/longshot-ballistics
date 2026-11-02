@@ -205,15 +205,33 @@ function synthShot(s: Stage): void {
   for (const reflection of SHOT_ECHOES) echo(s, t + reflection.delay, reflection.level, reflection.cutoff);
 }
 
-/** The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time. */
-export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308'): void {
+/** A suppressed shot is this much of the full level, and its sound is low-passed at `SUPPRESSED_CUTOFF_HZ`. */
+const SUPPRESSED_LEVEL = 0.22;
+const SUPPRESSED_CUTOFF_HZ = 1400;
+
+/** Fallback suppressed shot: a short, dull puff of low-passed noise with a soft thump under it. */
+function synthSuppressedShot(s: Stage): void {
+  noiseBurst(s, s.t, [{ type: 'lowpass', freq: SUPPRESSED_CUTOFF_HZ }], 0.18, 0.002, 0.12);
+  tone(s, 'sine', s.t, 110, 45, 0.15, 0.1, 0.004, 0.15);
+}
+
+/**
+ * The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time.
+ * A suppressed shot is much quieter and duller (level x 0.22, low-passed at 1400 Hz).
+ */
+export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308', suppressed = false): void {
   const s = stage(e);
   if (!s) return;
   recordingOrSynth(
     e,
     shotClipId(rifleId),
-    (clip) => playClip(s, clip, { level: LEVELS.shot, rate: jitterRate(SHOT_RATE_SPREAD) }),
-    () => synthShot(s),
+    (clip) =>
+      playClip(s, clip, {
+        level: LEVELS.shot * (suppressed ? SUPPRESSED_LEVEL : 1),
+        cutoff: suppressed ? SUPPRESSED_CUTOFF_HZ : undefined,
+        rate: jitterRate(SHOT_RATE_SPREAD),
+      }),
+    () => (suppressed ? synthSuppressedShot(s) : synthShot(s)),
   );
 }
 

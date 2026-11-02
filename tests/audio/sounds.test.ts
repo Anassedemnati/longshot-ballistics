@@ -20,6 +20,8 @@ function fakeEngine(status: ClipStatus) {
   const created: string[] = [];
   const buffers: unknown[] = [];
   const rates: Array<{ value: number }> = [];
+  const filters: Array<{ type: string; frequency: { value: number } }> = [];
+  const gains: Array<{ value: number }> = [];
   const param = () => ({
     value: 0,
     setValueAtTime: () => undefined,
@@ -42,6 +44,8 @@ function fakeEngine(status: ClipStatus) {
       },
     };
     if (kind === 'source') rates.push(n.playbackRate);
+    if (kind === 'filter') filters.push(n as unknown as (typeof filters)[number]);
+    if (kind === 'gain') gains.push(n.gain);
     return n;
   };
   const ctx = {
@@ -60,7 +64,7 @@ function fakeEngine(status: ClipStatus) {
     clip: () => (status === 'ready' ? CLIP : null),
     clipFailed: () => status === 'failed',
   } as unknown as AudioEngine;
-  return { engine, created, buffers, rates };
+  return { engine, created, buffers, rates, filters, gains };
 }
 
 const SOUNDS: Array<[string, (e: AudioEngine) => void]> = [
@@ -110,5 +114,41 @@ describe('metal ping', () => {
     expect(metal.buffers).toEqual(hit.buffers);
     expect(metal.rates[0].value).toBeGreaterThan(1.5);
     expect(hit.rates[0].value).toBeLessThan(1.1);
+  });
+});
+
+describe('suppressed shot', () => {
+  it('is much quieter than the open shot and low-passed at 1400 Hz', () => {
+    const open = fakeEngine('ready');
+    playShot(open.engine, '308');
+    const quiet = fakeEngine('ready');
+    playShot(quiet.engine, '308', true);
+    expect(open.filters).toEqual([]); // the open shot is not filtered
+    expect(quiet.filters.map((f) => [f.type, f.frequency.value])).toEqual([['lowpass', 1400]]);
+    expect(quiet.gains[0].value).toBeCloseTo(0.22 * open.gains[0].value, 9);
+  });
+
+  it('uses the same recording per rifle as the open shot', () => {
+    for (const id of ['308', '338'] as const) {
+      const open = fakeEngine('ready');
+      playShot(open.engine, id);
+      const quiet = fakeEngine('ready');
+      playShot(quiet.engine, id, true);
+      expect(quiet.buffers).toEqual(open.buffers);
+    }
+  });
+
+  it('is skipped while its recording is decoding', () => {
+    const { engine, created } = fakeEngine('pending');
+    playShot(engine, '308', true);
+    expect(created).toEqual([]);
+  });
+
+  it('has a low-passed synthesised fallback', () => {
+    const { engine, created, filters } = fakeEngine('failed');
+    playShot(engine, '308', true);
+    expect(created.length).toBeGreaterThan(0);
+    expect(filters.length).toBeGreaterThan(0);
+    for (const f of filters) expect(f.type === 'lowpass' && f.frequency.value === 1400).toBe(true);
   });
 });
