@@ -281,8 +281,9 @@ function colorChunk(look: TerrainMaterialLook): string {
                 + 0.5 * (vnoise(vec2(vGround.x * 0.8 - vGround.z * 0.6, vGround.y * 1.3) / 14.0) - 0.5) * 2.0 * fine;
       float rockW = smoothstep(uRockMask.x, uRockMask.y, steep + wob * 0.07);
       rockW = max(rockW, smoothstep(uRockMask.z, uRockMask.w, vGround.y + wob * 9.0));
+      float capW = 0.0;
       #ifdef TERRAIN_SNOW
-      float capW = smoothstep(uSnow.x, uSnow.x + uSnow.y, vGround.y + wob * 14.0) * (1.0 - smoothstep(uSnow.z, uSnow.w, steep + wob * 0.05));
+      capW = smoothstep(uSnow.x, uSnow.x + uSnow.y, vGround.y + wob * 14.0) * (1.0 - smoothstep(uSnow.z, uSnow.w, steep + wob * 0.05));
       #ifndef TERRAIN_CAPTEX
       rockW *= 1.0 - capW; // the ground is snow already: the cap just keeps the bare rock off the high gentle ground
       #endif
@@ -354,8 +355,11 @@ function colorChunk(look: TerrainMaterialLook): string {
         shadeN = normalize(mix(shadeN, topNormal(texture2D(tCapNor, gp / 4.5).xyz * 2.0 - 1.0, gN, 0.8 * nFadeC), capW));
       }
       #endif
+      #ifdef TERRAIN_CAPTEX
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), capW); // snow takes neither the grass's vertex tint nor its mottle tint
+      #endif
       diffuseColor.rgb *= albedo;
-      diffuseColor.rgb *= mix(${glslVec(mottle.tintA)}, ${glslVec(mottle.tintB)}, drift * 0.5 + 0.25);
+      diffuseColor.rgb *= mix(vec3(1.0), mix(${glslVec(mottle.tintA)}, ${glslVec(mottle.tintB)}, drift * 0.5 + 0.25), 1.0 - capW);
       diffuseColor.rgb *= 1.0 + broad * ${glsl(mottle.broad * 0.6)}; // the textures carry the fine grain
       #endif
       `;
