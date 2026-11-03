@@ -577,7 +577,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
     // The rifle is in front of the player's face: not through the scope, and not while he is ducked behind cover.
     rifleModel.orient(view.camera.quaternion); // the world's sun and sky stay put as he turns
-    post.render(!view.isScoped && !combat?.covered);
+    post.render(!view.isScoped && !combat?.covered, view.isScoped);
   }
   function frame(nowMs: number): void {
     try {

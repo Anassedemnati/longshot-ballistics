@@ -48,6 +48,53 @@ export interface BloomParams {
   threshold: number;
 }
 
+/**
+ * Strength of the scope's sharpening, 0 (gentle) to 1 (strong): see `SharpenShader`. Through the scope a man at 500 m is a
+ * few dozen pixels tall, and the softening the frame needs elsewhere (FXAA, a reduced render scale) smears his outline into
+ * the ground; the scope view drops FXAA and sharpens instead.
+ */
+export const SCOPE_SHARPNESS = 0.7;
+
+/**
+ * Contrast-adaptive sharpening (after AMD's FidelityFX CAS, the light five-tap form) on the display colours: each pixel is
+ * pushed away from its four neighbours by a weight that shrinks where the neighbourhood already spans the full range, so
+ * edges gain contrast without ringing or haloes and flat areas (sky, sand) are left alone.
+ */
+export const SharpenShader = {
+  name: 'SharpenShader',
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    /** One pixel of the drawing buffer, in texture coordinates. */
+    texel: { value: new THREE.Vector2(1 / 1024, 1 / 1024) },
+    sharpness: { value: SCOPE_SHARPNESS },
+  },
+  vertexShader: /* glsl */ `
+		varying vec2 vUv;
+		void main() {
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+		}`,
+  fragmentShader: /* glsl */ `
+		uniform sampler2D tDiffuse;
+		uniform vec2 texel;
+		uniform float sharpness;
+		varying vec2 vUv;
+		void main() {
+			vec3 n = texture2D( tDiffuse, vUv + vec2( 0.0, texel.y ) ).rgb;
+			vec3 w = texture2D( tDiffuse, vUv - vec2( texel.x, 0.0 ) ).rgb;
+			vec4 centre = texture2D( tDiffuse, vUv );
+			vec3 c = centre.rgb;
+			vec3 e = texture2D( tDiffuse, vUv + vec2( texel.x, 0.0 ) ).rgb;
+			vec3 s = texture2D( tDiffuse, vUv - vec2( 0.0, texel.y ) ).rgb;
+			vec3 lo = min( c, min( min( n, s ), min( w, e ) ) );
+			vec3 hi = max( c, max( max( n, s ), max( w, e ) ) );
+			vec3 amount = sqrt( clamp( min( lo, 1.0 - hi ) / max( hi, vec3( 1e-4 ) ), 0.0, 1.0 ) );
+			vec3 weight = amount * ( -1.0 / mix( 8.0, 5.0, sharpness ) );
+			vec3 sharpened = ( c + ( n + s + w + e ) * weight ) / ( 1.0 + 4.0 * weight );
+			gl_FragColor = vec4( clamp( sharpened, 0.0, 1.0 ), centre.a );
+		}`,
+};
+
 /** Subtle: only what is far brighter than a lit surface blooms (see `BloomParams.threshold`). */
 export const BLOOM: Record<ThemeId, BloomParams> = {
   desert: { strength: 0.25, radius: 0.5, threshold: 3 },
@@ -191,12 +238,17 @@ export interface PostFx {
   composer: EffectComposer | null;
   /** Null unless `quality` is `high`. Drawn only while the sun is near the view (see `sunNearView`). */
   bloom: UnrealBloomPass | null;
-  /** The FXAA pass, last in the chain, or null. */
+  /** The FXAA pass, after the output pass, or null. Off while scoped (the scope sharpens instead). */
   fxaa: ShaderPass | null;
+  /** The scope's sharpening (`SharpenShader`), last in the chain; on only while scoped. Null when `quality` is `off`. */
+  sharpen: ShaderPass | null;
   /** The output pass, whose `gradeLift`, `gradeGain`, ... uniforms hold the theme's grade; null when `quality` is `off`. */
   output: OutputPass | null;
-  /** Draw one frame; `withOverlay`: draw the overlay (the rifle) over the world. Resets `renderer.info` first, so its counts cover every pass of the frame. */
-  render(withOverlay: boolean): void;
+  /**
+   * Draw one frame; `withOverlay`: draw the overlay (the rifle) over the world; `scoped`: the view is through the scope (sharpen,
+   * no FXAA). Resets `renderer.info` first, so its counts cover every pass of the frame.
+   */
+  render(withOverlay: boolean, scoped?: boolean): void;
   /** CSS size of the canvas; call after `resizeRenderer`. */
   setSize(width: number, height: number): void;
   dispose(): void;
@@ -221,6 +273,7 @@ export function createPostFx(opts: PostFxOptions): PostFx {
       bloom: null,
       output: null,
       fxaa: null,
+      sharpen: null,
       render(withOverlay) {
         renderer.info.reset();
         renderer.render(scene, camera);
@@ -275,6 +328,11 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     fxaa = add(new ShaderPass(FXAAShader));
     fxaa.uniforms['resolution'].value.set(1 / width, 1 / height);
   }
+  // Exclusive with FXAA (one is on while scoped, the other while not), so their order does not matter; the composer
+  // draws the last enabled pass to the screen.
+  const sharpen = add(new ShaderPass(SharpenShader));
+  sharpen.uniforms['texel'].value.set(1 / width, 1 / height);
+  sharpen.enabled = false;
 
   const sun = sunDirectionOf(SKY_LOOKS[theme]);
   const forward = new THREE.Vector3();
@@ -285,9 +343,12 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     bloom,
     output,
     fxaa,
-    render(withOverlay) {
+    sharpen,
+    render(withOverlay, scoped = false) {
       renderer.info.reset();
       if (overlayPass) overlayPass.enabled = withOverlay;
+      sharpen.enabled = scoped;
+      if (fxaa) fxaa.enabled = !scoped;
       if (bloom) {
         camera.getWorldDirection(forward);
         bloom.enabled = sunNearView(forward, sun, camera.fov, camera.aspect, BLOOM_MARGIN_DEG) || (withOverlay && glow?.() === true);
@@ -297,7 +358,9 @@ export function createPostFx(opts: PostFxOptions): PostFx {
     setSize(width, height) {
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(width, height);
-      if (fxaa) fxaa.uniforms['resolution'].value.set(1 / (width * renderer.getPixelRatio()), 1 / (height * renderer.getPixelRatio()));
+      const ratio = renderer.getPixelRatio();
+      if (fxaa) fxaa.uniforms['resolution'].value.set(1 / (width * ratio), 1 / (height * ratio));
+      sharpen.uniforms['texel'].value.set(1 / (width * ratio), 1 / (height * ratio));
     },
     dispose() {
       composer.dispose();

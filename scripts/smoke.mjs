@@ -1561,7 +1561,7 @@ async function run() {
     await fight.mouse.click(640, 360);
     await fight.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
     check(true, 'a click locks the pointer');
-    // Look at the nearer sniper through the scope at 20x, detected (steady glint), for the close-up screenshot.
+    // Look at the nearer sniper through the scope at full zoom (25x), detected (steady glint), for the close-up screenshot.
     const nearSniper = [...st.snipers].sort((a, b) => Math.hypot(a.head.x, a.head.z) - Math.hypot(b.head.x, b.head.z))[0];
     await fight.evaluate(([x, y, z]) => {
       window.__game.setDetection(70);

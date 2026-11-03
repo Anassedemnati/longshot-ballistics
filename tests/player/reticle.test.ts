@@ -52,10 +52,11 @@ function tickHalfLength(segments: Segment[], mil: number, vfov: number, height =
 }
 
 describe('scope magnification', () => {
-  it('opens at 8x, inside the 4x-20x range', () => {
+  it('opens at 8x, inside the 4x-25x range', () => {
     expect(MAG_DEFAULT).toBe(8);
     expect(MAG_DEFAULT).toBeGreaterThanOrEqual(MAG_MIN);
     expect(MAG_DEFAULT).toBeLessThanOrEqual(MAG_MAX);
+    expect(MAG_MAX).toBe(25);
   });
 });
 

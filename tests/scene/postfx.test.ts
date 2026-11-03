@@ -136,11 +136,12 @@ describe('createPostFx (built without WebGL)', () => {
   const camera = new THREE.PerspectiveCamera(60, 16 / 9);
 
   for (const theme of THEMES) {
-    it(`${theme}, high: render, bloom, output (with the grade) in that order, on a 2x multisampled half-float target`, () => {
+    it(`${theme}, high: render, bloom, output (with the grade), scope sharpening in that order, on a 2x multisampled half-float target`, () => {
       const renderer = stubRenderer();
       const post = createPostFx({ renderer, scene, camera, theme, quality: 'high' });
-      const [render, bloom, output] = post.passes;
-      expect(post.passes).toHaveLength(3);
+      const [render, bloom, output, sharpen] = post.passes;
+      expect(post.passes).toHaveLength(4);
+      expect(sharpen).toBe(post.sharpen);
       expect(render).toBeInstanceOf(RenderPass);
       expect((render as RenderPass).scene).toBe(scene);
       expect((render as RenderPass).camera).toBe(camera);
@@ -150,7 +151,8 @@ describe('createPostFx (built without WebGL)', () => {
       expect((bloom as UnrealBloomPass).strength).toBe(BLOOM[theme].strength);
       expect(output).toBeInstanceOf(OutputPass);
       expect(output).toBe(post.output);
-      expect(post.composer?.passes[post.composer.passes.length - 1]).toBe(output); // the last pass draws to the screen
+      expect(post.composer?.passes[post.composer.passes.length - 1]).toBe(sharpen);
+      expect(post.sharpen!.enabled).toBe(false); // off until the view is scoped: the output pass is the last enabled one and draws to the screen
       const u = post.output!.uniforms;
       const g = GRADES[theme];
       expect(u['gradeGain'].value.toArray()).toEqual(g.gain);
@@ -186,7 +188,7 @@ describe('createPostFx (built without WebGL)', () => {
   it('low: no multisampling and no bloom pass', () => {
     const post = createPostFx({ renderer: stubRenderer(), scene, camera, theme: 'desert', quality: 'low' });
     expect(post.bloom).toBeNull();
-    expect(post.passes).toHaveLength(2);
+    expect(post.passes).toHaveLength(3);
     expect(post.passes.some((p) => p instanceof UnrealBloomPass)).toBe(false);
     expect(post.composer?.renderTarget1.samples).toBe(POST_SAMPLES.low);
   });
@@ -223,7 +225,7 @@ describe('createPostFx (built without WebGL)', () => {
     const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high', overlay: () => seen.push([renderer.toneMappingExposure, target.current]) });
     const target: { current: unknown } = { current: null };
     (renderer as unknown as { setRenderTarget: (t: unknown) => void }).setRenderTarget = (t) => void (target.current = t);
-    expect(post.passes).toHaveLength(4);
+    expect(post.passes).toHaveLength(5);
     const [render, overlay, bloom, output] = post.passes;
     expect(render).toBeInstanceOf(RenderPass);
     expect(overlay).toBeInstanceOf(OverlayPass);
@@ -244,20 +246,38 @@ describe('createPostFx (built without WebGL)', () => {
     expect(renderer.info.reset).toHaveBeenCalledTimes(2); // once per frame, so the counts cover every pass
   });
 
-  it('FXAA is the last pass, after the output pass (it needs the display colours), and its resolution follows the drawing buffer', () => {
+  it('FXAA comes after the output pass (it needs the display colours), and its resolution follows the drawing buffer', () => {
     const renderer = stubRenderer();
     const post = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high', samples: 0, fxaa: true });
     expect(post.fxaa).toBeInstanceOf(ShaderPass);
-    expect(post.passes[post.passes.length - 1]).toBe(post.fxaa);
-    expect(post.passes[post.passes.length - 2]).toBe(post.output);
+    expect(post.passes[post.passes.length - 1]).toBe(post.sharpen);
+    expect(post.passes[post.passes.length - 2]).toBe(post.fxaa);
+    expect(post.passes[post.passes.length - 3]).toBe(post.output);
     expect(post.fxaa!.uniforms['resolution'].value.x).toBeCloseTo(1 / 2560, 9); // 1280 x 720 CSS px at pixel ratio 2
     expect(post.fxaa!.uniforms['resolution'].value.y).toBeCloseTo(1 / 1440, 9);
     post.setSize(800, 600);
     expect(post.fxaa!.uniforms['resolution'].value.x).toBeCloseTo(1 / 1600, 9);
-    // without it, the output pass is last
+    // without it, only the scope sharpening follows the output pass
     const plain = createPostFx({ renderer, scene, camera, theme: 'desert', quality: 'high' });
     expect(plain.fxaa).toBeNull();
-    expect(plain.passes[plain.passes.length - 1]).toBe(plain.output);
+    expect(plain.passes[plain.passes.length - 2]).toBe(plain.output);
+  });
+
+  it('through the scope the picture is sharpened and FXAA is off; outside it the reverse', () => {
+    const renderer = stubRenderer();
+    const post = createPostFx({ renderer, scene, camera, theme: 'valley', quality: 'high', samples: 0, fxaa: true });
+    post.composer!.render = () => {};
+    expect(post.sharpen!.uniforms['texel'].value.x).toBeCloseTo(1 / 2560, 9);
+    post.render(false, true);
+    expect(post.sharpen!.enabled).toBe(true);
+    expect(post.fxaa!.enabled).toBe(false);
+    post.render(true, false);
+    expect(post.sharpen!.enabled).toBe(false);
+    expect(post.fxaa!.enabled).toBe(true);
+    post.render(true); // scoped defaults to false
+    expect(post.sharpen!.enabled).toBe(false);
+    post.setSize(800, 600);
+    expect(post.sharpen!.uniforms['texel'].value.y).toBeCloseTo(1 / 1200, 9);
   });
 
   it('the multisampling can be chosen apart from the chain: bloom on, no multisampling (the medium level)', () => {

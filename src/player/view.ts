@@ -4,7 +4,8 @@ import { NAKED_VFOV_RAD, magnificationToVfov } from '../game/aim';
 import { drawReticle } from './reticle';
 
 export const MAG_MIN = 4;
-export const MAG_MAX = 20;
+/** Top of the zoom: a 5-25x long-range scope (a man at 800 m is then as tall through it as at 32 m to the eye). */
+export const MAG_MAX = 25;
 /** The scope opens at this magnification: at 4x the mil ladder is too small to read. */
 export const MAG_DEFAULT = 8;
 /** Zoom factor per wheel notch. */
