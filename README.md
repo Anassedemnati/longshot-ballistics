@@ -2,15 +2,43 @@
 
 **A long-range sniper simulator that runs in the browser. Every shot is a real ballistic solution.**
 
-Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bullet is flown through a G7 drag model and the air of the map you're on. It is not a hitscan ray. Enemy snipers are hunting you too, so stay in cover and keep your shots few.
+Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bullet is flown through a G7 drag model and the air of the map you're on. It is not a hitscan ray. And the other side shoots back: a squad that runs for cover, returns fire and calls in mortars, and enemy snipers who spot you for them.
 
 ![Desert ridge, first-person view](docs/screenshots/desert-open.jpg)
 
-| Through the scope | Training aids |
+| Through the 25x scope | Training aids |
 |---|---|
-| ![20x scope on a compound at 690 m](docs/screenshots/desert-scope.jpg) | ![Trajectory arc, aim marker and spotter call](docs/screenshots/assists-aim.jpg) |
+| ![A soldier at 140 m through the scope](docs/screenshots/soldier-scope.jpg) | ![Trajectory arc, aim marker and spotter call](docs/screenshots/assists-aim.jpg) |
 | **Green valley**, mountain position | **Arctic**, suppressed .338 |
 | ![Green valley](docs/screenshots/valley-open.jpg) | ![Arctic](docs/screenshots/arctic-open.jpg) |
+
+## Soldiers that fight back
+
+Fire your first shot and the squad comes alive. They crouch, turn toward the sound and sprint for cover:
+
+![A soldier sprinting for cover, rifle at port arms](docs/screenshots/squad-sprint.jpg)
+
+From behind walls and vehicles they rise, shoulder their rifles, fire a burst and drop back down:
+
+![Kneeling behind a wall to fire, then dropping back into cover](docs/screenshots/squad-cover.jpg)
+
+Through your scope you see the muzzle flash of the man who is shooting at you:
+
+![Return fire through the scope: rise, muzzle flash, drop](docs/screenshots/squad-return-fire.jpg)
+
+- **They have to find you first.** Each of your shots tells them a little more (less with a suppressor or a ghillie suit), and so does every bullet that cracks past one of them and every man that goes down. At first their bursts land far away; once they have you, they land close and hurt while you are exposed.
+- **An enemy sniper who has you in his scope calls your position to them.** Take him out first.
+- **They move.** After a near miss, when a friend close by goes down, or just after a while in one spot, they sprint to new cover, so you have to hunt them.
+- **Mortars.** Once they have you well enough they call them in: you get a four-second warning to get into cover (**C**).
+- Switch it off in the menu for a classic static range; the **Soldiers** slider sets how many there are (1 to 10).
+
+![The squad has found you: incoming rounds kick up dust, and a mortar is on its way](docs/screenshots/firefight.jpg)
+
+## Hits that look like hits
+
+Bodies are not planks that tip over. A hit soldier goes limp: a Verlet ragdoll on his skeleton, pushed by the bullet, folds at the knees and waist and settles on the real terrain. Where you hit him decides how he falls (a head shot drops him on the spot, a chest shot staggers him back, a leg shot drops him onto that side), and a man hit at a sprint tumbles forward. The bullet goes through: a puff at the entry, a mist out of the far side, and the round flies on, slower, to kick up dust behind him.
+
+![A chest hit at 140 m: entry and exit, the bullet passes through, the legs give way, down](docs/screenshots/hit-sequence.jpg)
 
 ## Features
 
@@ -23,23 +51,21 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - .308 Win: G7 BC 0.243 at 790 m/s.
   - .338 Lapua: G7 BC 0.322 at 900 m/s.
   - Each has an optional suppressor: no muzzle flash, a quieter report and slower detection.
+- **5-25x scope** with a mil reticle, mouse-wheel zoom and a moving bolt. The picture is sharpened while you look through it, so a man at 600 m stays a man and not a smudge.
+  - Sound travels at the speed of sound: at long range you hear the impact well after the shot.
+- **Realistic enemies**: soldiers in camo with helmets, plate carriers, packs and rifles held in both hands; snipers prone in ghillie suits behind scoped rifles on bipods. Procedural models and textures, one draw call each.
 - **Optional ghillie suit** (a switch in the menu)
   - While you hold fire the enemy cannot pick you out: lying still in plain view never builds more than 30 % detection.
   - Your sleeves wear the map's camouflage.
   - Your shots still give you away, though the muzzle report counts for less.
-- **Variable-power scope** with a mil reticle, mouse-wheel zoom and a moving bolt.
-  - Sound travels at the speed of sound: at long range you hear the impact well after the shot.
+
+  ![Ghillie suit in the green valley: the enemy is still unaware](docs/screenshots/ghillie.jpg)
 - **Enemy counter-snipers**
   - They start out unaware of you. Without a ghillie suit, a few seconds in the open is enough to make them search.
   - A shot gives you away twice: by the muzzle report, and by the crack and dust of the bullet, which point back at you when it ends near one of them. A suppressor only quiets the first.
   - Once they are searching their scopes narrow in on you and glint more often. Keep exposed and they find you, shoot back and call in bombardments.
   - They hide with some thought: every mission each one picks, from the spots that give him a clear shot at you, one that is well concealed (a backdrop behind him, hard cover close by, away from the soldiers, on a flank, sometimes a rooftop), so the hides change with the seed.
   - Press **C** to duck into cover.
-- **Soldiers that fight back** (a switch in the menu, on by default; the **Soldiers** slider sets how many)
-  - They stand about, unaware, until you fire. Then they crouch, turn toward the shot and sprint to cover, and from cover they peek out, shoulder their rifles and fire bursts, with a muzzle flash and a report that reaches you after the sound's trip.
-  - They only know where you are a little more with each shot (a suppressor or a ghillie suit tells them less), with each bullet that passes one of them and with each soldier that goes down; an enemy sniper who has you in his scope tells them too. At first their bursts land far from you; once they have you, close, and they can hurt you while you are exposed. Ducking with **C** lets what they know fade.
-  - They change position now and then, and at once after a near miss or when a friend close by goes down, so you have to hunt them. Once they have you well enough they call mortars (the same warning and blast as a sniper's bombardment).
-  - They run, crouch, kneel and shoot with a procedural animation on the soldier's skeleton, their hit spheres follow the body, and a soldier you hit falls from the pose he was in, still carrying his run.
 - **Mission setup menu**
   - Three themes: desert, arctic and green valley.
   - A range band from 100 to 1,500 m.
@@ -54,6 +80,7 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - Baked sun and ambient occlusion, plus instanced vegetation.
   - Bloom and colour grading.
   - Real recorded sounds.
+- **Fullscreen** with **F** or the button on the menu and in the game.
 - **Runs on modest GPUs**
   - Quality levels and dynamic resolution.
   - About 120 draw calls in the busiest mission.
@@ -118,7 +145,7 @@ npm run smoke    # build, then drive the game in headless Chrome and check it en
 | `src/player/` | First-person view, input, scope reticle and the procedural rifle model. |
 | `src/audio/` | Web Audio engine, recorded clips and sound-delay maths. |
 | `src/ui/` | Mission menu, HUD, threat bar, results screen. |
-| `src/fx/` | Dust, sparks and smoke at impacts. |
+| `src/fx/` | Dust, sparks, smoke, blood mist and the enemies' muzzle flashes. |
 | `tests/` | Vitest suites, mirroring `src/`. |
 | `scripts/` | The headless smoke test and visual-check tools. |
 
@@ -130,7 +157,7 @@ Issues and pull requests are welcome. Some ideas:
 - more scenarios (convoy ambush, high-value target, defend a position);
 - animated vehicle models;
 - spin drift and Coriolis;
-- moving targets;
+- ragdolls that collide with cover;
 - mobile and touch controls.
 
 Run `npm test` and `npm run smoke` before you open a PR.
