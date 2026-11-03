@@ -203,3 +203,13 @@ describe('applyImpact: the sound delay and distance', () => {
     expect(near.sound?.delayS).toBeCloseTo(0.1, 9);
   });
 });
+
+describe('applyImpact: a bullet that went through one man downs the next', () => {
+  it('counts the kill but not a second hit, and says so', () => {
+    const r = applyImpact(onTarget('s2', 'upperTorso'), state(), true);
+    expect(r.killedTargetId).toBe('s2');
+    expect(r.stats.targetsDown).toBe(1);
+    expect(r.stats.hits).toBe(0);
+    expect(r.hud.result).toMatch(/through/);
+  });
+});

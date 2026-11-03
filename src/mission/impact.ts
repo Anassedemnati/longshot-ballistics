@@ -60,8 +60,10 @@ export interface ImpactResult {
  * Decide what one impact does. Pure: it changes nothing it is given. The caller executes the result and
  * applies each event before the next one, so a soldier knocked down by the first of two bullets arriving
  * in the same frame is already `down` when the second is applied and is not counted as a kill again.
+ * `through` is a bullet that has already gone through one man and downs the next: the kill counts, the hit
+ * does not (one shot, one hit), and the HUD says so.
  */
-export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResult {
+export function applyImpact(event: ImpactEvent, state: ImpactState, through = false): ImpactResult {
   // The event fires when the bullet arrives; the sound still has to travel back to the shooter.
   if (event.kind === 'expired') {
     return { stats: state.stats, killedTargetId: null, hud: { result: 'MISS', refreshTargets: false }, fx: null, sound: null };
@@ -78,7 +80,9 @@ export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResul
     if (info?.kind === 'soldier' || info?.kind === 'sniper') {
       killed = !info.down;
       sound = { kind: 'hit', delayS, distanceM };
-      result = `${info.kind === 'sniper' ? 'SNIPER DOWN' : 'HIT'} – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
+      result = through
+        ? `${info.kind === 'sniper' ? 'SNIPER DOWN' : 'TWO DOWN'} – through and through – ${event.time.toFixed(2)} s`
+        : `${info.kind === 'sniper' ? 'SNIPER DOWN' : 'HIT'} – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
     } else if (info?.kind === 'vehicle') {
       killed = !info.down;
       fx = { kind: 'sparks', point: event.point };
@@ -86,7 +90,7 @@ export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResul
       result = 'VEHICLE DISABLED';
     }
     return {
-      stats: recordImpact(state.stats, event, killed, distanceM, state.nowMs),
+      stats: recordImpact(state.stats, event, killed, distanceM, state.nowMs, !through),
       killedTargetId: killed ? event.targetId : null,
       hud: { result, refreshTargets: true },
       fx,

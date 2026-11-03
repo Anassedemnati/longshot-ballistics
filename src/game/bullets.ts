@@ -20,6 +20,13 @@ export interface FireOptions {
    * cover and the ground, where it kicks up dust or sparks. Default false.
    */
   ghost?: boolean;
+  /**
+   * The one target this bullet passes by: the body it has just come out of (it starts on that body's surface and must not strike it
+   * again). Every other target is struck as usual, so a bullet through one man can still hit the man behind him. Default none.
+   */
+  ignoreTargetId?: string;
+  /** The one obstacle this bullet passes by: the vehicle skin it has just punched through. Default none. */
+  ignoreObstacleId?: string;
   /** Flight time already spent, s (a continuing bullet keeps its clock). Default 0. */
   startTime?: number;
 }
@@ -54,6 +61,9 @@ interface Bullet {
   bcG7: number;
   /** Flies through every target (see FireOptions.ghost). */
   ghost: boolean;
+  /** See FireOptions.ignoreTargetId / ignoreObstacleId (null: none). */
+  ignoreTargetId: string | null;
+  ignoreObstacleId: string | null;
   /** Squared closest distance to a watch point so far, m^2 (Infinity until a substep has been measured). */
   closestSq: number;
 }
@@ -137,6 +147,8 @@ export class BulletSystem {
       id,
       bcG7,
       ghost: opts.ghost ?? false,
+      ignoreTargetId: opts.ignoreTargetId ?? null,
+      ignoreObstacleId: opts.ignoreObstacleId ?? null,
       closestSq: Infinity,
       state: {
         pos: { x: origin.x, y: origin.y, z: origin.z },
@@ -225,6 +237,7 @@ export class BulletSystem {
     let hitTarget: HitTarget | null = null;
     let hitZone: ZoneName = 'limbs';
     for (const target of bullet.ghost ? NO_TARGETS : targets) {
+      if (target.id === bullet.ignoreTargetId) continue;
       const bounds = target.bounds;
       if (bounds !== undefined && segmentSphere(prev.pos, next.pos, bounds.center, bounds.radius) === null) {
         continue;
@@ -244,6 +257,7 @@ export class BulletSystem {
     let hitObstacle: Obstacle | null = null;
     for (let i = 0; i < obstacles.length; i++) {
       const obstacle = obstacles[i];
+      if (obstacle.id === bullet.ignoreObstacleId) continue;
       if (segmentSphere(prev.pos, next.pos, obstacle.box.center, radii[i]) === null) continue;
       const u = segmentBox(prev.pos, next.pos, obstacle.box);
       if (u !== null && u < uObstacle) {

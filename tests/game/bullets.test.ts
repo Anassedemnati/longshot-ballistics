@@ -318,6 +318,23 @@ describe('BulletSystem: velocity at impact and bullets that flew through a body'
     expect(event.kind).toBe('terrain'); // not the target 50 m in front of it
     expect(event.time).toBeGreaterThan(0.25);
   });
+
+  it('a bullet that came out of one body passes that body by, and strikes the next one', () => {
+    const first = ball('first', { x: 0, y: 0, z: -2 }, 0.5);
+    const second = ball('second', { x: 0, y: 0, z: -50 }, 0.5);
+    const sys = makeSystem({ targets: () => [first, second], terrainHeight: () => -2 });
+    sys.fire(MUZZLE, zeroVelocity(), BC, { ignoreTargetId: 'first' });
+    const [event] = runUntilEvents(sys, 0.01);
+    expect(event.kind === 'target' && event.targetId).toBe('second');
+  });
+
+  it('a bullet that punched through a box passes that box by, and still stops in the next', () => {
+    const plate = (id: string, z: number) => ({ id, material: 'metal' as const, box: { center: { x: 0, y: 0, z }, halfSize: { x: 1, y: 1, z: 0.5 }, yaw: 0 } });
+    const sys = makeSystem({ obstacles: () => [plate('skin', -20), plate('wall', -60)], terrainHeight: () => -2 });
+    sys.fire(MUZZLE, zeroVelocity(), BC, { ignoreObstacleId: 'skin' });
+    const [event] = runUntilEvents(sys, 0.01);
+    expect(event.kind === 'obstacle' && event.obstacleId).toBe('wall');
+  });
 });
 
 describe('BulletSystem: closest pass to the watch points', () => {

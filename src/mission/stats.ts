@@ -71,7 +71,9 @@ export function recordShot(s: MissionStats): MissionStats {
 /**
  * Fold one impact into the stats. Only `target` events count as hits; `killed` says the hit took the
  * target out (a soldier down, an engine disabled), `rangeM` is the distance shooter -> impact. The end
- * time is stamped once, by the impact that downs the last target.
+ * time is stamped once, by the impact that downs the last target. `countHit` false is a bullet that had
+ * already gone through another man: its kill counts, but it is not a second hit of the same shot (the
+ * accuracy stays a share of the shots).
  */
 export function recordImpact(
   s: MissionStats,
@@ -79,12 +81,13 @@ export function recordImpact(
   killed: boolean,
   rangeM: number,
   nowMs: number,
+  countHit = true,
 ): MissionStats {
   if (e.kind !== 'target') return s;
   const next: MissionStats = {
     ...s,
-    hits: s.hits + 1,
-    headshots: s.headshots + (e.zone === 'head' ? 1 : 0),
+    hits: s.hits + (countHit ? 1 : 0),
+    headshots: s.headshots + (countHit && e.zone === 'head' ? 1 : 0),
     targetsDown: killed ? Math.min(s.targetsTotal, s.targetsDown + 1) : s.targetsDown,
     longestHitM: Math.max(s.longestHitM, rangeM),
   };
