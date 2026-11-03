@@ -13,10 +13,13 @@ import {
   boot,
   leg,
 } from '../mission/dummyDims';
-import { SOLDIER_RIG, soldierFall } from '../mission/soldierRig';
+import { JOINT_FLOATS } from '../mission/soldierPose';
+import { S, SOLDIER_RIG, soldierFall } from '../mission/soldierRig';
 import type { FallHit } from '../mission/soldierRig';
+import { HEAD_BONE, attachSpheres, placeSpheres } from '../mission/soldierSpheres';
 import { enemyMaterial } from './enemyMaterial';
 import { createRagdollBody, seedOf } from './ragdollBody';
+import type { FallFrom } from './ragdollBody';
 import { soldierGeometry } from './soldierMesh';
 import { terrainHeight } from './terrainHeight';
 
@@ -165,6 +168,33 @@ export interface TargetDummy {
   dispose(): void;
 }
 
+/** A soldier: a target dummy that can also move (mission/squadDirector.ts drives it; one never driven stands as built). */
+export interface SoldierDummy extends TargetDummy {
+  /**
+   * Put the body in a pose and in a place (a soldier that moves: mission/squadDirector.ts): the feet at ground level under (x, z), turned by `yaw`, the
+   * bones posed from `joints` (see mission/soldierPose.ts) and every hit sphere carried to its bone. `velocity` (m/s, horizontal, world) and `jointSpeeds`
+   * (m/s per joint, body frame) are what a fall now will carry on with. Never for a soldier that is down; a soldier never driven stays as built.
+   */
+  drive(frame: DriveFrame): void;
+  /** True once `drive` has posed the body (a fall then starts from that pose). */
+  readonly driven: boolean;
+  /** The world position of the rifle's muzzle (written to `out`, returned). */
+  muzzle(out: Vec3): Vec3;
+}
+
+/** One frame of an animated body, see `SoldierDummy.drive`. */
+export interface DriveFrame {
+  x: number;
+  z: number;
+  yaw: number;
+  vx: number;
+  vz: number;
+  joints: ArrayLike<number>;
+  jointSpeeds: ArrayLike<number> | null;
+  /** Turn of the head about the vertical on top of what the chest gives it, rad. */
+  headYaw: number;
+}
+
 /** The bullet that knocks a target down: world-space point and velocity, and the zone it struck. */
 export interface KnockHit {
   point: Vec3;
@@ -224,7 +254,7 @@ export function createTargetDummy(
   yaw: number,
   id = 'dummy',
   opts: { autoReset?: boolean; ground?: (x: number, z: number) => number } = {},
-): TargetDummy {
+): SoldierDummy {
   const autoReset = opts.autoReset ?? true;
   const groundY = position.y;
   const group = new THREE.Group();
@@ -232,27 +262,40 @@ export function createTargetDummy(
   group.position.set(position.x, groundY, position.z);
   group.rotation.y = yaw;
 
+  // Where the body is now: its feet and its turn. A soldier that never moves keeps what it was built with; one that is driven changes it every frame, and
+  // the ragdoll's ground and the fall's frame follow.
+  const cur = { x: position.x, y: groundY, z: position.z, yaw };
+  const ground = (x: number, z: number): number => {
+    if (!opts.ground) return 0;
+    const c = Math.cos(cur.yaw);
+    const s = Math.sin(cur.yaw);
+    return opts.ground(cur.x + c * x + s * z, cur.z - s * x + c * z) - cur.y;
+  };
+
   // The whole body is one mesh (see `dummyBody`): the helmet, rifle, pouches and boots are too small to be worth a draw of their own, so they ride along.
   const shared = dummyBody();
-  const origin: Vec3 = { x: position.x, y: groundY, z: position.z };
   const ragdoll = createRagdollBody<FallHit>({
     rig: SOLDIER_RIG,
     geometry: shared.geometry,
     material: shared.material,
     group,
-    ground: localGround(opts.ground, origin, yaw),
+    ground,
     crumple: soldierFall,
     name: 'dummy-body',
+    head: HEAD_BONE,
   });
 
   // Hit spheres in world space: the dummy's own (x, y) turned by the yaw about the feet.
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
-  const zones: HitZone[] = dummyHitSpheres().map((s) => ({
+  const local = dummyHitSpheres();
+  const zones: HitZone[] = local.map((s) => ({
     name: s.name,
     radius: s.radius,
     center: { x: position.x + cos * s.x, y: groundY + s.y, z: position.z - sin * s.x },
   }));
+  // Each sphere hangs on a bone, for the days the body moves (standing at rest, the bones are where they were built and nothing changes).
+  const attached = attachSpheres(local);
   // Broad phase: a sphere around the standing body that holds every zone.
   const boundsCenter = { x: position.x, y: groundY + 0.9, z: position.z };
   let boundsRadius = 0;
@@ -260,12 +303,18 @@ export function createTargetDummy(
     const d = Math.hypot(zone.center.x - boundsCenter.x, zone.center.y - boundsCenter.y, zone.center.z - boundsCenter.z);
     boundsRadius = Math.max(boundsRadius, d + zone.radius);
   }
-  const hitTarget: HitTarget = { id, zones, bounds: { center: boundsCenter, radius: boundsRadius + BOUNDS_MARGIN } };
+  const bounds = { center: boundsCenter, radius: boundsRadius + BOUNDS_MARGIN };
+  const hitTarget: HitTarget = { id, zones, bounds };
 
   let down = false;
   let fallTime = 0;
   /** Seconds the body has been lying still since the fall finished. */
   let lyingTime = 0;
+  // What `drive` last posed: the joints, how fast each was moving, and the body's own speed (world), for the fall.
+  let driven = false;
+  const joints = new Float64Array(JOINT_FLOATS);
+  const jointSpeeds = new Float64Array(JOINT_FLOATS);
+  const speed = { x: 0, z: 0 };
 
   const reset = (): void => {
     down = false;
@@ -280,15 +329,62 @@ export function createTargetDummy(
     get down() {
       return down;
     },
+    get driven() {
+      return driven;
+    },
+    drive(frame) {
+      cur.x = frame.x;
+      cur.z = frame.z;
+      cur.yaw = frame.yaw;
+      cur.y = opts.ground ? opts.ground(frame.x, frame.z) : groundY;
+      group.position.set(cur.x, cur.y, cur.z);
+      group.rotation.y = frame.yaw;
+      const bones = ragdoll.animate(frame.joints, frame.headYaw);
+      placeSpheres(attached, bones, cur.x, cur.y, cur.z, frame.yaw, zones);
+      // The broad phase follows the pelvis; its radius reaches every zone (a bullet that grazes the edge of one must still be tested).
+      const c = Math.cos(frame.yaw);
+      const s = Math.sin(frame.yaw);
+      const px = frame.joints[S.pelvis * 3];
+      const py = frame.joints[S.pelvis * 3 + 1];
+      const pz = frame.joints[S.pelvis * 3 + 2];
+      boundsCenter.x = cur.x + c * px + s * pz;
+      boundsCenter.y = cur.y + py;
+      boundsCenter.z = cur.z - s * px + c * pz;
+      let r = 0;
+      for (const zone of zones) {
+        r = Math.max(r, Math.hypot(zone.center.x - boundsCenter.x, zone.center.y - boundsCenter.y, zone.center.z - boundsCenter.z) + zone.radius);
+      }
+      bounds.radius = r + BOUNDS_MARGIN;
+      for (let i = 0; i < JOINT_FLOATS; i++) {
+        joints[i] = frame.joints[i];
+        jointSpeeds[i] = frame.jointSpeeds ? frame.jointSpeeds[i] : 0;
+      }
+      speed.x = frame.vx;
+      speed.z = frame.vz;
+      driven = true;
+    },
+    muzzle(out) {
+      const c = Math.cos(cur.yaw);
+      const s = Math.sin(cur.yaw);
+      const lx = driven ? joints[S.muzzle * 3] : SOLDIER_RIG.particles[S.muzzle].p[0];
+      const ly = driven ? joints[S.muzzle * 3 + 1] : SOLDIER_RIG.particles[S.muzzle].p[1];
+      const lz = driven ? joints[S.muzzle * 3 + 2] : SOLDIER_RIG.particles[S.muzzle].p[2];
+      out.x = cur.x + c * lx + s * lz;
+      out.y = cur.y + ly;
+      out.z = cur.z - s * lx + c * lz;
+      return out;
+    },
     knockDown(hit?: KnockHit) {
       if (down) return;
       down = true;
-      const local: FallHit | undefined = hit && {
-        point: toLocal(hit.point, origin, yaw),
-        velocity: toLocal(hit.velocity, origin, yaw, false),
+      const fall: FallHit | undefined = hit && {
+        point: toLocal(hit.point, cur, cur.yaw),
+        velocity: toLocal(hit.velocity, cur, cur.yaw, false),
         zone: hit.zone,
       };
-      ragdoll.fall(local, seedOf(id, hit ? Math.round(hit.point.x * 1000 + hit.point.y * 7000 + hit.point.z * 311) : 0));
+      // A body that was moving falls from the pose it was in, still running.
+      const from: FallFrom | undefined = driven ? { pose: joints, velocities: jointSpeeds, body: toLocal({ x: speed.x, y: 0, z: speed.z }, cur, cur.yaw, false) } : undefined;
+      ragdoll.fall(fall, seedOf(id, hit ? Math.round(hit.point.x * 1000 + hit.point.y * 7000 + hit.point.z * 311) : 0), from);
     },
     reset,
     dispose() {
@@ -313,6 +409,6 @@ export function createTargetDummy(
 }
 
 /** The stage-1 dummy: standing at (0, ground, -range), facing +Z (straight at the shooter). */
-export function createTargetDummyAtRange(range: number): TargetDummy {
+export function createTargetDummyAtRange(range: number): SoldierDummy {
   return createTargetDummy({ x: 0, y: terrainHeight(0, -range), z: -range }, 0, 'dummy', { ground: terrainHeight });
 }

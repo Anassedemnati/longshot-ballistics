@@ -35,10 +35,15 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - Once they are searching their scopes narrow in on you and glint more often. Keep exposed and they find you, shoot back and call in bombardments.
   - They hide with some thought: every mission each one picks, from the spots that give him a clear shot at you, one that is well concealed (a backdrop behind him, hard cover close by, away from the soldiers, on a flank, sometimes a rooftop), so the hides change with the seed.
   - Press **C** to duck into cover.
+- **Soldiers that fight back** (a switch in the menu, on by default; the **Soldiers** slider sets how many)
+  - They stand about, unaware, until you fire. Then they crouch, turn toward the shot and sprint to cover, and from cover they peek out, shoulder their rifles and fire bursts, with a muzzle flash and a report that reaches you after the sound's trip.
+  - They only know where you are a little more with each shot (a suppressor or a ghillie suit tells them less), with each bullet that passes one of them and with each soldier that goes down; an enemy sniper who has you in his scope tells them too. At first their bursts land far from you; once they have you, close, and they can hurt you while you are exposed. Ducking with **C** lets what they know fade.
+  - They change position now and then, and at once after a near miss or when a friend close by goes down, so you have to hunt them. Once they have you well enough they call mortars (the same warning and blast as a sniper's bombardment).
+  - They run, crouch, kneel and shoot with a procedural animation on the soldier's skeleton, their hit spheres follow the body, and a soldier you hit falls from the pose he was in, still carrying his run.
 - **Mission setup menu**
   - Three themes: desert, arctic and green valley.
   - A range band from 100 to 1,500 m.
-  - 1 to 10 soldiers, vehicle targets, and 0 to 3 enemy snipers.
+  - 1 to 10 soldiers (that fight back, or stand still), vehicle targets, and 0 to 3 enemy snipers.
   - Wind speed and clock direction.
   - Firing position: valley floor, ridge or mountain top.
   - Density of buildings and scenery vehicles.
@@ -80,13 +85,14 @@ Open the URL Vite prints (usually http://localhost:5173), set up a mission and p
 | C | Duck into cover / come back up |
 | T / A / P | Trajectory / aim marker / spotter (when training aids are on) |
 | M | Mute |
+| F | Fullscreen on / off (also a button on the start menu and in the in-game bar) |
 | Esc | Release the mouse |
 
 ## URL options
 
 | Parameter | Effect |
 |---|---|
-| `?m=v3.…` | A full mission, as written by the menu (the last field is the ghillie-suit flag). Copy it to share a mission. Older `v2.…` and `v1.…` links still open, with the newer options off. |
+| `?m=v4.…` | A full mission, as written by the menu (the last two fields are the ghillie-suit flag and the soldiers-fight-back flag). Copy it to share a mission. Older `v3.…`, `v2.…` and `v1.…` links still open, with the newer options off (their soldiers stand still). |
 | `?quality=auto\|high\|medium\|low` | Render quality. `auto` (the default) is `medium` plus dynamic resolution. |
 | `?post=low` | The cheapest post-processing: no bloom, no MSAA. |
 | `?debug=1` | Exposes `window.__game`: `aimAt`, `fire`, `toggleScope`, `zoom`, `state()` and more. Used by the tests. |
@@ -106,7 +112,7 @@ npm run smoke    # build, then drive the game in headless Chrome and check it en
 | Folder | What lives there |
 |---|---|
 | `src/ballistics/` | G7 drag table, atmosphere, RK4 integrator, rifle data and trajectory solver. Pure TypeScript, no three.js. |
-| `src/game/` | Weapon state, bullets in flight, hit tests, rangefinder, aim assists, the enemy-sniper encounter. |
+| `src/game/` | Weapon state, bullets in flight, hit tests, rangefinder, aim assists, the enemy-sniper encounter, the soldiers' squad brain (`squad.ts`). |
 | `src/mission/` | Mission config and URL codec, seeded layout of targets and props, the game loop (`run.ts`). |
 | `src/scene/` | Terrain and its material, HDRI sky, post-processing, vegetation, buildings, vehicles, soldiers. |
 | `src/player/` | First-person view, input, scope reticle and the procedural rifle model. |
@@ -122,7 +128,7 @@ Gameplay rules, terrain and layout are seeded and pure, so they unit-test in Nod
 
 Issues and pull requests are welcome. Some ideas:
 - more scenarios (convoy ambush, high-value target, defend a position);
-- animated soldier and vehicle models;
+- animated vehicle models;
 - spin drift and Coriolis;
 - moving targets;
 - mobile and touch controls.

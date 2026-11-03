@@ -36,6 +36,11 @@ export interface MissionConfig {
   assists: boolean;
   /** Ghillie suit: the enemy can't pick the player out until he fires (see game/encounter.ts); his sleeves wear the theme's camouflage. */
   camo: boolean;
+  /**
+   * The soldiers fight back (game/squad.ts): once a shot is heard they take cover, change position, find the player a little more with
+   * every shot and open fire, and call mortars. Off: the soldiers stand where they were placed, as they always did.
+   */
+  soldiersFightBack: boolean;
 }
 
 export const MISSION_LIMITS = {
@@ -65,6 +70,7 @@ export const DEFAULT_MISSION: MissionConfig = {
   enemySnipers: 1,
   assists: false,
   camo: false,
+  soldiersFightBack: true,
 };
 
 const THEME_IDS: readonly ThemeId[] = ['desert', 'arctic', 'valley'];
@@ -125,25 +131,29 @@ export function clampMission(c: Partial<MissionConfig>): MissionConfig {
     ),
     assists: bool(c.assists, d.assists),
     camo: bool(c.camo, d.camo),
+    soldiersFightBack: bool(c.soldiersFightBack, d.soldiersFightBack),
   };
 }
 
 // --- URL codec -------------------------------------------------------------------------------
-// Format: `v3.<theme>.<rangeMin>.<rangeMax>.<soldiers>.<vehicleTargets>.<windTenths>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>.<camo>`
-// e.g. `v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0`. Letters, digits and dots only, so it is safe in a URL unescaped.
-// Older links still decode: `v2.` (the first fifteen fields, no ghillie suit) and `v1.` (the first eleven fields only: ridge,
-// unsuppressed, no enemy snipers, no assists, no ghillie suit).
+// Format: `v4.<theme>.<rangeMin>.<rangeMax>.<soldiers>.<vehicleTargets>.<windTenths>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>.<camo>.<fightBack>`
+// e.g. `v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1`. Letters, digits and dots only, so it is safe in a URL unescaped.
+// Older links still decode: `v3.` (the first sixteen fields: no fight back), `v2.` (the first fifteen fields, no ghillie suit) and `v1.` (the
+// first eleven fields only: ridge, unsuppressed, no enemy snipers, no assists, no ghillie suit). In every older link the soldiers stand still,
+// as they did when it was made, whatever the menu's default is today.
 
-const CODEC_VERSION = 'v3';
+const CODEC_VERSION = 'v4';
+const V3_CODEC_VERSION = 'v3';
 const V2_CODEC_VERSION = 'v2';
 const V1_CODEC_VERSION = 'v1';
 const THEME_CODE: Record<ThemeId, string> = { desert: 'd', arctic: 'a', valley: 'v' };
 const DENSITY_CODE: Record<Density, string> = { none: 'n', few: 'f', many: 'm' };
 const POSITION_CODE: Record<FiringPosition, string> = { valley: 'v', ridge: 'r', mountain: 'm' };
-/** Fields after the version in a v1 link; a v2 link adds four more, a v3 link one more again (the ghillie suit). */
+/** Fields after the version in a v1 link; a v2 link adds four more, a v3 link one more (the ghillie suit), a v4 link one more again (fight back). */
 const V1_FIELD_COUNT = 11;
 const V2_FIELD_COUNT = 15;
 const V3_FIELD_COUNT = 16;
+const V4_FIELD_COUNT = 17;
 
 /** Reverse lookup of a one-letter code; undefined for anything unknown. */
 function fromCode<T extends string>(table: Record<T, string>, code: string): T | undefined {
@@ -183,21 +193,32 @@ export function encodeMission(c: MissionConfig): string {
     m.enemySnipers,
     m.assists ? 1 : 0,
     m.camo ? 1 : 0,
+    m.soldiersFightBack ? 1 : 0,
   ].join('.');
 }
 
 /**
  * The mission an `encodeMission` string describes (clamped), or null if it cannot be read. Never throws.
- * Reads the current `v3.` codec and the older `v2.` (no ghillie suit) and `v1.` (no position, suppressor, snipers, assists or ghillie suit) ones.
+ * Reads the current `v4.` codec and the older `v3.` (no fight back), `v2.` (no ghillie suit) and `v1.` (no position, suppressor, snipers,
+ * assists or ghillie suit) ones.
  */
 export function decodeMission(s: string): MissionConfig | null {
   if (typeof s !== 'string') return null;
   const parts = s.split('.');
   const version = parts[0];
-  const fields = version === V1_CODEC_VERSION ? V1_FIELD_COUNT : version === V2_CODEC_VERSION ? V2_FIELD_COUNT : version === CODEC_VERSION ? V3_FIELD_COUNT : -1;
+  const fields =
+    version === V1_CODEC_VERSION
+      ? V1_FIELD_COUNT
+      : version === V2_CODEC_VERSION
+        ? V2_FIELD_COUNT
+        : version === V3_CODEC_VERSION
+          ? V3_FIELD_COUNT
+          : version === CODEC_VERSION
+            ? V4_FIELD_COUNT
+            : -1;
   if (fields < 0 || parts.length !== fields + 1) return null;
-  const [, theme, rangeMin, rangeMax, soldiers, vehicleTargets, windTenths, clock, rifle, buildings, vehicles, seed, position, suppressed, snipers, assists, camo] =
-    parts as [string, string, string, string, string, string, string, string, string, string, string, string, string?, string?, string?, string?, string?];
+  const [, theme, rangeMin, rangeMax, soldiers, vehicleTargets, windTenths, clock, rifle, buildings, vehicles, seed, position, suppressed, snipers, assists, camo, fightBack] =
+    parts as [string, string, string, string, string, string, string, string, string, string, string, string, string?, string?, string?, string?, string?, string?];
 
   const wind = field(windTenths);
   const base: Partial<MissionConfig> = {
@@ -215,7 +236,7 @@ export function decodeMission(s: string): MissionConfig | null {
   };
   if (version === V1_CODEC_VERSION) {
     // A v1 link predates the new options: they are off, whatever today's menu defaults are.
-    return clampMission({ ...base, position: 'ridge', suppressed: false, enemySnipers: 0, assists: false, camo: false });
+    return clampMission({ ...base, position: 'ridge', suppressed: false, enemySnipers: 0, assists: false, camo: false, soldiersFightBack: false });
   }
   return clampMission({
     ...base,
@@ -224,7 +245,9 @@ export function decodeMission(s: string): MissionConfig | null {
     enemySnipers: field(snipers ?? ''),
     assists: flag(assists ?? ''),
     // A v2 link has no ghillie field: no suit.
-    camo: version === CODEC_VERSION ? flag(camo ?? '') : false,
+    camo: version === CODEC_VERSION || version === V3_CODEC_VERSION ? flag(camo ?? '') : false,
+    // A v2 or v3 link has no fight back field: the soldiers stand still, as they did.
+    soldiersFightBack: version === CODEC_VERSION ? flag(fightBack ?? '') : false,
   });
 }
 
@@ -251,6 +274,8 @@ export function randomMission(rng: Rng): MissionConfig {
     assists: randInt(rng, 0, 1) === 1,
     // Drawn last again, so a given rng still yields the same first fifteen fields.
     camo: randInt(rng, 0, 1) === 1,
+    // And the newest field after that, so a given rng still yields the same first sixteen.
+    soldiersFightBack: randInt(rng, 0, 1) === 1,
   });
 }
 
@@ -297,7 +322,7 @@ export type Route =
 const LEGACY_WIND_MPS = 4.4704;
 const LEGACY_RANGE_M = 800;
 
-/** The mission a legacy `?range=&wind=&rifle=&air=` URL stands for: one soldier, no props, desert, ridge, no snipers, no assists, no ghillie suit. */
+/** The mission a legacy `?range=&wind=&rifle=&air=` URL stands for: one soldier, no props, desert, ridge, no snipers, no assists, no ghillie suit, no fight back. */
 function legacyMission(params: URLSearchParams): MissionConfig {
   const range = field(params.get('range') ?? '') ?? LEGACY_RANGE_M;
   const wind = field(params.get('wind') ?? '') ?? LEGACY_WIND_MPS;
@@ -319,6 +344,7 @@ function legacyMission(params: URLSearchParams): MissionConfig {
     enemySnipers: 0,
     assists: false,
     camo: false,
+    soldiersFightBack: false, // the practice range's dummy stands and falls, as ever
   });
 }
 

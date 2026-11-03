@@ -6,6 +6,7 @@ import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 import {
   ASSISTS_NOTE,
+  FIGHT_BACK_NOTE,
   GHILLIE_NOTE,
   RANGE_STEP_M,
   RIFLE_ART,
@@ -29,6 +30,7 @@ import {
   themeBlurb,
   windSpeedLabel,
 } from './menuModel';
+import { createFullscreenButton } from './fullscreen';
 
 /**
  * Debug/automation hook, `window.__menu`: sets and reads the same state the controls show and starts the
@@ -378,6 +380,9 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     String,
     [String(L.soldiersMin), String(L.soldiersMax)],
   );
+  // Right under the count: whether those soldiers move, take cover and shoot back or stand where they were placed.
+  const syncFightBack = toggle(targets, 'fightback', 'Soldiers fight back', FIGHT_BACK_NOTE, (on) => apply({ soldiersFightBack: on }));
+  syncers.push(() => syncFightBack(cfg.soldiersFightBack));
   slider(
     targets,
     'menu-vehicle-targets',
@@ -529,6 +534,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   // --- Buttons ---
   const actions = el(form, 'footer', 'menu-actions');
   el(actions, 'p', 'menu-note menu-actions-note', 'Every start rolls a new layout.');
+  createFullscreenButton(actions, 'menu-button menu-fullscreen'); // not made where the browser has no fullscreen
   const random = el(actions, 'button', 'menu-button menu-random', 'Random mission');
   random.type = 'button';
   random.addEventListener('click', () => apply(randomMission(createRng(newSeed()))));

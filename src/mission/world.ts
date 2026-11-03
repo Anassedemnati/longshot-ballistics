@@ -14,7 +14,7 @@ import { createSky } from '../scene/sky';
 import { createSniper } from '../scene/sniper';
 import type { Sniper } from '../scene/sniper';
 import { createTargetDummy } from '../scene/target';
-import type { TargetDummy } from '../scene/target';
+import type { SoldierDummy } from '../scene/target';
 import { DESERT_FIELD, createRocks, createTerrainMesh } from '../scene/terrain';
 import { createTerrainField } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
@@ -37,7 +37,7 @@ const CHEST_HEIGHT = 1.35;
 
 export interface Soldier {
   placement: SoldierPlacement;
-  dummy: TargetDummy;
+  dummy: SoldierDummy;
   head: Vec3;
   upperTorso: Vec3;
   lowerTorso: Vec3;

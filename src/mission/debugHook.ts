@@ -1,6 +1,8 @@
 import type { Vec3 } from '../ballistics/types';
 import type { Awareness } from '../game/encounter';
+import type { SquadState } from '../game/squad';
 import type { MissionStats } from './stats';
+import type { MemberState } from './squadDirector';
 import type { EnemySniper, Soldier, Vehicle } from './world';
 
 /** What `window.__game.state()` returns: the score and enough about the targets for the smoke check to aim. */
@@ -25,6 +27,8 @@ export interface GameDebugState {
   awareness: Awareness;
   /** Enemy snipers still up. */
   snipersLeft: number;
+  /** The soldiers that fight back: the squad's state and knowledge (0..1) of where the player lies, and what each soldier is doing; null when the soldiers stand still. */
+  squad: { state: SquadState; knowledge: number; soldiers: MemberState[] } | null;
   /** Draw calls and triangles of the last rendered frame. */
   render: { calls: number; triangles: number };
 }
@@ -51,6 +55,8 @@ export interface GameDebugHook {
   setDetection?(percent: number): void;
   /** Set the player's health (1..100), so a check can reach the Mission failed screen quickly. No effect without snipers. Only with `?debug=1`, like setDetection. */
   setHealth?(points: number): void;
+  /** Set how much of the player's position the squad knows (0..1), so a check can bring on their aimed fire and mortars at once. No effect when the soldiers stand still. Only with `?debug=1`. */
+  setSquadKnowledge?(value: number): void;
 }
 
 declare global {
@@ -76,6 +82,8 @@ export interface DebugSources {
     awareness(): Awareness;
     snipersLeft(): number;
   } | null;
+  /** The squad of soldiers that fight back; null when the soldiers stand still. */
+  squad: { state(): SquadState; knowledge(): number; soldiers(): MemberState[] } | null;
   render(): { calls: number; triangles: number };
 }
 
@@ -115,6 +123,7 @@ export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources:
       covered: fight ? fight.covered() : false,
       awareness: fight ? fight.awareness() : 'unaware',
       snipersLeft: fight ? fight.snipersLeft() : 0,
+      squad: sources.squad && { state: sources.squad.state(), knowledge: sources.squad.knowledge(), soldiers: sources.squad.soldiers() },
       render: sources.render(),
     }),
   };

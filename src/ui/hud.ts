@@ -1,4 +1,5 @@
 import { windClockLabel, windVector } from '../mission/config';
+import { createFullscreenButton } from './fullscreen';
 
 /** Wind speed below which the HUD says "calm", m/s. */
 const CALM_MPS = 0.05;
@@ -37,15 +38,19 @@ export function rangeText(rangeM: number | null): string {
   return rangeM === null || !Number.isFinite(rangeM) ? 'Range —' : `Range ${Math.round(rangeM)} m`;
 }
 
-/** Which optional keys the hint lists: C (cover) when the mission has enemy snipers, T / A / P when aim assists are on. */
+/** Which optional keys the hint lists: C (cover) when the mission has enemy snipers or soldiers that fight back, T / A / P when aim assists are on, F (fullscreen) unless the browser has none. */
 export interface HintKeys {
   cover?: boolean;
   assists?: boolean;
+  /** Default true: the F key goes fullscreen (pass false where the browser has no fullscreen). */
+  fullscreen?: boolean;
 }
 
 /** The key hint, on one line. */
 export function hintText(keys: HintKeys = {}): string {
-  const parts = ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload', 'M mute'];
+  const parts = ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload'];
+  if (keys.fullscreen !== false) parts.push('F fullscreen');
+  parts.push('M mute');
   if (keys.cover) parts.push('C cover');
   if (keys.assists) parts.push('T/A/P assists');
   parts.push('Esc release mouse');
@@ -101,6 +106,8 @@ export class Hud {
     // The HUD lets the mouse through to the canvas; this link is the exception. Its press must not reach the
     // document handler that grabs the pointer (the page is about to navigate).
     menu.addEventListener('mousedown', (e) => e.stopPropagation());
+    // The same goes for the Fullscreen button next to it (it is not made where the browser has no fullscreen).
+    createFullscreenButton(this.hint, 'hud-fullscreen');
     this.setMagnification(1);
     this.setSound(false, false);
   }

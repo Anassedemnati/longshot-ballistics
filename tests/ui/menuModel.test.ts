@@ -5,6 +5,7 @@ import { THEMES } from '../../src/mission/themes';
 import type { ThemeId } from '../../src/mission/themes';
 import type { FiringPosition } from '../../src/mission/config';
 import {
+  FIGHT_BACK_NOTE,
   GHILLIE_NOTE,
   SUPPRESSOR_NOTE,
   clockPoint,
@@ -180,7 +181,7 @@ describe('starting a mission', () => {
 
   it('startSearch gives a ?m= URL the router reads back as that mission with the new seed', () => {
     const search = startSearch({ ...DEFAULT_MISSION, theme: 'arctic', soldiers: 7 }, 424242, false);
-    expect(search.startsWith('?m=v3.')).toBe(true);
+    expect(search.startsWith('?m=v4.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('mission');
@@ -223,7 +224,7 @@ describe('starting a mission', () => {
   it('menuSearch gives a ?last= URL the router reads back as the menu holding that mission', () => {
     const cfg = { ...DEFAULT_MISSION, theme: 'valley' as const, soldiers: 8, rangeMin: 250, rangeMax: 250, seed: 777 };
     const search = menuSearch(cfg, false);
-    expect(search.startsWith('?last=v3.')).toBe(true);
+    expect(search.startsWith('?last=v4.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('menu');
@@ -281,6 +282,9 @@ describe('firing position, enemy snipers and rifle art labels', () => {
     expect(GHILLIE_NOTE).toMatch(/until you fire/i);
     expect(GHILLIE_NOTE.length).toBeLessThanOrEqual(33);
     expect(GHILLIE_NOTE).not.toBe(SUPPRESSOR_NOTE);
+    // The fight-back note is one line too, and says where the number of soldiers is set.
+    expect(FIGHT_BACK_NOTE.length).toBeLessThanOrEqual(33);
+    expect(FIGHT_BACK_NOTE).toMatch(/slider/i);
   });
 
   it('rifleTitle names each rifle as the concept art does', () => {

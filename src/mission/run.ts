@@ -5,7 +5,9 @@ import { AudioEngine } from '../audio/engine';
 import { distance, impactSoundDelay } from '../audio/timing';
 import {
   playBoltCycle,
+  playBulletCrack,
   playDryFire,
+  playEnemyShot,
   playImpactDust,
   playImpactHit,
   playImpactMetal,
@@ -16,10 +18,12 @@ import { muzzleLaunch } from '../game/aim';
 import type { AimTarget } from '../game/assistance';
 import { BulletSystem } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
+import { MuzzleFlashes } from '../fx/muzzleFlash';
 import { Encounter } from '../game/encounter';
 import type { HitTarget, HitZone } from '../game/hit';
 import { continuedVelocity, exitPoint } from '../game/penetration';
 import { rangeUnderCrosshair } from '../game/rangefinder';
+import { Squad } from '../game/squad';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
@@ -35,6 +39,7 @@ import type { ShadowFocusInput } from '../scene/shadows';
 import { applyHdriSky, loadSkyHdri } from '../scene/sky';
 import { Assists } from '../ui/assists';
 import { showFatalError } from '../ui/fatal';
+import { fullscreenAvailable, onFullscreenChange, toggleFullscreen } from '../ui/fullscreen';
 import { Hud } from '../ui/hud';
 import { menuSearch } from '../ui/menuModel';
 import { showResults } from '../ui/results';
@@ -42,10 +47,12 @@ import { ThreatUi } from '../ui/threat';
 import { Combat } from './combat';
 import { windVector } from './config';
 import type { MissionConfig } from './config';
+import { CoverMap } from './coverSpots';
 import { installDebugHook } from './debugHook';
 import { applyImpact } from './impact';
 import { settledWithin } from './preload';
 import { createRng } from './random';
+import { SquadDirector } from './squadDirector';
 import { isComplete, markAssistsUsed, newStats, recordFailure, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
@@ -209,9 +216,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // range, no props, desert) is a valid menu setup, so the menu opens on what the player was practising.
   const menuHref = `${import.meta.env.BASE_URL}${menuSearch(config, opts.debug)}`;
 
-  // The hint lists C (cover) only when there are snipers to hide from, and T / A / P only when the assists are on.
+  // The hint lists C (cover) only when there is something to hide from (snipers, or soldiers that shoot back), and T / A / P only when the assists are on.
   const hasSnipers = !legacy && snipers.size > 0;
-  const hud = new Hud(document.body, config, targetsTotal, menuHref, { cover: hasSnipers, assists: config.assists });
+  const squadFights = !legacy && config.soldiersFightBack && soldiers.size > 0;
+  const hud = new Hud(document.body, config, targetsTotal, menuHref, { cover: hasSnipers || squadFights, assists: config.assists, fullscreen: fullscreenAvailable() });
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
 
@@ -222,11 +230,18 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     audio.resume();
   }
 
-  // Enemy snipers (spec B.4): the fight with them (detection, fire, bombardments, cover) and its threat line,
-  // damage flash and cover mask. A training mission (0 snipers) and the practice range have none of it. Declared
+  // The soldiers that fight back (game/squad.ts, mission/squadDirector.ts): the squad's knowledge of where the player lies, and each soldier's
+  // brain, body and rifle. Declared before the combat, which asks it how many are up and what the squad knows.
+  const squad = new Squad(config.seed);
+  const flashes = new MuzzleFlashes();
+  if (squadFights) scene.add(flashes.group);
+  let director: SquadDirector | null = null;
+
+  // Enemy snipers (spec B.4) and soldiers that fight back: the fight with them (detection, fire, bombardments, cover) and its threat line,
+  // damage flash and cover mask. A training mission (0 snipers, soldiers standing still) and the practice range have none of it. Declared
   // before the handlers below that ask it whether the player is ducked.
   const combat: Combat | null =
-    hasSnipers
+    hasSnipers || squadFights
       ? new Combat({
           encounter: new Encounter({ camo: config.camo }),
           snipers: [...snipers.values()].map((k) => k.sniper),
@@ -244,8 +259,30 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
             view.toggleScope();
             refreshView();
           },
+          squad: squadFights ? { state: () => squad.state, alive: () => director?.alive ?? 0 } : undefined,
         })
       : null;
+  if (squadFights) {
+    director = new SquadDirector({
+      soldiers,
+      map: new CoverMap(plan.layout, field),
+      field,
+      shooter,
+      squad,
+      seed: config.seed,
+      speedOfSound: atmo.speedOfSound,
+      covered: () => combat?.covered ?? false,
+      hurt: (points) => combat?.hurt(points),
+      callMortar: () => combat?.encounter.callBombardment() ?? false,
+      fx: {
+        flash: (point, distanceM) => flashes.spawn(point, distanceM),
+        shot: (delayS, distanceM) => playEnemyShot(audio, delayS, distanceM, config.rifle),
+        dust: (point) => dust.spawn(point, 0.6),
+        impact: (delayS, distanceM) => playImpactDust(audio, delayS, Math.max(5, distanceM)),
+        crack: (delayS) => playBulletCrack(audio, delayS),
+      },
+    });
+  }
 
   // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's or an enemy
   // sniper's upper torso, a vehicle's engine.
@@ -319,6 +356,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     stats = recordShot(startClock(stats, performance.now()));
     combat?.onShot(); // the muzzle blast gives the player away
+    director?.onPlayerShot({ suppressed: config.suppressed, camo: config.camo }); // ... and the soldiers hear it
     hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(shooter, view.forward(), view.up(), rifle, zeroElevation);
     bullets.fire(origin, velocity, rifle.bcG7);
@@ -415,6 +453,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         soldier.dummy.knockDown(hit);
         soldier.live = false;
         removeLive(soldier.dummy.hitTarget);
+        director?.onSoldierKilled(soldier.placement.id);
       } else if (vehicle) {
         vehicle.target.disable();
         removeLive(vehicle.target.hitTarget);
@@ -444,6 +483,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       userGesture: unlockAudio,
       toggleMute,
       toggleCover: () => combat?.toggleCover(missionDone() || stats.failed || resultsShown),
+      toggleFullscreen: () => toggleFullscreen(),
     },
     (locked) => {
       hud.setHintVisible(!locked);
@@ -496,6 +536,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
               setHealth: (points: number) => {
                 if (combat && Number.isFinite(points)) combat.encounter.health = Math.min(100, Math.max(1, points));
               },
+              setSquadKnowledge: (value: number) => {
+                if (director) squad.setKnowledge(value);
+              },
             }
           : {}),
       },
@@ -514,6 +557,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
           awareness: () => combat.encounter.awareness,
           snipersLeft: () => combat.snipersLeft,
         },
+        squad: director && { state: () => squad.state, knowledge: () => squad.knowledge, soldiers: () => director?.states() ?? [] },
         render: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
       },
     );
@@ -539,12 +583,16 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     applyResolution();
   }
 
-  window.addEventListener('resize', () => {
+  /** The window changed size (a resize, or fullscreen on or off): the canvas, the post chain, the camera, the scope overlay and the rifle follow. */
+  function onResize(): void {
     resizeRenderer(renderer, window.innerWidth, window.innerHeight, pixelRatio);
     post.setSize(window.innerWidth, window.innerHeight);
     view.resize(window.innerWidth, window.innerHeight);
     rifleModel.resize(window.innerWidth, window.innerHeight);
-  });
+  }
+  window.addEventListener('resize', onResize);
+  // Browsers fire `resize` as the page goes fullscreen, but not always at the final size: measure again when the change is done.
+  onFullscreenChange(onResize);
 
   // Game loop
   let lastMs: number | null = null;
@@ -569,7 +617,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
     view.look(input.yaw, input.pitch);
 
-    for (const event of bullets.update(dt)) onImpact(event);
+    const events = bullets.update(dt);
+    // Before the impacts are applied: which bullets came near a soldier (the ones that went through a body are not counted; they are still in `throughBullets`).
+    director?.observeBullets(bullets.active, events, throughBullets);
+    for (const event of events) onImpact(event);
     for (const s of soldiers.values()) {
       s.dummy.update(dt);
       // The practice dummy stands up again by itself and can then be hit again.
@@ -581,10 +632,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     for (const v of vehicles.values()) v.target.update(dt);
     for (const k of snipers.values()) k.sniper.update(dt);
-    // The fight with the snipers stands still while the pointer is free and once the mission is over.
-    if (combat && combat.update(dt, !input.locked || resultsShown || missionDone() || stats.failed) && !stats.failed) {
+    // The fight with the snipers and the soldiers stands still while the pointer is free and once the mission is over.
+    const paused = !input.locked || resultsShown || missionDone() || stats.failed;
+    if (director && !paused) director.update(dt, combat !== null && combat.encounter.awareness === 'firing' && combat.snipersLeft > 0);
+    if (combat && combat.update(dt, paused) && !stats.failed) {
       stats = recordFailure(stats, frameNowMs);
     }
+    flashes.update(dt);
     dust.update(dt);
     sparks.update(dt);
     blood.update(dt);

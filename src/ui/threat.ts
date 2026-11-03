@@ -3,6 +3,7 @@
 // and the cover mask. All DOM, styled in index.html. The text and the flash level are pure functions.
 
 import type { Awareness } from '../game/encounter';
+import type { SquadState } from '../game/squad';
 
 /** What the threat line shows. */
 export interface ThreatState {
@@ -27,7 +28,21 @@ export interface ThreatState {
   failed: boolean;
   /** No sniper is left: the threat is over. */
   cleared: boolean;
+  /** The soldiers fight back: how well their squad knows where the player is (absent: the soldiers stand still, there is no squad line). */
+  squad?: SquadState;
+  /** The bombardment on its way (`warning` > 0) was called by the soldiers' mortar, not by a sniper. */
+  mortar?: boolean;
+  /** The mission has no enemy snipers at all: the line leaves out the detection, the sniper count and what the snipers know. */
+  noSnipers?: boolean;
 }
+
+/** What the threat line says of the squad: it is told, not guessed, from how much of the player's position the squad has. */
+const SQUAD_TEXT: Record<SquadState, string> = {
+  unaware: 'Squad unaware',
+  alerted: 'Squad alerted',
+  searching: 'Squad searching for you',
+  engaging: 'Squad has found you',
+};
 
 /** A countdown in tenths of a second: the unit it is shown in, and the unit the line is rebuilt in. */
 const tenths = (seconds: number): number => Math.round(seconds * 10);
@@ -40,19 +55,20 @@ const showTenths = (seconds: number): string => (tenths(seconds) / 10).toFixed(1
  */
 export function threatText(s: ThreatState): string {
   if (s.failed) return 'MISSION FAILED · you were killed';
-  if (s.cleared) return `ALL SNIPERS DOWN · threat cleared · Health ${Math.ceil(s.health)}`;
-  const parts = [
-    s.covered ? 'IN COVER' : 'EXPOSED',
-    `Health ${Math.ceil(s.health)}`,
-    `Detection ${Math.round(s.detection)} %`,
-    `${s.snipersLeft} sniper${s.snipersLeft === 1 ? '' : 's'} left`,
-  ];
-  if (s.warning > 0) parts.push(`INCOMING BOMBARDMENT ${showTenths(s.warning)} s — C: COVER`);
-  else if (s.firing) parts.push(`SNIPER FIRING IN ${showTenths(s.fireIn)} s`);
-  else if (s.awareness === 'unaware') {
-    parts.push('Enemy unaware');
-    if (s.camo) parts.push('ghillie suit');
-  } else parts.push('Enemy searching for you · C: cover');
+  if (s.cleared) return `${s.noSnipers ? 'SQUAD DOWN' : 'ALL SNIPERS DOWN'} · threat cleared · Health ${Math.ceil(s.health)}`;
+  const parts: string[] = [s.covered ? 'IN COVER' : 'EXPOSED', `Health ${Math.ceil(s.health)}`];
+  if (!s.noSnipers) {
+    parts.push(`Detection ${Math.round(s.detection)} %`, `${s.snipersLeft} sniper${s.snipersLeft === 1 ? '' : 's'} left`);
+  }
+  if (s.warning > 0) parts.push(s.mortar ? `INCOMING MORTAR ${showTenths(s.warning)} s — C: COVER` : `INCOMING BOMBARDMENT ${showTenths(s.warning)} s — C: COVER`);
+  else if (s.firing && !s.noSnipers) parts.push(`SNIPER FIRING IN ${showTenths(s.fireIn)} s`);
+  else if (!s.noSnipers) {
+    if (s.awareness === 'unaware') {
+      parts.push('Enemy unaware');
+      if (s.camo) parts.push('ghillie suit');
+    } else parts.push('Enemy searching for you · C: cover');
+  }
+  if (s.squad) parts.push(s.squad === 'engaging' && s.warning <= 0 ? `${SQUAD_TEXT[s.squad]} · C: cover` : SQUAD_TEXT[s.squad]);
   if (s.paused) parts.push('PAUSED');
   return parts.join(' · ');
 }
@@ -85,7 +101,10 @@ export class ThreatLine {
       (s.cleared ? 16 : 0) |
       (s.warning > 0 ? 32 : 0) |
       (s.awareness === 'searching' ? 64 : s.awareness === 'firing' ? 128 : 0) |
-      (s.camo ? 256 : 0);
+      (s.camo ? 256 : 0) |
+      (s.mortar ? 512 : 0) |
+      (s.noSnipers ? 1024 : 0) |
+      (s.squad === undefined ? 0 : (SQUAD_BITS[s.squad] << 11));
     const health = Math.ceil(s.health);
     const detection = Math.round(s.detection);
     const countdown = s.warning > 0 ? tenths(s.warning) : s.firing ? tenths(s.fireIn) : 0;
@@ -109,6 +128,9 @@ export class ThreatLine {
     return this.text;
   }
 }
+
+/** The squad state as a number for the line's cache key (0 is "no squad line"). */
+const SQUAD_BITS: Record<SquadState, number> = { unaware: 1, alerted: 2, searching: 3, engaging: 4 };
 
 /** How long a damage flash takes to fade, s. */
 export const FLASH_SECONDS = 0.5;

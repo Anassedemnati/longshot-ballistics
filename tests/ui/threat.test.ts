@@ -163,3 +163,50 @@ describe('flashIntensity', () => {
     expect(flashIntensity(1000)).toBe(0.6);
   });
 });
+
+describe('threatText with soldiers that fight back', () => {
+  const base: ThreatState = {
+    health: 82,
+    detection: 0,
+    covered: false,
+    snipersLeft: 0,
+    warning: 0,
+    firing: false,
+    awareness: 'unaware',
+    camo: false,
+    fireIn: 0,
+    paused: false,
+    failed: false,
+    cleared: false,
+    noSnipers: true,
+  };
+
+  it('names what the squad knows, without the sniper parts when the mission has no snipers', () => {
+    expect(threatText({ ...base, squad: 'unaware' })).toBe('EXPOSED · Health 82 · Squad unaware');
+    expect(threatText({ ...base, squad: 'alerted' })).toBe('EXPOSED · Health 82 · Squad alerted');
+    expect(threatText({ ...base, squad: 'searching' })).toBe('EXPOSED · Health 82 · Squad searching for you');
+    expect(threatText({ ...base, squad: 'engaging' })).toBe('EXPOSED · Health 82 · Squad has found you · C: cover');
+  });
+
+  it('says INCOMING MORTAR for a bombardment the soldiers called, and keeps it with snipers around', () => {
+    expect(threatText({ ...base, squad: 'engaging', warning: 2.5, mortar: true })).toBe('EXPOSED · Health 82 · INCOMING MORTAR 2.5 s — C: COVER · Squad has found you');
+    const withSnipers = threatText({ ...base, noSnipers: false, snipersLeft: 1, squad: 'searching', warning: 1, mortar: false });
+    expect(withSnipers).toContain('INCOMING BOMBARDMENT 1.0 s');
+    expect(withSnipers).toContain('1 sniper left');
+    expect(withSnipers).toContain('Squad searching for you');
+  });
+
+  it('redraws the cached line when only the squad or the mortar flag changes', () => {
+    const line = new ThreatLine();
+    const a = line.line({ ...base, squad: 'alerted' });
+    const b = line.line({ ...base, squad: 'searching' });
+    expect(b).not.toBe(a);
+    const c = line.line({ ...base, squad: 'searching', warning: 3, mortar: true });
+    expect(c).toContain('MORTAR');
+    expect(line.line({ ...base, squad: 'searching', warning: 3, mortar: true })).toBe(c);
+  });
+
+  it('says the squad is down when it was all there was', () => {
+    expect(threatText({ ...base, cleared: true })).toBe('SQUAD DOWN · threat cleared · Health 82');
+  });
+});

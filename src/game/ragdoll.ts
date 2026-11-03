@@ -157,6 +157,25 @@ export class Ragdoll {
     this.sleeping = false;
   }
 
+  /**
+   * Wake the simulation from the pose `pose` (3 numbers per particle, in the rig's frame) instead of the bind pose, and give every particle
+   * the velocity `velocities` (3 per particle, m/s, in the rig's frame; omitted: nothing) plus `body` (the whole body's velocity, m/s, in the rig's
+   * frame). A soldier shot while he runs falls from the pose he was in, still carrying his run.
+   */
+  startFrom(pose: ArrayLike<number>, velocities: ArrayLike<number> | null, body: Vec): void {
+    for (let i = 0; i < this.count; i++) {
+      for (let k = 0; k < 3; k++) {
+        const v = (velocities ? velocities[i * 3 + k] : 0) + body[k];
+        this.pos[i * 3 + k] = pose[i * 3 + k];
+        this.prev[i * 3 + k] = pose[i * 3 + k] - v * RAGDOLL_DT;
+      }
+    }
+    this.accumulator = 0;
+    this.time = 0;
+    this.calm = 0;
+    this.sleeping = false;
+  }
+
   /** Stop simulating (the pose stays where it is). */
   sleep(): void {
     this.sleeping = true;

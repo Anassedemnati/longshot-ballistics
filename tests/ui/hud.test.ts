@@ -21,7 +21,7 @@ describe('soundLabel', () => {
 describe('hintText', () => {
   it('lists the basic keys, and nothing about cover or assists when the mission has neither', () => {
     const text = hintText();
-    for (const key of ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload', 'M mute', 'Esc release mouse']) {
+    for (const key of ['Click to take aim', 'Left click fire', 'Right click scope', 'Wheel zoom', 'R reload', 'F fullscreen', 'M mute', 'Esc release mouse']) {
       expect(text).toContain(key);
     }
     expect(text).not.toMatch(/\bC cover|T\/A\/P/);
@@ -32,6 +32,11 @@ describe('hintText', () => {
     expect(hintText({ assists: true })).toContain('M mute  ·  T/A/P assists  ·  Esc release mouse');
     expect(hintText({ cover: true, assists: true })).toContain('C cover  ·  T/A/P assists  ·  Esc');
     expect(hintText({ cover: true, assists: true })).not.toContain('\n'); // one line
+  });
+
+  it('lists F fullscreen, unless the browser has none', () => {
+    expect(hintText()).toContain('R reload  ·  F fullscreen  ·  M mute');
+    expect(hintText({ fullscreen: false })).not.toContain('fullscreen');
   });
 });
 

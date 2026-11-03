@@ -369,3 +369,62 @@ describe('Combat: the threat line is not rebuilt every frame', () => {
     expect(log.built).toBe(3);
   });
 });
+
+describe('Combat with soldiers that fight back and no snipers', () => {
+  function squadFixture() {
+    const encounter = new Encounter();
+    const log = { text: '', flashes: [] as number[], dust: 0 };
+    const state = { alive: 3, squad: 'alerted' as 'unaware' | 'alerted' | 'searching' | 'engaging' };
+    const combat = new Combat({
+      encounter,
+      snipers: [],
+      ui: { setText: (t) => (log.text = t), setCovered: () => undefined, flash: (i) => log.flashes.push(i), update: () => undefined },
+      field: FLAT as TerrainField,
+      shooter: SHOOTER,
+      suppressed: false,
+      yaw: () => 0,
+      fx: { dust: () => log.dust++, impactSound: () => undefined },
+      dropScope: () => undefined,
+      squad: { state: () => state.squad, alive: () => state.alive },
+    });
+    return { encounter, combat, log, state };
+  }
+
+  it('keeps the fight going while a soldier is up, shows the squad, and never makes snipers\' fire out of the exposure', () => {
+    const { encounter, combat, log, state } = squadFixture();
+    run(combat, 60);
+    expect(encounter.ended).toBe(false);
+    expect(encounter.health).toBe(100);
+    expect(log.text).toBe('EXPOSED · Health 100 · Squad alerted');
+    state.squad = 'engaging';
+    run(combat, 0.2);
+    expect(log.text).toContain('Squad has found you');
+    state.alive = 0;
+    run(combat, 0.2);
+    expect(encounter.ended).toBe(true);
+    expect(log.text).toBe('SQUAD DOWN · threat cleared · Health 100');
+  });
+
+  it('flashes the screen red for a hit from a soldier, calls the mortar through the encounter, and fails the mission when it kills', () => {
+    const { encounter, combat, log, state } = squadFixture();
+    state.squad = 'engaging';
+    combat.hurt(8);
+    expect(encounter.health).toBe(92);
+    expect(log.flashes).toHaveLength(1);
+    expect(encounter.callBombardment()).toBe(true);
+    run(combat, 0.1);
+    expect(log.text).toContain('INCOMING MORTAR');
+    run(combat, 4.2);
+    expect(encounter.health).toBe(47);
+    expect(log.dust).toBeGreaterThanOrEqual(3); // the blast's three puffs
+    combat.hurt(100);
+    expect(run(combat, 0.1)).toBe(true);
+    expect(log.text).toBe('MISSION FAILED · you were killed');
+  });
+
+  it('does not let the player\'s shot raise a detection nobody is there to read', () => {
+    const { encounter, combat } = squadFixture();
+    combat.onShot();
+    expect(encounter.detection).toBe(0);
+  });
+});

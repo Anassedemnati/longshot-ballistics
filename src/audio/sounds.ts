@@ -26,7 +26,14 @@ const LEVELS = {
   impactHit: 0.8,
   impactDust: 0.6,
   impactMetal: 0.7,
+  /** An enemy soldier's automatic rifle, heard from `impactGain` of the distance: well under the player's own shot. */
+  enemyShot: 0.5,
+  /** The crack of a supersonic round that passes close to the player. */
+  crack: 0.45,
 };
+/** The enemy rifle plays the player's shot recording a fifth higher and cut short: a lighter weapon, a burst of single cracks. */
+const ENEMY_SHOT_RATE = 1.3;
+const ENEMY_SHOT_MAX_S = 0.45;
 /** Playback-rate factor that turns the impact recording into a bright metallic ping (vehicle bodies, engines). */
 const METAL_PITCH = 1.8;
 /** Random playback-rate spread of a shot (+-3 %) and of an impact (+-5 %), so repeats differ. */
@@ -231,6 +238,42 @@ export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308', suppresse
       }),
     () => (suppressed ? synthSuppressedShot(s) : synthShot(s)),
   );
+}
+
+/** Fallback enemy rifle: a short, sharp crack with a thin body, `distanceM` away. */
+function synthEnemyShot(s: Stage, distanceM: number): void {
+  const level = distanceGain(distanceM) * 0.5;
+  noiseBurst(s, s.t, [{ type: 'highpass', freq: 1500 }, { type: 'lowpass', freq: Math.min(7000, distanceCutoffHz(distanceM) * 1.6) }], level * 2, 0.002, 0.05);
+  tone(s, 'triangle', s.t, 260, 90, 0.06, level * 0.4, 0.002, 0.07);
+}
+
+/**
+ * One round of an enemy soldier's automatic rifle, `distanceM` away, heard `delaySec` after the muzzle flash (the sound's trip to the player): the
+ * player's shot recording, higher and cut short, quieter and duller the farther it is, pitch varied a little each time.
+ */
+export function playEnemyShot(e: AudioEngine, delaySec: number, distanceM: number, rifleId: Rifle['id'] = '308'): void {
+  const s = stage(e, delaySec);
+  if (!s) return;
+  recordingOrSynth(
+    e,
+    shotClipId(rifleId),
+    (clip) =>
+      playClip(s, clip, {
+        level: LEVELS.enemyShot * impactGain(distanceM),
+        rate: ENEMY_SHOT_RATE * jitterRate(0.05),
+        cutoff: Math.min(8000, distanceCutoffHz(distanceM) * 1.5),
+        maxSec: ENEMY_SHOT_MAX_S,
+      }),
+    () => synthEnemyShot(s, distanceM),
+  );
+}
+
+/** The sharp snap of a supersonic round passing close to the player, `delaySec` after the muzzle flash (the round's own flight, well before the report). Synthesised. */
+export function playBulletCrack(e: AudioEngine, delaySec: number): void {
+  const s = stage(e, delaySec);
+  if (!s) return;
+  noiseBurst(s, s.t, [{ type: 'highpass', freq: 2500 }], LEVELS.crack * 1.6, 0.001, 0.03);
+  noiseBurst(s, s.t + 0.004, [{ type: 'bandpass', freq: 1800, q: 0.8 }], LEVELS.crack * 0.8, 0.002, 0.06);
 }
 
 /** Fallback hit: dull thwack of a bullet striking the target, `distanceM` away. */

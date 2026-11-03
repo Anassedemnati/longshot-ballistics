@@ -1,14 +1,17 @@
 import type { Vec3 } from '../ballistics/types';
 import type { Encounter, EncounterEvent } from '../game/encounter';
+import type { SquadState } from '../game/squad';
 import type { Sniper } from '../scene/sniper';
 import type { TerrainField } from '../scene/terrainField';
 import { ThreatLine, flashIntensity } from '../ui/threat';
 import type { ThreatState, ThreatView } from '../ui/threat';
 
-// The enemy snipers' fight in one mission, between the pure `Encounter` and the screen: it feeds the
+// The enemy's fight in one mission, between the pure `Encounter` and the screen: it feeds the
 // encounter the frame time, sweeps the snipers' glints, turns fire and bombardments into dust, sound and a
 // damage flash, keeps the threat line, and owns the cover (C) state. `run.ts` creates it only for a
-// mission with snipers, so a training mission (0 snipers) has no incoming fire and no threat panel at all.
+// mission with snipers or with soldiers that fight back, so a training mission (0 snipers, soldiers standing still) has no incoming
+// fire and no threat panel at all. A mission with soldiers that fight back and no snipers has the same panel, health and cover:
+// the soldiers' rifles and mortar (mission/squadDirector.ts) hurt the player through `hurt` and `encounter.callBombardment`.
 
 /** The part of a sniper the fight needs. */
 export type CombatSniper = Pick<Sniper, 'down' | 'scan'>;
@@ -34,6 +37,11 @@ export interface CombatDeps {
   dropScope(): void;
   /** The cache of the threat line (default: a new one); a test passes one with a counting formatter. */
   line?: ThreatLine;
+  /**
+   * The soldiers that fight back, when they do: how well their squad knows where the player is, and how many are still up. The encounter then
+   * lasts until no sniper and no soldier is left, and the threat line carries the squad's state.
+   */
+  squad?: { state(): SquadState; alive(): number };
 }
 
 /** Distances, m, of the impact sounds of a sniper bullet and of a bombardment (the shell lands close). */
@@ -106,7 +114,16 @@ export class Combat {
 
   /** The player fired: the muzzle blast raises the detection (less with a suppressor or a ghillie suit) and alerts the snipers. */
   onShot(): void {
+    if (this.deps.snipers.length === 0 && this.deps.squad) return; // no snipers to hear it: the squad hears it through its own channel
     this.deps.encounter.shot({ suppressed: this.deps.suppressed });
+  }
+
+  /** The soldiers hit the player for `points` of health: the same red flash as any other hit (the encounter keeps the health). */
+  hurt(points: number): void {
+    const before = this.deps.encounter.health;
+    this.deps.encounter.hurt(points);
+    const damage = before - this.deps.encounter.health;
+    if (damage > 0) this.deps.ui.flash(flashIntensity(damage));
   }
 
   /**
@@ -142,8 +159,9 @@ export class Combat {
     const { encounter, ui, snipers, shooter } = this.deps;
     if (!paused) this.clock += dt;
     const alive = this.snipersLeft;
+    const squadAlive = this.deps.squad ? this.deps.squad.alive() : 0;
     const before = encounter.health;
-    const events = encounter.update(dt, alive, this.covered, paused);
+    const events = encounter.update(dt, alive, this.covered, paused, squadAlive);
 
     const awareness = encounter.awareness;
     for (const s of snipers) s.scan(this.clock, awareness, this.covered, shooter);
@@ -155,7 +173,7 @@ export class Combat {
 
     // No sniper is left (the encounter has ended, or the mission was just completed and the encounter is paused for
     // good): the threat is over, and a player still ducked (a bullet in flight killed the last one) comes back up.
-    const cleared = !encounter.failed && (encounter.ended || alive === 0);
+    const cleared = !encounter.failed && (encounter.ended || (alive === 0 && squadAlive === 0));
     if (cleared && this.covered) this.setCovered(false);
 
     const state = this.state;
@@ -171,6 +189,9 @@ export class Combat {
     state.paused = paused;
     state.failed = encounter.failed;
     state.cleared = cleared;
+    state.squad = this.deps.squad && squadAlive > 0 ? this.deps.squad.state() : undefined;
+    state.mortar = encounter.warningSource === 'mortar';
+    state.noSnipers = snipers.length === 0;
     ui.setText(this.line.line(state));
     return encounter.failed;
   }

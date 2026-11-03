@@ -53,6 +53,8 @@ export interface InputHandlers {
   toggleMute?(): void;
   /** The C key: duck into cover or come back up (missions with enemy snipers); works whether or not the pointer is locked. */
   toggleCover?(): void;
+  /** The F key: go fullscreen or leave it; works whether or not the pointer is locked (a key press is a user gesture). */
+  toggleFullscreen?(): void;
 }
 
 /**
@@ -98,6 +100,7 @@ export function bindInput(
     if (e.code === 'KeyR' && !e.repeat) handlers.reload();
     else if (e.code === 'KeyM' && !e.repeat) handlers.toggleMute?.();
     else if (e.code === 'KeyC' && !e.repeat) handlers.toggleCover?.();
+    else if (e.code === 'KeyF' && !e.repeat) handlers.toggleFullscreen?.();
   });
   // One zoom step per notch. Trackpads fire a stream of tiny wheel events, so steps are rate limited.
   let lastNotchMs = -Infinity;

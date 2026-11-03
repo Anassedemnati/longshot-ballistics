@@ -458,3 +458,44 @@ describe('Encounter: the bullet cue', () => {
     expect(e.detection).toBe(100);
   });
 });
+
+describe('the soldiers that fight back', () => {
+  it('lasts while soldiers are left even with no sniper, without any detection or sniper fire', () => {
+    const e = new Encounter();
+    for (let i = 0; i < 600; i++) expect(e.update(0.1, 0, false, false, 3)).toEqual([]); // 60 s exposed, 0 snipers, 3 soldiers
+    expect(e.ended).toBe(false);
+    expect(e.detection).toBe(0);
+    expect(e.health).toBe(100);
+    e.update(0.1, 0, false, false, 0); // the last soldier is down
+    expect(e.ended).toBe(true);
+  });
+
+  it('starts the same 4 s warning and blast from a mortar call, once at a time', () => {
+    const e = new Encounter();
+    expect(e.callBombardment()).toBe(true);
+    expect(e.warning).toBe(4);
+    expect(e.warningSource).toBe('mortar');
+    expect(e.callBombardment()).toBe(false); // one is already on its way
+    let blasts = 0;
+    for (let i = 0; i < 45; i++) blasts += e.update(0.1, 0, false, false, 2).filter((x) => x === 'blast').length;
+    expect(blasts).toBe(1);
+    expect(e.health).toBe(55);
+    const covered = new Encounter();
+    covered.callBombardment();
+    for (let i = 0; i < 45; i++) covered.update(0.1, 0, true, false, 2);
+    expect(covered.health).toBe(95); // 5 in cover
+  });
+
+  it('takes damage from the soldiers\' rifles, never below 0, and ends when it kills', () => {
+    const e = new Encounter();
+    e.hurt(8);
+    expect(e.health).toBe(92);
+    e.hurt(-5);
+    e.hurt(0);
+    expect(e.health).toBe(92);
+    e.hurt(500);
+    expect(e.health).toBe(0);
+    expect(e.failed).toBe(true);
+    expect(e.ended).toBe(true);
+  });
+});

@@ -81,6 +81,11 @@ export const SNIPERS_NOTE = '0 = training, no incoming fire';
 export const SUPPRESSOR_NOTE = 'Reduced noise / flash, slower detection';
 /** Under the ghillie suit switch (one line: the gear panel has no room for a third two-line note): hidden until the first shot. */
 export const GHILLIE_NOTE = 'Hard to spot until you fire.';
+/**
+ * Under the "Soldiers fight back" switch, which sits right under the Soldiers slider: one line (the targets panel has no room for a second; the
+ * menu must still fit 1280x720), and it points at the slider that sets how many of them there are. What they do is in the README.
+ */
+export const FIGHT_BACK_NOTE = 'Shoot back. Count: slider above.';
 /** Under the aim assists switch (spec B.5). */
 export const ASSISTS_NOTE = 'Trajectory, aim marker and spotter — training aid';
 

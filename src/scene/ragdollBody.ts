@@ -7,7 +7,9 @@ import type { Rng } from '../mission/random';
 // Drives a skinned enemy mesh from a Verlet ragdoll (game/ragdoll.ts). The enemy keeps ONE draw call: the shared merged geometry is bound
 // to a skeleton of flat bones (children of the enemy's group, so they live in its frame: feet at the origin); each bone is a rigid piece
 // of the body that pivots at one joint, and every frame while the body falls the bones take the pose the particles give them. At rest
-// (and while standing) the bones sit in the bind pose, so the mesh looks exactly like the static one did.
+// (and while standing) the bones sit in the bind pose, so the mesh looks exactly like the static one did. A body that is ANIMATED (a soldier that
+// runs, crouches and shoots, mission/soldierAnim.ts) is posed from joints the same way (`animate`), and when it falls the ragdoll starts from
+// those joints, carrying their velocities, instead of from the bind pose.
 
 export interface RagdollBodyOptions<H> {
   rig: RigSpec;
@@ -21,14 +23,31 @@ export interface RagdollBodyOptions<H> {
   /** Gives the standing rig the velocities of a fall (see `soldierFall`, `sniperFall`). */
   crumple: (rag: Ragdoll, hit: H | undefined, rng: Rng) => void;
   name: string;
+  /** The bone of the head, when its turn about the vertical is set on its own (`animate`'s `headYaw`). */
+  head?: number;
+}
+
+/** What a fall starts from when the body was animated: the joints it was in (3 per particle), the speed of each (m/s, or null for none) and of the whole body (m/s); all in the body's frame. */
+export interface FallFrom {
+  pose: ArrayLike<number>;
+  velocities: ArrayLike<number> | null;
+  body: readonly [number, number, number];
 }
 
 export interface RagdollBody<H> {
   readonly mesh: THREE.SkinnedMesh;
   /** True from `fall` until the body has come to rest. */
   readonly falling: boolean;
-  /** Start the fall: `hit` is whatever the rig's `crumple` understands (the bullet, in the body's frame); `seed` makes the chance of it repeatable. */
-  fall(hit: H | undefined, seed: number): void;
+  /**
+   * Pose the bones from `joints` (3 numbers per particle, the body's frame; see mission/soldierPose.ts), the head turned by `headYaw` about the
+   * vertical on top. Returns the bone transforms, 7 numbers per bone (pivot, then rotation x, y, z, w), reused from call to call.
+   */
+  animate(joints: ArrayLike<number>, headYaw: number): Float32Array;
+  /**
+   * Start the fall: `hit` is whatever the rig's `crumple` understands (the bullet, in the body's frame); `seed` makes the chance of it repeatable.
+   * `from` (an animated body) starts it from the pose the body was in, with its speed; without it the fall starts from the bind pose.
+   */
+  fall(hit: H | undefined, seed: number, from?: FallFrom): void;
   /** Simulate `dt` seconds of the fall (nothing at all once it has come to rest) and pose the bones. */
   update(dt: number): void;
   /** Stand up again at once: bind pose, nothing simulated. */
@@ -91,8 +110,32 @@ export function createRagdollBody<H>(opts: RagdollBodyOptions<H>): RagdollBody<H
     get falling() {
       return falling;
     },
-    fall(hit, seed) {
-      rag.start();
+    animate(joints, headYaw) {
+      boneTransforms(rig, frames, joints, buffer);
+      if (opts.head !== undefined && headYaw !== 0) {
+        // Turn the head about the vertical through the neck: q = qY(yaw) * q.
+        const o = opts.head * 7 + 3;
+        const sy = Math.sin(headYaw / 2);
+        const cw = Math.cos(headYaw / 2);
+        const x = buffer[o];
+        const y = buffer[o + 1];
+        const z = buffer[o + 2];
+        const w = buffer[o + 3];
+        buffer[o] = cw * x + sy * z;
+        buffer[o + 1] = cw * y + sy * w;
+        buffer[o + 2] = cw * z - sy * x;
+        buffer[o + 3] = cw * w - sy * y;
+      }
+      for (let i = 0; i < bones.length; i++) {
+        const o = i * 7;
+        bones[i].position.set(buffer[o], buffer[o + 1], buffer[o + 2]);
+        bones[i].quaternion.set(buffer[o + 3], buffer[o + 4], buffer[o + 5], buffer[o + 6]);
+      }
+      return buffer;
+    },
+    fall(hit, seed, from) {
+      if (from) rag.startFrom(from.pose, from.velocities, from.body);
+      else rag.start();
       opts.crumple(rag, hit, createRng(seed));
       falling = true;
       mesh.frustumCulled = false; // the body leaves the standing pose's bounding sphere

@@ -84,6 +84,9 @@ export interface EncounterOptions {
   camo?: boolean;
 }
 
+/** Who called the bombardment that is on its way: the enemy snipers (their detection ran high) or the soldiers' mortar (game/squad.ts). */
+export type WarningSource = 'sniper' | 'mortar';
+
 /** What happened during one update: a sniper fired at the player, or a bombardment landed. */
 export type EncounterEvent = 'shot' | 'blast';
 
@@ -105,6 +108,8 @@ export class Encounter {
   mortarClock = 0;
   /** Seconds left until the called bombardment lands; 0 when none is coming. */
   warning = 0;
+  /** Who called the bombardment on its way (meaningful while `warning` > 0). */
+  warningSource: WarningSource = 'sniper';
   /** The encounter is over: the player is dead or no sniper is left. Nothing happens any more. */
   ended = false;
   /** A shot or a bullet has given the player away: the snipers know someone is there, for the rest of the mission. */
@@ -162,6 +167,24 @@ export class Encounter {
     this.setDetection(this.detection + bump);
   }
 
+  /**
+   * The soldiers' mortar crew has the player's position: start the same warning (`ENCOUNTER.bombardWarningS`) and blast a sniper's call would.
+   * Returns false, and does nothing, when a bombardment is already on its way or the encounter is over.
+   */
+  callBombardment(): boolean {
+    if (this.ended || this.warning > 0 || this.health <= 0) return false;
+    this.warning = ENCOUNTER.bombardWarningS;
+    this.warningSource = 'mortar';
+    return true;
+  }
+
+  /** The player takes `points` of damage from something that is not the encounter's own fire (the soldiers' rifles). Never below 0; nothing once it is over. */
+  hurt(points: number): void {
+    if (this.ended || !(points > 0)) return;
+    this.health = Math.max(0, this.health - points);
+    if (this.health <= 0) this.ended = true;
+  }
+
   /** Set the detection directly (clamped to 0..100); the debug hook uses it to force incoming fire. */
   setDetection(value: number): void {
     this.detection = Number.isFinite(value) ? clamp100(value) : 0;
@@ -182,16 +205,19 @@ export class Encounter {
   /**
    * Advance by `dt` seconds. `alive` is the number of enemy snipers still up, `covered` whether the player
    * is ducked, `paused` that the game is not running (pointer free, results on screen): a paused update
-   * changes nothing at all. Returns what happened, in order (a frame can hold both a blast and a shot).
+   * changes nothing at all. `squadAlive` is the number of soldiers still fighting back (default 0): the encounter is over only when
+   * no sniper and no such soldier is left, and while only soldiers are left the detection and the snipers' fire stand still (they
+   * have no snipers to spot or shoot him; a called mortar still lands). Returns what happened, in order (a frame can hold both a blast and a shot).
    */
-  update(dt: number, alive: number, covered: boolean, paused: boolean): readonly EncounterEvent[] {
+  update(dt: number, alive: number, covered: boolean, paused: boolean, squadAlive = 0): readonly EncounterEvent[] {
     if (this.ended || paused) return NONE;
-    if (alive <= 0 || this.health <= 0) {
+    if ((alive <= 0 && squadAlive <= 0) || this.health <= 0) {
       this.ended = true;
       return NONE;
     }
     const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
-    this.detection = this.afterExposure(step, covered);
+    const snipers = alive > 0;
+    if (snipers) this.detection = this.afterExposure(step, covered);
 
     let events: EncounterEvent[] | null = null; // made only when something happens: most frames have no event
     if (this.warning > 0) {
@@ -202,12 +228,13 @@ export class Encounter {
         (events ??= []).push('blast');
       }
     }
-    if (this.detection >= ENCOUNTER.fireThreshold) {
+    if (snipers && this.detection >= ENCOUNTER.fireThreshold) {
       this.sniperClock += step;
       this.mortarClock += step;
       if (this.mortarClock >= ENCOUNTER.bombardIntervalS - TIMER_EPSILON) {
         this.mortarClock = 0;
         this.warning = ENCOUNTER.bombardWarningS;
+        this.warningSource = 'sniper';
       }
       if (this.sniperClock >= ENCOUNTER.sniperIntervalS - TIMER_EPSILON) {
         this.sniperClock = 0;
