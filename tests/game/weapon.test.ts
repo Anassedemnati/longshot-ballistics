@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RIFLES } from '../../src/ballistics/rifles';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../../src/game/weapon';
 
 describe('Weapon', () => {
@@ -150,5 +151,41 @@ describe('Weapon', () => {
       w.update(RELOAD_TIME_S);
       expect(w.ammo).toBe(5);
     });
+  });
+});
+
+describe('Weapon: per-rifle timing', () => {
+  it('keeps the .308 timing as the default', () => {
+    const w = new Weapon(5);
+    expect([w.boltTimeS, w.reloadTimeS]).toEqual([BOLT_TIME_S, RELOAD_TIME_S]);
+    const r = new Weapon(5, RIFLES['308']);
+    expect([r.boltTimeS, r.reloadTimeS]).toEqual([1.2, 1.5]);
+  });
+
+  it('locks each rifle out for its own bolt (or semi-auto cycle) and reload', () => {
+    for (const rifle of Object.values(RIFLES)) {
+      const w = new Weapon(rifle.magazine, rifle);
+      expect(w.fire()).toEqual({ fired: true, boltCycle: true });
+      w.update(rifle.boltTimeS - 0.01);
+      expect(w.fire()).toEqual({ fired: false, reason: 'bolt' });
+      w.update(0.01);
+      expect(w.fire().fired).toBe(true);
+      expect(w.reload()).toBe(true);
+      w.update(rifle.reloadTimeS - 0.01);
+      expect(w.fire()).toEqual({ fired: false, reason: 'reloading' });
+      expect(w.update(0.01)).toBe(true);
+      expect(w.ammo).toBe(rifle.magazine);
+    }
+  });
+
+  it('the semi-automatic .50 empties its ten rounds in a few seconds; the heavy bolt guns are slower than the .308', () => {
+    const fifty = new Weapon(RIFLES['50'].magazine, RIFLES['50']);
+    let shots = 0;
+    for (let t = 0; t < 4; t += 0.05) {
+      if (fifty.fire().fired) shots++;
+      fifty.update(0.05);
+    }
+    expect(shots).toBe(10);
+    for (const id of ['408', '127'] as const) expect(new Weapon(5, RIFLES[id]).boltTimeS).toBeGreaterThan(BOLT_TIME_S);
   });
 });

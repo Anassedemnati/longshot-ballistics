@@ -54,7 +54,7 @@ describe('atmosphere', () => {
 
 describe('rifles', () => {
   it('.308 Win matches the global constraints', () => {
-    expect(RIFLES['308']).toEqual({
+    expect(RIFLES['308']).toMatchObject({
       id: '308',
       name: '.308 Win',
       bcG7: 0.243,
@@ -66,7 +66,7 @@ describe('rifles', () => {
   });
 
   it('.338 Lapua Magnum matches the global constraints', () => {
-    expect(RIFLES['338']).toEqual({
+    expect(RIFLES['338']).toMatchObject({
       id: '338',
       name: '.338 Lapua Magnum',
       bcG7: 0.322,

@@ -106,9 +106,15 @@ function wrapClock(n: number): number {
   return ((((n - 1) % 12) + 12) % 12) + 1;
 }
 
+/** The farthest a target band may reach with this rifle, m: the menu's limit, or the rifle's own when it is shorter. */
+export function rifleMaxRange(rifle: RifleId): number {
+  return Math.min(MISSION_LIMITS.rangeMax, RIFLE_DATA[rifle].maxRangeM);
+}
+
 /**
  * Fill defaults, clamp to the menu limits and quantise (integer metres and counts, 0.1 m/s wind,
  * integer clock wrapped into 1..12, uint32 seed, 0..3 enemy snipers). Bad values fall back to the defaults, never NaN.
+ * The rifle has its say: the band ends at its `maxRangeM`, and one with an integral suppressor is always suppressed.
  * Idempotent: clampMission(clampMission(x)) equals clampMission(x).
  */
 export function clampMission(c: Partial<MissionConfig>): MissionConfig {
@@ -118,21 +124,26 @@ export function clampMission(c: Partial<MissionConfig>): MissionConfig {
   let lo = Math.round(num(c.rangeMin, d.rangeMin));
   let hi = Math.round(num(c.rangeMax, d.rangeMax));
   if (lo > hi) [lo, hi] = [hi, lo];
+  const rifle = oneOf(c.rifle, RIFLES, d.rifle);
+  // The band's far end is the rifle's own limit too (the subsonic 12.7x55 stops at 250 m, see `Rifle.maxRangeM`); both ends are
+  // clamped to it, so a band beyond it collapses onto it and min <= max still holds.
+  const farthest = rifleMaxRange(rifle);
 
   return {
     theme: oneOf(c.theme, THEME_IDS, d.theme),
-    rangeMin: Math.min(L.rangeMax, Math.max(L.rangeMin, lo)),
-    rangeMax: Math.min(L.rangeMax, Math.max(L.rangeMin, hi)),
+    rangeMin: Math.min(farthest, Math.max(L.rangeMin, lo)),
+    rangeMax: Math.min(farthest, Math.max(L.rangeMin, hi)),
     soldiers: Math.min(L.soldiersMax, Math.max(L.soldiersMin, Math.round(num(c.soldiers, d.soldiers)))),
     vehicleTargets: Math.min(L.vehicleTargetsMax, Math.max(0, Math.round(num(c.vehicleTargets, d.vehicleTargets)))),
     windSpeedMps: Math.min(L.windMaxMps, Math.max(0, Math.round(num(c.windSpeedMps, d.windSpeedMps) * 10) / 10)),
     windClock: wrapClock(Math.round(num(c.windClock, d.windClock))),
-    rifle: oneOf(c.rifle, RIFLES, d.rifle),
+    rifle,
     buildings: oneOf(c.buildings, DENSITIES, d.buildings),
     vehicles: oneOf(c.vehicles, DENSITIES, d.vehicles),
     seed: Math.floor(num(c.seed, d.seed)) >>> 0,
     position: oneOf(c.position, POSITIONS, d.position),
-    suppressed: bool(c.suppressed, d.suppressed),
+    // A rifle built round its suppressor (the 12.7x55) is always suppressed, whatever the link or the switch says.
+    suppressed: RIFLE_DATA[rifle].integralSuppressor || bool(c.suppressed, d.suppressed),
     enemySnipers: Math.min(
       L.enemySnipers.max,
       Math.max(L.enemySnipers.min, Math.round(num(c.enemySnipers, d.enemySnipers))),

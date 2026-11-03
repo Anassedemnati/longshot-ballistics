@@ -282,7 +282,7 @@ describe('encodeMission / decodeMission', () => {
 
   it('round-trips every rifle, and reads an unknown one as the default', () => {
     for (const id of Object.keys(RIFLES) as MissionConfig['rifle'][]) {
-      const c = { ...DEFAULT_MISSION, rifle: id };
+      const c = clampMission({ ...DEFAULT_MISSION, rifle: id }); // the 12.7x55 brings its own band cap and suppressor
       expect(decodeMission(encodeMission(c))).toEqual(c);
     }
     expect(decodeMission('v5.d.600.1000.3.0.45.9.999.f.f.1.r.0.1.0.0.1.c')?.rifle).toBe(DEFAULT_MISSION.rifle);
@@ -530,9 +530,10 @@ describe('randomMission', () => {
 
   it('draws the ghillie flag last: the first fifteen fields are what they were before the flag existed', () => {
     // Golden values from before the flag: its draw comes after every other one, so a fresh rng still yields them.
-    // The rifle is left out: the draw is the same, but there are more rifles to land on now.
+    // The rifle is left out: the draw is the same, but there are more rifles to land on now. The band is the golden one as that
+    // rifle clamps it (the subsonic 12.7x55 caps it at 250 m).
     const { camo, soldiersFightBack, objective, rifle, ...earlier } = randomMission(createRng(31));
-    expect(earlier).toEqual({
+    const { camo: _c, soldiersFightBack: _f, objective: _o, rifle: _r, ...golden } = clampMission({
       theme: 'valley',
       rangeMin: 1041,
       rangeMax: 1271,
@@ -547,7 +548,9 @@ describe('randomMission', () => {
       suppressed: true,
       enemySnipers: 1,
       assists: true,
+      rifle,
     });
+    expect(earlier).toEqual(golden);
     expect(typeof camo).toBe('boolean');
     expect(typeof soldiersFightBack).toBe('boolean');
     expect(['clear', 'hvt']).toContain(objective);
