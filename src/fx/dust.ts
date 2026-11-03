@@ -29,8 +29,8 @@ export class DustSystem {
   private readonly texture: THREE.Texture = makeBlobTexture();
   private readonly puffs: Puff[] = [];
 
-  /** Start a puff at a world position (the ground impact point). */
-  spawn(point: Vec3): void {
+  /** Start a puff at a world position (the ground impact point); `scale` shrinks it (a bullet that came through a body and landed at its feet raises only a small one). */
+  spawn(point: Vec3, scale = 1): void {
     const particles: Particle[] = [];
     for (let i = 0; i < SPRITES_PER_PUFF; i++) {
       const material = new THREE.SpriteMaterial({
@@ -43,13 +43,13 @@ export class DustSystem {
       });
       const sprite = new THREE.Sprite(material);
       const angle = Math.random() * Math.PI * 2;
-      const dist = Math.random() * SPREAD;
+      const dist = Math.random() * SPREAD * scale;
       sprite.position.set(
         point.x + Math.cos(angle) * dist,
-        point.y + 0.15 + Math.random() * 0.6,
+        point.y + (0.15 + Math.random() * 0.6) * scale,
         point.z + Math.sin(angle) * dist,
       );
-      const startSize = 0.7 + Math.random() * 0.5;
+      const startSize = (0.7 + Math.random() * 0.5) * scale;
       sprite.scale.setScalar(startSize);
       this.group.add(sprite);
       particles.push({

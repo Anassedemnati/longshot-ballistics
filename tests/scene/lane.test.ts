@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bonesOf } from '../helpers/bones';
 import { createTargetDummyAtRange } from '../../src/scene/target';
 import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
@@ -25,14 +26,16 @@ describe('range lane end to end', () => {
     expect(events[0].kind).not.toBe('target');
   });
 
-  it('a knocked-down dummy tips backwards (away from the shooter) and rests near the ground', () => {
+  it('a knocked-down dummy goes down (away from the shooter) and rests on the ground', () => {
     const dummy = createTargetDummyAtRange(500);
     expect(dummy.down).toBe(false);
     dummy.knockDown();
     expect(dummy.down).toBe(true);
-    for (let i = 0; i < 40; i++) dummy.update(0.016);
-    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
-    expect(dummy.group.position.y).toBeCloseTo(terrainHeight(0, -500) + 0.1, 9);
+    for (let i = 0; i < 125; i++) dummy.update(0.016); // two seconds
+    const pivots = bonesOf(dummy.group).map((b) => b.position);
+    expect(Math.max(...pivots.map((p) => p.y))).toBeLessThan(0.6); // every joint is down near the sand
+    expect(pivots[2].z).toBeLessThan(-0.2); // the shoulders are behind the feet: it fell backwards, away from the shooter
+    expect(dummy.group.position.y).toBe(terrainHeight(0, -500)); // the group stays where it stood: the body is posed bone by bone
   });
 
   it('the dummy stands on the ground at the target range, about 1.8 m tall, with the specified hit spheres', () => {

@@ -4,6 +4,7 @@ import { facingYaw } from '../../src/mission/layout';
 import { SNIPER_BOUNDS_MARGIN, SNIPER_PARTS, sniperAimPoints, sniperHitSpheres, sniperWorldPoint } from '../../src/mission/sniperDims';
 import { createSniper } from '../../src/scene/sniper';
 import { SHOOTER_POS, terrainHeight } from '../../src/scene/terrainHeight';
+import { bonesOf } from '../helpers/bones';
 import { shootAtPoint } from '../helpers/shoot';
 
 const EYE = { x: 0, y: 12, z: 0 };
@@ -229,19 +230,23 @@ describe('createSniper: knocked down', () => {
     expect(sniper.down).toBe(true);
   });
 
-  it('slumps onto his side over a third of a second and stays there', () => {
+  it('slumps: the head drops, the arms go limp, and he comes to rest and stays there', () => {
     const { sniper } = at(0, -400);
+    const bones = () => bonesOf(sniper.group).map((b) => ({ p: b.position.clone(), q: b.quaternion.clone() }));
+    const rest = bones();
     sniper.update(0.5);
-    expect(sniper.group.rotation.z).toBe(0); // up: no change
-    sniper.knockDown();
-    sniper.update(0.1);
-    const early = sniper.group.rotation.z;
-    expect(early).toBeGreaterThan(0);
-    for (let i = 0; i < 20; i++) sniper.update(0.1);
-    expect(sniper.group.rotation.z).toBeGreaterThan(early);
-    const settled = sniper.group.rotation.z;
+    bones().forEach((b, i) => expect(b.p.distanceTo(rest[i].p)).toBe(0)); // up: no change
+    sniper.knockDown({ point: { x: 0, y: 0.37, z: -400.2 }, velocity: { x: 0, y: 0, z: 800 }, zone: 'head' });
+    sniper.update(0.15);
+    const early = bones();
+    expect(early[2].q.angleTo(rest[2].q)).toBeGreaterThan(0.05); // the head bone has turned: it is dropping
+    for (let i = 0; i < 40; i++) sniper.update(0.1);
+    const settled = bones();
+    expect(settled[2].q.angleTo(rest[2].q)).toBeGreaterThan(0.2); // head down on the ground
+    for (const bone of bonesOf(sniper.group)) expect(bone.position.y).toBeGreaterThan(-0.05); // not sunk into the ground
     sniper.update(5);
-    expect(sniper.group.rotation.z).toBe(settled);
+    bones().forEach((b, i) => expect(b.p.distanceTo(settled[i].p)).toBe(0)); // asleep: nothing moves any more
+    expect(sniper.group.rotation.z).toBe(0); // posed bone by bone, no rigid roll
   });
 
   it('can be stood up again by an explicit reset, glint included', () => {
@@ -250,7 +255,7 @@ describe('createSniper: knocked down', () => {
     sniper.reset();
     sniper.scan(0, 'firing', false, EYE);
     expect(sniper.down).toBe(false);
-    expect(sniper.group.rotation.z).toBe(0);
+    expect(bonesOf(sniper.group)[2].quaternion.angleTo(new THREE.Quaternion())).toBeLessThan(1e-9); // back in the bind pose
     expect(sniper.glintVisible).toBe(true);
   });
 

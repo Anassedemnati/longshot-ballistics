@@ -11,9 +11,14 @@ import {
 } from '../../src/scene/target';
 import { enemyMaterial } from '../../src/scene/enemyMaterial';
 import { terrainHeight } from '../../src/scene/terrainHeight';
+import { advance, bodyOf, bonesOf } from '../helpers/bones';
 import { shootAtDummy } from '../helpers/shoot';
 
 const RANGE = 800;
+/** The standing neck's height (the pivot of the head bone), m: what a dummy that stood up again must show. */
+const NECK_Y = 1.52;
+/** The pivot of the head bone (the neck), in the dummy's own frame. */
+const neck = (dummy: ReturnType<typeof createTargetDummy>) => bonesOf(dummy.group)[2].position;
 
 /** Kind and zone of the first impact of a shot through (x, height above the feet) at 800 m. */
 function shotAt(x: number, height: number): { kind: string; zone?: string } {
@@ -145,27 +150,76 @@ describe('dummy fall and reset', () => {
     expect(dummy.group.position.y).toBe(groundY);
   });
 
-  it('tips over backwards and lies on the sand once the fall is over', () => {
+  it('goes down as a limp body and lies on the sand once the fall is over', () => {
     const dummy = standing();
+    expect(neck(dummy).y).toBeCloseTo(NECK_Y, 9);
     dummy.knockDown();
     expect(dummy.down).toBe(true);
-    dummy.update(FALL_DURATION);
-    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
-    expect(dummy.group.position.y).toBeGreaterThan(groundY);
+    advance(dummy, FALL_DURATION);
     expect(dummy.down).toBe(true);
+    expect(neck(dummy).y).toBeLessThan(0.5); // the shoulders are down on the ground, not standing, not floating
+    expect(neck(dummy).y).toBeGreaterThan(0.02);
+    for (const bone of bonesOf(dummy.group)) expect(bone.position.y).toBeGreaterThan(-0.05); // nothing sunk into the sand (flat range)
+    expect(dummy.group.rotation.x).toBe(0); // no rigid tip: the body is posed bone by bone
+  });
+
+  it('is a body that moves on its own: knees buckle and it sags within a third of a second, then it settles and stops moving', () => {
+    const dummy = standing();
+    dummy.knockDown();
+    advance(dummy, 0.1);
+    const early = neck(dummy).y;
+    expect(early).toBeLessThan(NECK_Y - 0.02);
+    advance(dummy, 0.2);
+    expect(neck(dummy).y).toBeLessThan(early);
+    advance(dummy, FALL_DURATION);
+    const settled = bonesOf(dummy.group).map((b) => b.position.clone());
+    advance(dummy, 0.5);
+    bonesOf(dummy.group).forEach((b, i) => expect(b.position.distanceTo(settled[i])).toBeLessThan(0.02));
+  });
+
+  it('is culled by the standing sphere while up, not at all while falling, and by a sphere around where it lies once it has settled', () => {
+    const dummy = standing();
+    const mesh = bodyOf(dummy.group);
+    expect(mesh.frustumCulled).toBe(true);
+    dummy.knockDown();
+    advance(dummy, 0.1);
+    expect(mesh.frustumCulled).toBe(false); // moving: the standing sphere no longer holds it
+    advance(dummy, 8);
+    expect(mesh.frustumCulled).toBe(true);
+    const sphere = mesh.boundingSphere as THREE.Sphere;
+    for (const bone of bonesOf(dummy.group)) expect(sphere.distanceToPoint(bone.position)).toBeLessThan(0); // every joint is inside it
+    expect(sphere.radius).toBeLessThan(2.5); // and it is a sphere around the body, not the world
+    dummy.reset();
+    expect(mesh.frustumCulled).toBe(true);
+    expect((mesh.boundingSphere as THREE.Sphere).center.y).toBeGreaterThan(0.5); // the standing one again
+  });
+
+  it('a head shot and a shot to the leg bring it down differently, each the same way every time', () => {
+    const fall = (zone: 'head' | 'limbs') => {
+      const d = createTargetDummy({ x: 0, y: groundY, z: -RANGE }, 0, 'soldier-1', { autoReset: false });
+      const hit = { point: { x: 0.1, y: groundY + (zone === 'head' ? 1.65 : 0.5), z: -RANGE + 0.1 }, velocity: { x: 0, y: 0, z: -800 }, zone };
+      d.knockDown(hit);
+      advance(d, FALL_DURATION);
+      return bonesOf(d.group).map((b) => b.position.clone());
+    };
+    const head = fall('head');
+    const leg = fall('limbs');
+    expect(fall('head').every((p, i) => p.distanceTo(head[i]) === 0)).toBe(true); // repeatable
+    expect(head.some((p, i) => p.distanceTo(leg[i]) > 0.1)).toBe(true);
   });
 
   it('stays down for 3 s after it has finished falling, then stands up again by itself', () => {
     expect(RESET_DELAY).toBe(3);
     const dummy = standing();
     dummy.knockDown();
-    dummy.update(FALL_DURATION);
-    dummy.update(RESET_DELAY - 0.1);
+    advance(dummy, FALL_DURATION);
+    advance(dummy, RESET_DELAY - 0.1);
     expect(dummy.down).toBe(true);
-    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    expect(neck(dummy).y).toBeLessThan(0.5);
     dummy.update(0.1);
     expect(dummy.down).toBe(false);
-    expect(dummy.group.rotation.x).toBe(0);
+    expect(neck(dummy).y).toBeCloseTo(NECK_Y, 9); // back in the bind pose at once
+    expect(bodyOf(dummy.group).frustumCulled).toBe(true);
     expect(dummy.group.position.y).toBe(groundY);
   });
 
@@ -216,11 +270,10 @@ describe('dummy fall and reset', () => {
 
     dummy.knockDown();
     expect(dummy.down).toBe(true);
-    dummy.update(FALL_DURATION / 2);
-    expect(dummy.group.rotation.x).toBeLessThan(0);
-    expect(dummy.group.rotation.x).toBeGreaterThan(-Math.PI / 2);
-    dummy.update(FALL_DURATION / 2);
-    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    advance(dummy, FALL_DURATION / 2);
+    expect(neck(dummy).y).toBeLessThan(NECK_Y - 0.02);
+    advance(dummy, FALL_DURATION / 2);
+    expect(neck(dummy).y).toBeLessThan(0.5);
     dummy.update(RESET_DELAY);
     expect(dummy.down).toBe(false);
   });
@@ -257,12 +310,13 @@ describe('dummy fall and reset', () => {
   it('with autoReset off (mission soldiers) it stays down for good, and reset() still stands it up', () => {
     const dummy = createTargetDummy({ x: 0, y: groundY, z: -RANGE }, 0, 'soldier-0', { autoReset: false });
     dummy.knockDown();
-    dummy.update(FALL_DURATION);
+    advance(dummy, FALL_DURATION);
     for (let i = 0; i < 100; i++) dummy.update(1);
     expect(dummy.down).toBe(true);
-    expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
+    expect(neck(dummy).y).toBeLessThan(0.5);
     dummy.reset();
     expect(dummy.down).toBe(false);
+    expect(neck(dummy).y).toBeCloseTo(NECK_Y, 9);
   });
 
   it('autoReset defaults to on and the id is the hit target id', () => {
@@ -276,8 +330,9 @@ describe('dummy fall and reset', () => {
   it('dummies share their geometries and materials', () => {
     const a = createTargetDummy({ x: 0, y: 0, z: -100 }, 0, 'a');
     const b = createTargetDummy({ x: 5, y: 0, z: -100 }, 0.3, 'b');
+    // The bones are children of the group too; the visible body is its one mesh.
     const parts = (g: ReturnType<typeof createTargetDummy>['group']) =>
-      g.children.map((c) => c as unknown as { geometry: unknown; material: unknown });
+      g.children.filter((c) => (c as THREE.Mesh).isMesh).map((c) => c as unknown as { geometry: unknown; material: unknown });
     const pa = parts(a.group);
     const pb = parts(b.group);
     expect(pa.length).toBe(1); // the whole body is one mesh: one draw call per soldier

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { ENEMY_UV_TILE_M, SURFACES } from '../mission/enemySurface';
 import type { SurfaceKey } from '../mission/enemySurface';
-import type { ModelFrame, ModelGroup, ModelPart, V3 } from '../mission/modelPart';
+import type { ModelFrame, ModelGroup, ModelPart, SkinBinding, V3 } from '../mission/modelPart';
 import { projectUVs } from '../player/rifleParts';
 import { SURFACE_ATTRIBUTE } from './enemyMaterial';
 
@@ -149,6 +149,44 @@ export class EnemyBuilder {
   private readonly paint = new THREE.Color();
   private readonly placed = new THREE.Matrix4();
   private frame: THREE.Matrix4 | null = null;
+  private readonly skinIndices: number[] = [];
+  private readonly skinWeights: number[] = [];
+  private skin: SkinBinding | null = null;
+
+  /**
+   * `boneNames`, when given, makes the geometry skinnable: every part must then name its bone (`ModelPart.skin`, or `setSkin` for loose
+   * strands), and the built geometry carries `skinIndex` / `skinWeight` (the index of a name is its place in `boneNames`).
+   */
+  constructor(private readonly boneNames: readonly string[] | null = null) {}
+
+  /** From now on every vertex is bound to `skin` (see `ModelPart.skin`). */
+  setSkin(skin: SkinBinding | null): void {
+    this.skin = skin;
+  }
+
+  /** The bone index of a name; an unknown name is a mistake in the model. */
+  private boneIndex(name: string): number {
+    const i = this.boneNames?.indexOf(name) ?? -1;
+    if (i < 0) throw new Error(`EnemyBuilder: no bone named "${name}"`);
+    return i;
+  }
+
+  /** Append the skin weights of one vertex at (x, y, z) of the model's frame. */
+  private pushSkin(x: number, y: number, z: number): void {
+    if (this.boneNames === null) return;
+    const skin = this.skin;
+    if (skin === null) throw new Error('EnemyBuilder: a part of a skinned model names no bone');
+    if (typeof skin === 'string') {
+      this.skinIndices.push(this.boneIndex(skin), 0, 0, 0);
+      this.skinWeights.push(1, 0, 0, 0);
+      return;
+    }
+    const v = skin.axis === 0 ? x : skin.axis === 1 ? y : z;
+    const u = Math.min(1, Math.max(0, (v - skin.from) / (skin.to - skin.from)));
+    const w = u * u * (3 - 2 * u);
+    this.skinIndices.push(this.boneIndex(skin.low), this.boneIndex(skin.high), 0, 0);
+    this.skinWeights.push(1 - w, w, 0, 0);
+  }
 
   /** Triangles collected so far. */
   get triangles(): number {
@@ -164,6 +202,7 @@ export class EnemyBuilder {
 
   /** Append one part of the model description. */
   addPart(part: ModelPart): void {
+    if (part.skin !== undefined) this.skin = part.skin;
     switch (part.kind) {
       case 'tube':
         this.tube(part.a, part.b, part.ra, part.rb, part.surface, part.color, { sx: part.sx, sz: part.sz, sides: part.sides, caps: part.caps });
@@ -209,6 +248,7 @@ export class EnemyBuilder {
       this.normals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
       this.colors.push(this.paint.r * tone, this.paint.g * tone, this.paint.b * tone);
       this.surfaces.push(def.camo, def.roughness, def.metalness, def.bump);
+      this.pushSkin(position.getX(i), position.getY(i), position.getZ(i));
     }
     g.dispose();
   }
@@ -256,6 +296,7 @@ export class EnemyBuilder {
         this.normals.push(normal.x, normal.y, normal.z);
         this.colors.push(this.paint.r * tone * t, this.paint.g * tone * t, this.paint.b * tone * t);
         this.surfaces.push(def.camo, def.roughness, def.metalness, def.bump);
+        this.pushSkin(p.x, p.y, p.z);
       }
     }
   }
@@ -340,6 +381,10 @@ export class EnemyBuilder {
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normals, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setAttribute(SURFACE_ATTRIBUTE, new THREE.Float32BufferAttribute(this.surfaces, 4));
+    if (this.boneNames !== null) {
+      geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(this.skinIndices, 4));
+      geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(this.skinWeights, 4));
+    }
     projectUVs(geometry, ENEMY_UV_TILE_M);
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();

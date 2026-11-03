@@ -13,7 +13,10 @@ import {
   boot,
   leg,
 } from '../mission/dummyDims';
+import { SOLDIER_RIG, soldierFall } from '../mission/soldierRig';
+import type { FallHit } from '../mission/soldierRig';
 import { enemyMaterial } from './enemyMaterial';
+import { createRagdollBody, seedOf } from './ragdollBody';
 import { soldierGeometry } from './soldierMesh';
 import { terrainHeight } from './terrainHeight';
 
@@ -21,14 +24,12 @@ import { terrainHeight } from './terrainHeight';
 export { DUMMY_BOXES, DUMMY_HEAD, MAX_OVERHANG } from '../mission/dummyDims';
 export type { DummyBox } from '../mission/dummyDims';
 
-/** Time to tip over backwards, s. */
-export const FALL_DURATION = 0.4;
+/** Time the body is given to go down and come to rest (the ragdoll usually settles sooner), s; the lying timer starts after it. */
+export const FALL_DURATION = 2;
 /** How long the body lies on the sand after the fall before the dummy stands up again, s. */
 export const RESET_DELAY = 3;
 /** Summed frame times can fall a hair short of a whole number of seconds. */
 const TIMER_EPSILON = 1e-9;
-/** After falling the body lies on its back; this lifts it so it rests on the sand, m. */
-const LYING_LIFT = 0.1;
 
 /** The four zone spheres from the brief, kept verbatim (radius, height above the feet). */
 const BASE_ZONES: ReadonlyArray<{ name: ZoneName; radius: number; cy: number }> = [
@@ -151,12 +152,44 @@ export interface TargetDummy {
    * is meanwhile, so the game offers no hit target while it is down.
    */
   readonly down: boolean;
-  /** Start tipping over backwards (away from the shooter) over 0.4 s. Does nothing while already down. */
-  knockDown(): void;
+  /**
+   * Go down as a limp body (a physical ragdoll, scene/ragdollBody.ts) driven by the bullet that did it: `hit` is where it struck (world
+   * space), the bullet's velocity there and the zone; without it he falls straight back, away from the shooter. Does nothing while already down.
+   */
+  knockDown(hit?: KnockHit): void;
   /** Stand it up again at once (upright, down = false), whatever state it is in. */
   reset(): void;
-  /** Advance the fall animation by frameDt seconds; with autoReset (the default) it resets itself RESET_DELAY s after the fall ended. */
+  /** Advance the fall by frameDt seconds; with autoReset (the default) it resets itself RESET_DELAY s after FALL_DURATION. */
   update(frameDt: number): void;
+  /** Release what this dummy alone owns (its skeleton); the shared geometry and material stay. */
+  dispose(): void;
+}
+
+/** The bullet that knocks a target down: world-space point and velocity, and the zone it struck. */
+export interface KnockHit {
+  point: Vec3;
+  velocity: Vec3;
+  zone: ZoneName;
+}
+
+/**
+ * The ground of a body whose feet are at `origin` and which is turned by `yaw` about +Y, in the body's own frame: the world's ground height
+ * under the point, minus the height of the feet (a flat ground at the feet when `world` is not given).
+ */
+export function localGround(world: ((x: number, z: number) => number) | undefined, origin: Vec3, yaw: number): (x: number, z: number) => number {
+  if (!world) return () => 0;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return (x, z) => world(origin.x + c * x + s * z, origin.z - s * x + c * z) - origin.y;
+}
+
+/** A world-space point (or, with `translate` false, a vector) in the frame of a body at `origin` turned by `yaw` about +Y. */
+export function toLocal(p: Vec3, origin: Vec3, yaw: number, translate = true): [number, number, number] {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const dx = p.x - (translate ? origin.x : 0);
+  const dz = p.z - (translate ? origin.z : 0);
+  return [c * dx - s * dz, p.y - (translate ? origin.y : 0), s * dx + c * dz];
 }
 
 /** The broad-phase sphere of a dummy is this much bigger than the farthest zone edge, m (a grazing hit must never be rejected). */
@@ -164,7 +197,8 @@ const BOUNDS_MARGIN = 0.05;
 
 // All soldiers share one geometry and one material (scene/soldierMesh.ts and scene/enemyMaterial.ts; nothing changes
 // them after creation, they live as long as the page). The soldier is drawn as a rifleman in uniform, helmet and kit
-// (mission/soldierModel.ts), merged into ONE mesh with ONE material: one draw call, as the boxy dummy was. The hit
+// (mission/soldierModel.ts), merged into ONE skinned mesh with ONE material: one draw call, as the boxy dummy was. Each
+// soldier has its own bones (scene/ragdollBody.ts): standing they sit in the bind pose, shot they follow a ragdoll. The hit
 // spheres above are built from the old DUMMY_BOXES and are unchanged; what is drawn covers every one of them to
 // within MAX_OVERHANG (tests/scene/soldierMesh.test.ts).
 
@@ -182,30 +216,34 @@ function dummyBody(): { geometry: THREE.BufferGeometry; material: THREE.MeshStan
  * `yaw = facingYaw(x, z)` makes it look at a shooter at the origin. The hit spheres turn with it.
  * `id` is the HitTarget id the bullets report. `autoReset` (default true, the stage-1 practice range)
  * makes the dummy stand up again RESET_DELAY s after its fall; a mission passes false so a downed
- * soldier stays down (reset() still works).
+ * soldier stays down (reset() still works). `ground` is the world's ground height (x, z), where his body comes to rest
+ * when it falls; without it the ground is flat at his feet.
  */
 export function createTargetDummy(
   position: Vec3,
   yaw: number,
   id = 'dummy',
-  opts: { autoReset?: boolean } = {},
+  opts: { autoReset?: boolean; ground?: (x: number, z: number) => number } = {},
 ): TargetDummy {
   const autoReset = opts.autoReset ?? true;
   const groundY = position.y;
   const group = new THREE.Group();
   group.name = 'target-dummy';
   group.position.set(position.x, groundY, position.z);
-  // Yaw first, then the fall about the dummy's own X axis: it tips over backwards whichever way it faces.
-  group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
   // The whole body is one mesh (see `dummyBody`): the helmet, rifle, pouches and boots are too small to be worth a draw of their own, so they ride along.
-  const body = dummyBody();
-  const mesh = new THREE.Mesh(body.geometry, body.material);
-  mesh.name = 'dummy-body';
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  group.add(mesh);
+  const shared = dummyBody();
+  const origin: Vec3 = { x: position.x, y: groundY, z: position.z };
+  const ragdoll = createRagdollBody<FallHit>({
+    rig: SOLDIER_RIG,
+    geometry: shared.geometry,
+    material: shared.material,
+    group,
+    ground: localGround(opts.ground, origin, yaw),
+    crumple: soldierFall,
+    name: 'dummy-body',
+  });
 
   // Hit spheres in world space: the dummy's own (x, y) turned by the yaw about the feet.
   const cos = Math.cos(yaw);
@@ -229,17 +267,11 @@ export function createTargetDummy(
   /** Seconds the body has been lying still since the fall finished. */
   let lyingTime = 0;
 
-  const apply = (t: number): void => {
-    const eased = t * t; // starts slow, accelerates like a falling body
-    group.rotation.x = 0 - eased * (Math.PI / 2); // top swings toward -Z, away from the shooter
-    group.position.y = groundY + eased * LYING_LIFT;
-  };
-
   const reset = (): void => {
     down = false;
     fallTime = 0;
     lyingTime = 0;
-    apply(0);
+    ragdoll.reset();
   };
 
   return {
@@ -248,19 +280,29 @@ export function createTargetDummy(
     get down() {
       return down;
     },
-    knockDown() {
+    knockDown(hit?: KnockHit) {
+      if (down) return;
       down = true;
+      const local: FallHit | undefined = hit && {
+        point: toLocal(hit.point, origin, yaw),
+        velocity: toLocal(hit.velocity, origin, yaw, false),
+        zone: hit.zone,
+      };
+      ragdoll.fall(local, seedOf(id, hit ? Math.round(hit.point.x * 1000 + hit.point.y * 7000 + hit.point.z * 311) : 0));
     },
     reset,
+    dispose() {
+      ragdoll.dispose();
+    },
     update(frameDt: number) {
       if (!down) return;
       let dt = Number.isFinite(frameDt) && frameDt > 0 ? frameDt : 0;
+      ragdoll.update(dt);
       if (fallTime < FALL_DURATION) {
         const remaining = FALL_DURATION - fallTime;
         const step = Math.min(dt, remaining);
         fallTime = step >= remaining ? FALL_DURATION : fallTime + step;
         dt -= step; // what is left of this frame counts as lying time
-        apply(fallTime / FALL_DURATION);
       }
       if (fallTime >= FALL_DURATION) {
         lyingTime += dt;
@@ -272,5 +314,5 @@ export function createTargetDummy(
 
 /** The stage-1 dummy: standing at (0, ground, -range), facing +Z (straight at the shooter). */
 export function createTargetDummyAtRange(range: number): TargetDummy {
-  return createTargetDummy({ x: 0, y: terrainHeight(0, -range), z: -range }, 0);
+  return createTargetDummy({ x: 0, y: terrainHeight(0, -range), z: -range }, 0, 'dummy', { ground: terrainHeight });
 }

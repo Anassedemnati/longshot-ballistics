@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Vec3 } from '../ballistics/types';
+import { BloodSystem } from '../fx/blood';
 import { DustSystem } from '../fx/dust';
 import { SparkSystem } from '../fx/sparks';
 import type { HitTarget, Obstacle } from '../game/hit';
@@ -82,6 +83,8 @@ export interface World extends MissionPlan {
   shadow: ShadowLight;
   dust: DustSystem;
   sparks: SparkSystem;
+  /** The wounds of the bullets that hit a soldier or a sniper. */
+  blood: BloodSystem;
   /** Trees, shrubs, boulders and grass; the glTF kinds join the scene as they load. */
   vegetation: Vegetation;
   /** The sandbags and rocks round the shooter. */
@@ -147,6 +150,8 @@ export function buildWorld(
   scene.add(dust.group);
   const sparks = new SparkSystem();
   scene.add(sparks.group);
+  const blood = new BloodSystem();
+  scene.add(blood.group);
 
   const obstacles: Obstacle[] = [];
   for (const p of layout.props) {
@@ -162,7 +167,7 @@ export function buildWorld(
   for (const p of layout.soldiers) {
     const groundY = field.height(p.x, p.z);
     // Mission soldiers stay down; only the practice range's dummy stands up again.
-    const dummy = createTargetDummy({ x: p.x, y: groundY, z: p.z }, p.yaw, p.id, { autoReset: opts.legacy });
+    const dummy = createTargetDummy({ x: p.x, y: groundY, z: p.z }, p.yaw, p.id, { autoReset: opts.legacy, ground: field.height });
     scene.add(dummy.group);
     const aim = soldierAimPoints(p, field);
     soldiers.set(p.id, {
@@ -189,7 +194,9 @@ export function buildWorld(
 
   const snipers = new Map<string, EnemySniper>();
   for (const p of layout.snipers) {
-    const sniper = createSniper({ x: p.x, y: p.y, z: p.z }, p.yaw, p.id);
+    // On a roof he lies on its flat top; on the ground, on the terrain (where his body settles when he is shot).
+    const onRoof = p.y > field.height(p.x, p.z) + 0.3;
+    const sniper = createSniper({ x: p.x, y: p.y, z: p.z }, p.yaw, p.id, { ground: onRoof ? () => p.y : field.height });
     scene.add(sniper.group);
     const aim = sniperAimPoints(p);
     snipers.set(p.id, { placement: p, sniper, head: aim.head, upperTorso: aim.upperTorso, live: true });
@@ -197,7 +204,7 @@ export function buildWorld(
   }
   const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length;
 
-  return { ...plan, scene, shadow, dust, sparks, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
+  return { ...plan, scene, shadow, dust, sparks, blood, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */

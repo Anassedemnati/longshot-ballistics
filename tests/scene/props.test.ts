@@ -13,6 +13,7 @@ import { SPARK_LIFETIME, SparkSystem } from '../../src/fx/sparks';
 import { createPropMesh, propParts } from '../../src/scene/props';
 import { createSky } from '../../src/scene/sky';
 import { FALL_DURATION, createTargetDummy, dummyHitSpheres } from '../../src/scene/target';
+import { advance, bonesOf } from '../helpers/bones';
 import { terrainHeight } from '../../src/scene/terrainHeight';
 import { createVehicleTarget } from '../../src/scene/vehicleTarget';
 import { shootAtPoint } from '../helpers/shoot';
@@ -723,14 +724,18 @@ describe('createTargetDummy(position, yaw)', () => {
       const pos = { x: 0, y: 1, z: -400 };
       const dummy = createTargetDummy(pos, odd);
       dummy.knockDown();
-      dummy.update(FALL_DURATION);
-      expect(dummy.group.rotation.x).toBeCloseTo(-Math.PI / 2, 9);
-      const head = worldPoint(dummy, 0, 1.65);
+      advance(dummy, FALL_DURATION);
+      // The shoulders (the pivot of the head bone) end up behind the feet, in his own frame whatever the yaw.
+      const neck = bonesOf(dummy.group)[2].position.clone();
+      dummy.group.updateMatrixWorld(true);
+      const world = dummy.group.localToWorld(neck.clone());
       const facing = { x: Math.sin(odd), z: Math.cos(odd) };
-      const along = (head.x - pos.x) * facing.x + (head.z - pos.z) * facing.z;
-      expect(along).toBeLessThan(-1.4); // the head ends up about 1.65 m behind the feet
-      expect(Math.abs((head.x - pos.x) * facing.z - (head.z - pos.z) * facing.x)).toBeLessThan(1e-6); // not sideways
+      const along = (world.x - pos.x) * facing.x + (world.z - pos.z) * facing.z;
+      expect(along).toBeLessThan(-0.2);
+      expect(along).toBeCloseTo(neck.z, 9);
+      expect(neck.y).toBeLessThan(0.5); // down on the ground
       dummy.reset();
+      expect(bonesOf(dummy.group)[2].position.y).toBeCloseTo(1.52, 9);
       expect(dummy.group.rotation.x).toBe(0);
       expect(dummy.group.rotation.y).toBeCloseTo(odd, 12);
     }

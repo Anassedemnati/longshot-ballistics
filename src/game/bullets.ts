@@ -8,10 +8,21 @@ import type { HitTarget, Material, Obstacle, TerrainHeight, ZoneName } from './h
  * to any watched point along its whole flight, m (up to where it ended). Without watch points the field is absent.
  */
 export type ImpactEvent =
-  | { bulletId: number; kind: 'target'; targetId: string; zone: ZoneName; point: Vec3; time: number; closestWatchM?: number }
-  | { bulletId: number; kind: 'obstacle'; obstacleId: string; material: Material; point: Vec3; time: number; closestWatchM?: number }
-  | { bulletId: number; kind: 'terrain'; point: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'target'; targetId: string; zone: ZoneName; point: Vec3; velocity?: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'obstacle'; obstacleId: string; material: Material; point: Vec3; velocity?: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'terrain'; point: Vec3; velocity?: Vec3; time: number; closestWatchM?: number }
   | { bulletId: number; kind: 'expired'; time: number; closestWatchM?: number };
+
+/** Options of `BulletSystem.fire`. */
+export interface FireOptions {
+  /**
+   * A bullet that has already passed through a body and flies on: it ignores every target (so nothing is hit or scored twice) but still strikes
+   * cover and the ground, where it kicks up dust or sparks. Default false.
+   */
+  ghost?: boolean;
+  /** Flight time already spent, s (a continuing bullet keeps its clock). Default 0. */
+  startTime?: number;
+}
 
 export interface BulletSystemOptions {
   atmo: Atmosphere;
@@ -41,6 +52,8 @@ interface Bullet {
   id: number;
   state: BulletState;
   bcG7: number;
+  /** Flies through every target (see FireOptions.ghost). */
+  ghost: boolean;
   /** Squared closest distance to a watch point so far, m^2 (Infinity until a substep has been measured). */
   closestSq: number;
 }
@@ -51,6 +64,7 @@ const EPS = 1e-9;
 const TERRAIN_TOLERANCE = 0.01;
 const MAX_BISECTIONS = 32;
 const NO_OBSTACLES: Obstacle[] = [];
+const NO_TARGETS: HitTarget[] = [];
 const NO_POINTS: readonly Vec3[] = [];
 
 function lerp(a: number, b: number, u: number): number {
@@ -116,17 +130,18 @@ export class BulletSystem {
     return this.bullets;
   }
 
-  /** Launch a bullet at flight time 0. Returns its id. */
-  fire(origin: Vec3, velocity: Vec3, bcG7: number): number {
+  /** Launch a bullet at flight time 0 (or `opts.startTime`). Returns its id. */
+  fire(origin: Vec3, velocity: Vec3, bcG7: number, opts: FireOptions = {}): number {
     const id = this.nextId++;
     this.bullets.push({
       id,
       bcG7,
+      ghost: opts.ghost ?? false,
       closestSq: Infinity,
       state: {
         pos: { x: origin.x, y: origin.y, z: origin.z },
         vel: { x: velocity.x, y: velocity.y, z: velocity.z },
-        t: 0,
+        t: opts.startTime ?? 0,
       },
     });
     return id;
@@ -209,7 +224,7 @@ export class BulletSystem {
     let uTarget = Infinity;
     let hitTarget: HitTarget | null = null;
     let hitZone: ZoneName = 'limbs';
-    for (const target of targets) {
+    for (const target of bullet.ghost ? NO_TARGETS : targets) {
       const bounds = target.bounds;
       if (bounds !== undefined && segmentSphere(prev.pos, next.pos, bounds.center, bounds.radius) === null) {
         continue;
@@ -250,6 +265,7 @@ export class BulletSystem {
         targetId: hitTarget.id,
         zone: hitZone,
         point: this.pointAt(prev.pos, next.pos, uTarget),
+        velocity: this.pointAt(prev.vel, next.vel, uTarget),
         time: prev.t + uTarget * this.dt,
       };
     }
@@ -260,6 +276,7 @@ export class BulletSystem {
         obstacleId: hitObstacle.id,
         material: hitObstacle.material,
         point: this.pointAt(prev.pos, next.pos, uObstacle),
+        velocity: this.pointAt(prev.vel, next.vel, uObstacle),
         time: prev.t + uObstacle * this.dt,
       };
     }
@@ -268,6 +285,7 @@ export class BulletSystem {
         bulletId: bullet.id,
         kind: 'terrain',
         point: this.pointAt(prev.pos, next.pos, uTerrain),
+        velocity: this.pointAt(prev.vel, next.vel, uTerrain),
         time: prev.t + uTerrain * this.dt,
       };
     }

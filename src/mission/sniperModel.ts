@@ -1,6 +1,6 @@
 import { createRng } from './random';
 import { SNIPER_PARTS, SNIPER_RIFLE } from './sniperDims';
-import type { ModelPart, V3 } from './modelPart';
+import type { ModelPart, SkinBinding, V3 } from './modelPart';
 
 // The prone enemy sniper as DRAWN (pure data, no three.js; scene/sniperMesh.ts turns it into triangles): a rifleman
 // in a ghillie suit lying head toward the shooter, hooded, elbows down and forearms forward, boots splayed behind,
@@ -33,19 +33,24 @@ export const GHILLIE_TONES: readonly number[] = [0x8c7f56, 0x6a7147, 0x5e5136, 0
  */
 export const SNIPER_BASE_SCALE = 1.05;
 
+/** The bone each part of SNIPER_PARTS rides when he goes limp (by index in SNIPER_PARTS; scene/ragdollBody.ts, mission/sniperRig.ts). The right side is -X. */
+export const SNIPER_PART_BONES: readonly string[] = ['chest', 'pelvis', 'legR', 'legL', 'armR', 'armL', 'head'];
+/** The pack on his back hangs between his shoulders and his hips: weighted from the pelvis bone to the chest bone along his length. */
+const PACK_SKIN: SkinBinding = { low: 'pelvis', high: 'chest', axis: 2, from: -0.76, to: -0.4 };
+
 /** The prone body: the suit's mass in the shape of the hit ellipsoids, hood, face, gloves, boots and pack. */
 export function sniperBodyParts(): ModelPart[] {
   const parts: ModelPart[] = [];
-  SNIPER_PARTS.forEach((p) => {
+  SNIPER_PARTS.forEach((p, index) => {
     if (p.zone === 'head') return; // the hood below
     const radii: V3 = [p.rx * SNIPER_BASE_SCALE, p.ry * SNIPER_BASE_SCALE, p.rz * SNIPER_BASE_SCALE];
     const limb = p.zone === 'limbs';
-    parts.push({ kind: 'ellipsoid', c: [p.cx, p.cy, p.cz], r: radii, surface: 'cloth', color: limb ? SUIT : SUIT_DARK, detail: 1 });
+    parts.push({ kind: 'ellipsoid', c: [p.cx, p.cy, p.cz], r: radii, surface: 'cloth', color: limb ? SUIT : SUIT_DARK, detail: 1, skin: SNIPER_PART_BONES[index] });
   });
   const head = SNIPER_PARTS.find((p) => p.zone === 'head');
   if (!head) throw new Error('sniper has no head');
   const hood = head.rx * 1.03;
-  parts.push(
+  const headParts: ModelPart[] = [
     { kind: 'ellipsoid', c: [head.cx, head.cy, head.cz], r: [hood, hood, hood], surface: 'cloth', color: SUIT, detail: 1 }, // the hood
     { kind: 'ellipsoid', c: [head.cx, head.cy - 0.015, head.cz + 0.095], r: [0.074, 0.07, 0.05], surface: 'skin', color: FACE }, // the face in the hood opening
     { kind: 'ellipsoid', c: [0, head.cy + 0.002, head.cz + 0.136], r: [0.05, 0.014, 0.012], surface: 'glass', color: LENS }, // sunglasses
@@ -58,13 +63,16 @@ export function sniperBodyParts(): ModelPart[] {
       color: HAT,
       sides: 16,
     },
+  ];
+  parts.push(
+    ...headParts.map((part): ModelPart => ({ ...part, skin: 'head' })),
     // the pack on his back (under the strands)
-    { kind: 'ellipsoid', c: [0, 0.3, -0.58], r: [0.17, 0.1, 0.22], surface: 'cloth', color: PACK, detail: 1 },
+    { kind: 'ellipsoid', c: [0, 0.3, -0.58], r: [0.17, 0.1, 0.22], surface: 'cloth', color: PACK, detail: 1, skin: PACK_SKIN },
   );
   for (const side of [-1, 1] as const) {
     parts.push(
-      { kind: 'ellipsoid', c: [side * 0.25, 0.13, 0.215], r: [0.062, 0.05, 0.085], surface: 'gear', color: GLOVE }, // gloved hands
-      { kind: 'ellipsoid', c: [side * 0.15, 0.065, -1.52], r: [0.075, 0.062, 0.11], surface: 'polymer', color: BOOT, rot: [0, side * -0.25, 0] }, // boots, toes turned out
+      { kind: 'ellipsoid', c: [side * 0.25, 0.13, 0.215], r: [0.062, 0.05, 0.085], surface: 'gear', color: GLOVE, skin: side > 0 ? 'armL' : 'armR' }, // gloved hands
+      { kind: 'ellipsoid', c: [side * 0.15, 0.065, -1.52], r: [0.075, 0.062, 0.11], surface: 'polymer', color: BOOT, rot: [0, side * -0.25, 0], skin: side > 0 ? 'legL' : 'legR' }, // boots, toes turned out
     );
   }
   return parts;
@@ -77,6 +85,8 @@ export interface Strand {
   /** Radius of its base, m. */
   radius: number;
   color: number;
+  /** The index in SNIPER_PARTS of the part of the suit it hangs from (it rides that part's bone). */
+  part: number;
 }
 
 /** How many strands go on each hit ellipsoid of the suit (by its index in SNIPER_PARTS; the head's are the hood's). */
@@ -128,7 +138,7 @@ export function sniperStrands(): Strand[] {
       const length = Math.min(0.065 + 0.055 * rng(), STRAND_REACH / Math.max(outward, 0.1));
       const tip: V3 = [root[0] + (raw[0] / rl) * length, Math.max(0.004, root[1] + (raw[1] / rl) * length), root[2] + (raw[2] / rl) * length];
       const tone = GHILLIE_TONES[Math.floor(rng() * GHILLIE_TONES.length)];
-      strands.push({ root, tip, radius: 0.005 + 0.0035 * rng(), color: tone });
+      strands.push({ root, tip, radius: 0.005 + 0.0035 * rng(), color: tone, part: index });
       made++;
     }
   });

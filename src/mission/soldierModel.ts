@@ -1,5 +1,5 @@
 import { frameAlong, pair } from './modelPart';
-import type { ModelGroup, ModelPart, V3 } from './modelPart';
+import type { ModelGroup, ModelPart, SkinBinding, V3 } from './modelPart';
 
 // The standing soldier as DRAWN (pure data, no three.js; scene/soldierMesh.ts turns it into triangles): a rifleman
 // in a combat helmet with goggles, a face wrap, a camo uniform, a plate carrier with magazine pouches, hip kit, an
@@ -32,6 +32,26 @@ const FURNITURE = 0x2f302b;
 export const SOLDIER_RIFLE_BUTT: V3 = [-0.3, 1.155, 0.08];
 export const SOLDIER_RIFLE_DIR: V3 = [0.78, -0.12, 0.62];
 
+/** The soldier's joints standing at rest, in the model's frame (the ragdoll rig, mission/soldierRig.ts, starts from them: what is drawn and what falls cannot drift apart). The left side is +X. */
+export const SOLDIER_JOINTS = {
+  shoulderY: 1.508,
+  shoulderX: 0.268,
+  hipX: 0.1,
+  hipY: 0.95,
+  /** Knee and ankle of one leg (the leg on his left, +X, is a step forward). */
+  knee: (side: -1 | 1): V3 => [0.1 * side, 0.5, 0.015 + 0.035 * (side > 0 ? 1 : 0)],
+  ankle: (side: -1 | 1): V3 => [0.1 * side, 0.16, -0.01 + 0.05 * (side > 0 ? 1 : 0)],
+  rightElbow: [-0.28, 1.17, 0.05] as V3,
+  leftElbow: [0.27, 1.17, 0.14] as V3,
+  rightHand: [-0.07, 1.09, 0.265] as V3,
+  leftHand: [0.135, 1.075, 0.43] as V3,
+};
+
+/** Everything in `parts` rides the bone (or blend of bones) `skin` when the body goes limp. */
+const skinned = (parts: ModelPart[], skin: SkinBinding): ModelPart[] => parts.map((p) => ({ ...p, skin }));
+/** The torso parts: weighted from the pelvis bone at the belt to the chest bone at the ribs, so the waist bends instead of cracking. */
+const SPINE: SkinBinding = { low: 'pelvis', high: 'chest', axis: 1, from: 1.1, to: 1.4 };
+
 const t = (a: V3, b: V3, ra: number, rb: number, surface: ModelPart['surface'], color: number, extra: Partial<{ sx: number; sz: number; sides: number; caps: number }> = {}): ModelPart => ({
   kind: 'tube',
   a,
@@ -53,23 +73,34 @@ function lowerBody(): ModelPart[] {
     const front = side > 0 ? 1 : 0; // the left leg steps forward
     const kneeZ = 0.015 + 0.035 * front;
     const ankleZ = -0.01 + 0.05 * front;
+    const bone = side > 0 ? 'L' : 'R';
     parts.push(
-      t([x, 0.95, 0], [x, 0.5, kneeZ], 0.083, 0.078, 'camo', CAMO), // thigh
-      t([x, 0.5, kneeZ], [x, 0.16, ankleZ], 0.078, 0.078, 'camo', CAMO), // shin, trousers bloused over the boot
-      e([x, 0.195, ankleZ], [0.084, 0.06, 0.086], 'camo', CAMO), // the blousing
-      b([x, 0.52, kneeZ + 0.082], [0.1, 0.11, 0.046], 0.02, 'gear', KNEE), // knee pad
-      t([x, 0.06, ankleZ + 0.015], [x, 0.21, ankleZ], 0.079, 0.079, 'polymer', BOOT, { caps: 2 }), // boot shaft, down to the sole
-      e([x, 0.05, ankleZ + 0.065], [0.084, 0.066, 0.15], 'polymer', BOOT), // boot
+      ...skinned([t([x, 0.95, 0], [x, 0.5, kneeZ], 0.083, 0.078, 'camo', CAMO)], `thigh${bone}`), // thigh
+      ...skinned(
+        [
+          t([x, 0.5, kneeZ], [x, 0.16, ankleZ], 0.078, 0.078, 'camo', CAMO), // shin, trousers bloused over the boot
+          e([x, 0.195, ankleZ], [0.084, 0.06, 0.086], 'camo', CAMO), // the blousing
+          b([x, 0.52, kneeZ + 0.082], [0.1, 0.11, 0.046], 0.02, 'gear', KNEE), // knee pad
+          t([x, 0.06, ankleZ + 0.015], [x, 0.21, ankleZ], 0.079, 0.079, 'polymer', BOOT, { caps: 2 }), // boot shaft, down to the sole
+          e([x, 0.05, ankleZ + 0.065], [0.084, 0.066, 0.15], 'polymer', BOOT), // boot
+        ],
+        `shin${bone}`,
+      ),
     );
   }
   parts.push(
-    e([0, 0.99, 0], [0.18, 0.135, 0.125], 'camo', CAMO, undefined, 1), // pelvis
-    ...pair(b([0.19, 0.74, 0.01], [0.05, 0.17, 0.13], 0.022, 'camo', 0xd6d0bd)), // cargo pockets
-    { kind: 'lathe', profile: [[0.96, -0.032], [1, -0.024], [1, 0.024], [0.96, 0.032]], c: [0, 1.065, 0], scale: [0.19, 1, 0.135], surface: 'gear', color: CARRIER, sides: 16 }, // belt
-    b([-0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // right hip: holster and utility pouch
-    b([-0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER), // its flap
-    b([0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // left hip: dump pouch
-    b([0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER),
+    ...skinned(
+      [
+        e([0, 0.99, 0], [0.18, 0.135, 0.125], 'camo', CAMO, undefined, 1), // pelvis
+        { kind: 'lathe', profile: [[0.96, -0.032], [1, -0.024], [1, 0.024], [0.96, 0.032]], c: [0, 1.065, 0], scale: [0.19, 1, 0.135], surface: 'gear', color: CARRIER, sides: 16 }, // belt
+        b([-0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // right hip: holster and utility pouch
+        b([-0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER), // its flap
+        b([0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // left hip: dump pouch
+        b([0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER),
+      ],
+      'pelvis',
+    ),
+    ...pair({ ...b([0.19, 0.74, 0.01], [0.05, 0.17, 0.13], 0.022, 'camo', 0xd6d0bd), skin: 'thighL' }), // cargo pockets (the mirrored one rides the right thigh)
   );
   return parts;
 }
@@ -96,7 +127,7 @@ function upperBody(): ModelPart[] {
   // Shoulders: carrier straps and a shemagh draped over them, so the top row of the torso spheres (they reach y = 1.63) has something under it.
   parts.push(...pair(b([0.15, 1.52, 0.0], [0.17, 0.05, 0.19], 0.02, 'gear', CARRIER)));
   parts.push(...pair(e([0.15, 1.54, 0.012], [0.115, 0.068, 0.1], 'camo', CAMO_DARK)));
-  return parts;
+  return skinned(parts, SPINE);
 }
 
 /** Head: skull, face wrap, sunglasses, ears, and the helmet with its cover, goggles and mount. */
@@ -120,7 +151,7 @@ function head(): ModelPart[] {
     color: CAMO_DARK,
     sides: 16,
   };
-  return [
+  return skinned([
     e([0, 1.645, 0.012], [0.1, 0.117, 0.11], 'skin', SKIN, undefined, 1), // skull and face
     ...pair(e([0.1, 1.652, -0.005], [0.022, 0.042, 0.03], 'skin', SKIN)), // ears
     e([0, 1.604, 0.054], [0.1, 0.058, 0.074], 'cloth', WRAP), // face wrap over nose and mouth
@@ -128,26 +159,28 @@ function head(): ModelPart[] {
     helmet,
     { kind: 'lathe', profile: [[0.154, -0.014], [0.166, -0.012], [0.166, 0.012], [0.154, 0.014]], c: [0, 1.716, -0.016], scale: [1.0, 1.03, 1.1], rot: [-0.3, 0, 0], surface: 'gear', color: GLOVE, sides: 16 }, // helmet band
     e([0, 1.632, 0.113], [0.014, 0.024, 0.022], 'skin', SKIN), // nose
-  ];
+  ], 'head');
 }
 
 /** The arms: shoulder to elbow hanging at the side, elbow to hand carrying the rifle; gloves. */
 function arms(): ModelPart[] {
-  const rightElbow: V3 = [-0.28, 1.17, 0.05];
-  const leftElbow: V3 = [0.27, 1.17, 0.14];
-  const rightHand: V3 = [-0.07, 1.09, 0.265];
-  const leftHand: V3 = [0.135, 1.075, 0.43];
+  const { rightElbow, leftElbow, rightHand, leftHand, shoulderX, shoulderY } = SOLDIER_JOINTS;
   const parts: ModelPart[] = [];
-  const arm = (shoulder: V3, elbow: V3, hand: V3): void => {
+  const arm = (shoulder: V3, elbow: V3, hand: V3, bone: 'L' | 'R'): void => {
     parts.push(
-      t(shoulder, elbow, 0.073, 0.058, 'camo', CAMO, { caps: 2 }), // upper arm, its rounded top is the shoulder
-      e(elbow, [0.058, 0.058, 0.052], 'gear', KNEE), // elbow pad
-      t(elbow, hand, 0.054, 0.042, 'camo', CAMO), // forearm
-      e(hand, [0.046, 0.046, 0.056], 'gear', GLOVE), // gloved hand
+      ...skinned([t(shoulder, elbow, 0.073, 0.058, 'camo', CAMO, { caps: 2 })], `upperArm${bone}`), // upper arm, its rounded top is the shoulder
+      ...skinned(
+        [
+          e(elbow, [0.058, 0.058, 0.052], 'gear', KNEE), // elbow pad
+          t(elbow, hand, 0.054, 0.042, 'camo', CAMO), // forearm
+          e(hand, [0.046, 0.046, 0.056], 'gear', GLOVE), // gloved hand
+        ],
+        `foreArm${bone}`,
+      ),
     );
   };
-  arm([-0.268, 1.508, 0], rightElbow, rightHand);
-  arm([0.268, 1.508, 0], leftElbow, leftHand);
+  arm([-shoulderX, shoulderY, 0], rightElbow, rightHand, 'R');
+  arm([shoulderX, shoulderY, 0], leftElbow, leftHand, 'L');
   return parts;
 }
 
@@ -174,6 +207,6 @@ function rifle(): ModelPart[] {
 export function soldierModel(): ModelGroup[] {
   return [
     { parts: [...lowerBody(), ...upperBody(), ...head(), ...arms()] },
-    { frame: frameAlong(SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR), parts: rifle() },
+    { frame: frameAlong(SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR), parts: skinned(rifle(), 'rifle') },
   ];
 }

@@ -2,6 +2,7 @@ import { RIFLES } from '../ballistics/rifles';
 import { findZeroElevation } from '../ballistics/trajectory';
 import type { Vec3, WindField } from '../ballistics/types';
 import { AudioEngine } from '../audio/engine';
+import { distance, impactSoundDelay } from '../audio/timing';
 import {
   playBoltCycle,
   playDryFire,
@@ -16,7 +17,8 @@ import type { AimTarget } from '../game/assistance';
 import { BulletSystem } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
 import { Encounter } from '../game/encounter';
-import type { HitTarget } from '../game/hit';
+import type { HitTarget, HitZone } from '../game/hit';
+import { continuedVelocity, exitPoint } from '../game/penetration';
 import { rangeUnderCrosshair } from '../game/rangefinder';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
@@ -43,12 +45,15 @@ import type { MissionConfig } from './config';
 import { installDebugHook } from './debugHook';
 import { applyImpact } from './impact';
 import { settledWithin } from './preload';
+import { createRng } from './random';
 import { isComplete, markAssistsUsed, newStats, recordFailure, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
 
 /** Longest the mission start waits for the glTF models (logs, grass, boulders, the nest's rocks), ms; later they join the scene as they arrive. */
 const MODELS_TIMEOUT_MS = 8000;
+/** A bullet that came out of a body and landed this close to where it left kicks up only a small puff of dust, m. */
+const NEAR_LANDING_M = 2.5;
 /** Frame time cap, s: a long stall (hidden tab) must not fast-forward bullets, dust or reloads. */
 const MAX_FRAME_DT = 0.1;
 /** HUD result shown when the trigger is pulled during a reload. */
@@ -127,7 +132,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     quality: settings,
   });
   // `obstacles` and `liveTargets` are the world's single arrays, only ever edited in place.
-  const { scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal } = world;
+  const { scene, dust, sparks, blood, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal } = world;
 
   // Game state
   // The enemy snipers still up, as the points a bullet's flight is measured against (head and upper torso of each): the crack and the dust of a
@@ -336,8 +341,43 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (i >= 0) liveTargets.splice(i, 1);
   }
 
+  /** The bullets that have come out of a body and fly on (they only ever kick up dust or sparks: nothing is scored, no message is shown). */
+  const throughBullets = new Map<number, Vec3>(); // bullet id -> where it came out of the body
+  const penetrationRng = createRng(0x51ee7);
+
+  /** Where a bullet that went through a soldier or sniper ends: dust (or sparks off metal) and the thud, nothing else. */
+  function onThroughImpact(event: ImpactEvent, exit: Vec3): void {
+    if (event.kind === 'expired') return;
+    const metal = event.kind === 'obstacle' && event.material === 'metal';
+    if (metal) sparks.spawn(event.point);
+    else dust.spawn(event.point, distance(event.point, exit) < NEAR_LANDING_M ? 0.35 : 1); // landing at his feet: a small puff, not one that hides him
+    const distanceM = distance(event.point, shooter);
+    const delayS = impactSoundDelay(event.point, shooter, atmo.speedOfSound);
+    if (metal) playImpactMetal(audio, delayS, distanceM);
+    else playImpactDust(audio, delayS, distanceM);
+  }
+
+  /** A bullet that struck a body (not a vehicle): the wound where it went in, the spray where it came out, and the bullet flying on through. */
+  function penetrate(event: ImpactEvent, zones: readonly HitZone[]): void {
+    if (event.kind !== 'target' || !event.velocity) return;
+    const speed = Math.hypot(event.velocity.x, event.velocity.y, event.velocity.z);
+    if (!(speed > 1)) return;
+    const dir = { x: event.velocity.x / speed, y: event.velocity.y / speed, z: event.velocity.z / speed };
+    const out = exitPoint(zones, event.point, dir);
+    blood.spawnEntry(event.point, dir);
+    blood.spawnExit(out, dir);
+    const id = bullets.fire(out, continuedVelocity(event.velocity, penetrationRng), rifle.bcG7, { ghost: true, startTime: event.time });
+    throughBullets.set(id, out);
+  }
+
   /** Decide what an impact does (`applyImpact`, pure) and carry it out; each event is applied before the next is decided. */
   function onImpact(event: ImpactEvent): void {
+    const exit = throughBullets.get(event.bulletId);
+    if (exit) {
+      throughBullets.delete(event.bulletId);
+      onThroughImpact(event, exit);
+      return;
+    }
     const result = applyImpact(event, {
       stats,
       shooter,
@@ -363,13 +403,16 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       const soldier = soldiers.get(result.killedTargetId);
       const vehicle = vehicles.get(result.killedTargetId);
       const sniper = snipers.get(result.killedTargetId);
+      const hit = event.kind === 'target' && event.velocity ? { point: event.point, velocity: event.velocity, zone: event.zone } : undefined;
       if (sniper) {
-        sniper.sniper.knockDown();
+        penetrate(event, sniper.sniper.hitTarget.zones);
+        sniper.sniper.knockDown(hit);
         sniper.live = false;
         removeLive(sniper.sniper.hitTarget);
         refreshWatchPoints();
       } else if (soldier) {
-        soldier.dummy.knockDown();
+        penetrate(event, soldier.dummy.hitTarget.zones);
+        soldier.dummy.knockDown(hit);
         soldier.live = false;
         removeLive(soldier.dummy.hitTarget);
       } else if (vehicle) {
@@ -544,6 +587,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     dust.update(dt);
     sparks.update(dt);
+    blood.update(dt);
     rifleModel.update(dt);
 
     view.forwardInto(viewDir);

@@ -5,13 +5,18 @@ import type { HitTarget } from '../game/hit';
 import { SNIPER_BOUNDS, SNIPER_BOUNDS_MARGIN, SNIPER_RIFLE, sniperWorldPoint, sniperZones } from '../mission/sniperDims';
 import { enemyMaterial } from './enemyMaterial';
 import { sniperGeometries } from './sniperMesh';
-import type { TargetDummy } from './target';
+import { createRagdollBody, seedOf } from './ragdollBody';
+import { SNIPER_RIG, sniperFall } from '../mission/sniperRig';
+import type { FallHit } from '../mission/soldierRig';
+import { localGround, toLocal } from './target';
+import type { KnockHit, TargetDummy } from './target';
 
 // A prone enemy sniper: a rifleman in a ghillie suit lying on the ground or a roof, head toward the shooter, with a
 // rifle that sweeps and a glint (the scope lens catching the sun). The hit spheres are built from mission/sniperDims.ts,
 // the drawn body (mission/sniperModel.ts) covers them to within MAX_OVERHANG. All snipers share one body geometry, one rifle
 // geometry and one material (the enemy material: per-vertex camo, skin, cloth and steel), so a sniper costs three draw
-// calls: body, rifle, glint.
+// calls: body, rifle, glint. The body is a skinned mesh: shot, he goes limp as a (lighter) ragdoll (scene/ragdollBody.ts,
+// mission/sniperRig.ts): the head drops, the arms fall off the rifle, the body rolls a little with the bullet.
 
 export interface Sniper extends TargetDummy {
   /**
@@ -27,9 +32,6 @@ export interface Sniper extends TargetDummy {
   dispose(): void;
 }
 
-/** The roll of a fallen sniper about his own long axis, rad, reached after 1/FALL_RATE s. */
-const FALL_ROLL = 0.35;
-const FALL_RATE = 3;
 /** A glint is this wide per metre of distance, m (so it spans a few pixels at any range), at least MIN_GLINT. */
 const GLINT_PER_M = 0.0035;
 const MIN_GLINT = 0.8;
@@ -87,22 +89,28 @@ function sharedParts(): Shared {
  * A prone sniper whose belly is at `position` (x, ground or roof height, z), turned by `yaw` about +Y like
  * three.js `rotation.y`: his head end (+Z) points at (sin yaw, cos yaw), so `yaw = facingYaw(x, z)` makes him
  * look at a shooter at the origin. `id` is the HitTarget id the bullets report (`sniper-<n>`); the number also
- * sets the phase of his scope sweep, so two snipers never glint in step.
+ * sets the phase of his scope sweep, so two snipers never glint in step. `ground` is the height of the surface he
+ * lies on (x, z), where his body settles when he goes limp (the terrain; a roof passes a flat one); without it the
+ * ground is flat at his belly.
  */
-export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
+export function createSniper(position: Vec3, yaw: number, id: string, opts: { ground?: (x: number, z: number) => number } = {}): Sniper {
   const { body, rifle: rifleGeometry, material: bodyMaterial, glintTexture: texture } = sharedParts();
   const index = Number(/(\d+)$/.exec(id)?.[1] ?? 0);
 
   const group = new THREE.Group();
   group.name = 'enemy-sniper';
   group.position.set(position.x, position.y, position.z);
-  group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
-  const bodyMesh = new THREE.Mesh(body, bodyMaterial);
-  bodyMesh.castShadow = true;
-  bodyMesh.receiveShadow = true;
-  group.add(bodyMesh);
+  const ragdoll = createRagdollBody<FallHit>({
+    rig: SNIPER_RIG,
+    geometry: body,
+    material: bodyMaterial,
+    group,
+    ground: localGround(opts.ground, position, yaw),
+    crumple: sniperFall,
+    name: 'sniper-body',
+  });
 
   const rifle = new THREE.Group();
   rifle.position.set(SNIPER_RIFLE.pivot.x, SNIPER_RIFLE.pivot.y, SNIPER_RIFLE.pivot.z);
@@ -137,7 +145,6 @@ export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
   const hitTarget: HitTarget = { id, zones, bounds: { center: boundsCenter, radius: boundsRadius + SNIPER_BOUNDS_MARGIN } };
 
   let down = false;
-  let fall = 0;
   const toEye = new THREE.Vector3();
 
   return {
@@ -149,8 +156,15 @@ export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
     get glintVisible() {
       return glint.parent !== null && glint.visible;
     },
-    knockDown() {
+    knockDown(hit?: KnockHit) {
+      if (down) return;
       down = true;
+      const local: FallHit | undefined = hit && {
+        point: toLocal(hit.point, position, yaw),
+        velocity: toLocal(hit.velocity, position, yaw, false),
+        zone: hit.zone,
+      };
+      ragdoll.fall(local, seedOf(id, hit ? Math.round(hit.point.x * 1000 + hit.point.y * 7000 + hit.point.z * 311) : 0));
       // The optical cue is gone for as long as he lies there.
       glint.visible = false;
       glintMaterial.opacity = 0;
@@ -158,17 +172,14 @@ export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
     },
     reset() {
       down = false;
-      fall = 0;
-      group.rotation.z = 0;
+      ragdoll.reset();
       glint.visible = false;
       glintMaterial.opacity = 0;
       rifle.add(glint);
     },
     update(frameDt: number) {
       if (!down) return;
-      const dt = Number.isFinite(frameDt) && frameDt > 0 ? frameDt : 0;
-      fall = Math.min(1, fall + dt * FALL_RATE);
-      group.rotation.z = fall * FALL_ROLL;
+      ragdoll.update(Number.isFinite(frameDt) && frameDt > 0 ? frameDt : 0);
     },
     scan(time: number, awareness: Awareness, covered: boolean, eye: Vec3) {
       if (down) {
@@ -188,6 +199,7 @@ export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
     },
     dispose() {
       glintMaterial.dispose();
+      ragdoll.dispose();
     },
   };
 }

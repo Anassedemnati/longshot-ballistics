@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { soldierModel } from '../mission/soldierModel';
 import { smoothstep } from '../player/rifleTextures';
+import { SOLDIER_BONES } from '../mission/soldierRig';
 import { EnemyBuilder } from './enemyParts';
 
-// The geometry of the standing soldier: scene/target.ts draws it as one mesh with the shared enemy material. Built
+// The geometry of the standing soldier: scene/target.ts draws it as one mesh with the shared enemy material, skinned to the bones of the ragdoll rig (mission/soldierRig.ts; scene/ragdollBody.ts). Built
 // once and shared by every soldier (nothing changes it afterwards; it lives as long as the page).
 
 let geometry: THREE.BufferGeometry | null = null;
@@ -18,7 +19,7 @@ function soldierShade(_x: number, y: number, _z: number, _nx: number, ny: number
 /** The soldier's one geometry (feet at the origin, front +Z), with colour, surface and texture coordinates per vertex. */
 export function soldierGeometry(): THREE.BufferGeometry {
   if (geometry) return geometry;
-  const builder = new EnemyBuilder();
+  const builder = new EnemyBuilder(SOLDIER_BONES);
   builder.addModel(soldierModel());
   geometry = builder.build(soldierShade);
   return geometry;

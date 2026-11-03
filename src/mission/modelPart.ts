@@ -9,10 +9,18 @@ import type { SurfaceKey } from './enemySurface';
 /** A point or vector, m. */
 export type V3 = readonly [number, number, number];
 
+/**
+ * What a part of a ragdolling model is bound to: one bone (by name), or a blend of two along an axis (`from` -> `to` is the span, in metres,
+ * over which the weight moves from `low` to `high`), so a waist bends instead of cracking.
+ */
+export type SkinBinding = string | { low: string; high: string; axis: 0 | 1 | 2; from: number; to: number };
+
 interface PartBase {
   surface: SurfaceKey;
   /** The tint (sRGB hex): the plain colour of a flat surface, the multiplier on the camo of a camo one. */
   color: number;
+  /** The bone(s) that carry this part when the body goes limp (see scene/ragdollBody.ts). A name ending in L or R swaps sides when the part is mirrored. */
+  skin?: SkinBinding;
 }
 
 /** A tapered capsule (round cone with hemispherical ends) from `a` to `b`: radii `ra` and `rb`; `sx`/`sz` squash its cross-section. */
@@ -91,8 +99,23 @@ export function frameAlong(origin: V3, forward: V3, up: V3 = [0, 1, 0]): ModelFr
   return { origin, x, y, z };
 }
 
+/** The bone name of the opposite side (a trailing L becomes R and the other way round). */
+function mirrorBone(name: string): string {
+  return /[LR]$/.test(name) ? name.slice(0, -1) + (name.endsWith('L') ? 'R' : 'L') : name;
+}
+
+function mirrorSkin(skin: SkinBinding | undefined): SkinBinding | undefined {
+  if (skin === undefined) return undefined;
+  return typeof skin === 'string' ? mirrorBone(skin) : { ...skin, low: mirrorBone(skin.low), high: mirrorBone(skin.high) };
+}
+
 /** A part of the model's right side mirrored to its left (x negated; the turns about y and z flip with it). */
 export function mirrorX(part: ModelPart): ModelPart {
+  const mirrored = mirrorOne(part);
+  return part.skin === undefined ? mirrored : { ...mirrored, skin: mirrorSkin(part.skin) };
+}
+
+function mirrorOne(part: ModelPart): ModelPart {
   const flip = (p: V3): V3 => [-p[0], p[1], p[2]];
   const turn = (r: V3 | undefined): V3 | undefined => (r ? [r[0], -r[1], -r[2]] : undefined);
   switch (part.kind) {

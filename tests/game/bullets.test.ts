@@ -294,6 +294,32 @@ describe('BulletSystem', () => {
   });
 });
 
+describe('BulletSystem: velocity at impact and bullets that flew through a body', () => {
+  it('every impact carries the bullet\'s velocity there: slower than at the muzzle, still going down range', () => {
+    const sys = makeSystem({ targets: () => [ball('t', { x: 0, y: 0, z: -100 }, 0.3)] });
+    sys.fire(MUZZLE, zeroVelocity(), BC);
+    const [event] = runUntilEvents(sys, 0.01);
+    expect(event.kind).toBe('target');
+    if (event.kind !== 'target') return;
+    const v = event.velocity;
+    expect(v).toBeDefined();
+    const speed = Math.hypot(v?.x ?? 0, v?.y ?? 0, v?.z ?? 0);
+    expect(speed).toBeLessThan(MV);
+    expect(speed).toBeGreaterThan(MV * 0.7);
+    expect(v?.z).toBeLessThan(0);
+  });
+
+  it('a ghost bullet flies through targets, keeps its flight clock, and still lands in the ground', () => {
+    const target = ball('t', { x: 0, y: 0, z: -50 }, 0.5);
+    const sys = makeSystem({ targets: () => [target], terrainHeight: () => -2 });
+    const id = sys.fire(MUZZLE, zeroVelocity(), BC, { ghost: true, startTime: 0.25 });
+    const [event] = runUntilEvents(sys, 0.01);
+    expect(event.bulletId).toBe(id);
+    expect(event.kind).toBe('terrain'); // not the target 50 m in front of it
+    expect(event.time).toBeGreaterThan(0.25);
+  });
+});
+
 describe('BulletSystem: closest pass to the watch points', () => {
   /** Fly one zero-elevation bullet down -Z until it ends, against `opts`; returns its only event. */
   function fly(opts: Partial<BulletSystemOptions>): ImpactEvent {
