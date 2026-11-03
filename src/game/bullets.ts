@@ -13,6 +13,22 @@ export type ImpactEvent =
   | { bulletId: number; kind: 'terrain'; point: Vec3; velocity?: Vec3; time: number; closestWatchM?: number }
   | { bulletId: number; kind: 'expired'; time: number; closestWatchM?: number };
 
+/**
+ * A bullet's closest pass by one listener (see `BulletSystemOptions.listeners`): reported once, as soon as the bullet is past him
+ * (or when its flight ends), and only when it came within `passRadiusM`. The records are pooled: read them before the next `update`.
+ */
+export interface BulletPass {
+  bulletId: number;
+  /** Index of the listener in the `listeners()` array. */
+  listener: number;
+  /** Closest distance from the listener to the flight path, m. */
+  distanceM: number;
+  /** The bullet's flight time at that point, s (counted from its launch, or its `startTime`). */
+  time: number;
+  /** The bullet's speed there, m/s (ground frame). */
+  speed: number;
+}
+
 /** Options of `BulletSystem.fire`. */
 export interface FireOptions {
   /**
@@ -40,6 +56,14 @@ export interface BulletSystemOptions {
    * the same array every time. Every impact event then carries `closestWatchM`. Default: none, and no distance is computed at all.
    */
   watchPoints?: () => readonly Vec3[];
+  /**
+   * Points that hear the bullets go by (the enemy's heads), read at every `fire` and `update`; the array must keep its length and order for
+   * the mission (a dead listener stays in it, the caller ignores what he would hear). For each bullet and listener the closest pass is
+   * measured, and `passes` reports it once the bullet is past him, when it came within `passRadiusM`. Default: none, nothing measured.
+   */
+  listeners?: () => readonly Vec3[];
+  /** Passes farther than this from a listener are not reported, m. Default 25. */
+  passRadiusM?: number;
   /** Fixed substep, s. Default 0.001. */
   dt?: number;
   /** A bullet expires when its flight time reaches this, s. Default 6. */
@@ -56,6 +80,14 @@ interface Bullet {
   ghost: boolean;
   /** Squared closest distance to a watch point so far, m^2 (Infinity until a substep has been measured). */
   closestSq: number;
+  /**
+   * Per listener (null without listeners): the squared closest distance so far (m^2), the flight time (s) and speed (m/s) there, and
+   * whether the pass is over (reported, or never within the radius). Made once, when the bullet is fired.
+   */
+  passSq: Float64Array | null;
+  passT: Float64Array | null;
+  passV: Float64Array | null;
+  passDone: Uint8Array | null;
 }
 
 /** Float drift guard for flight-time and substep-count comparisons, s. */
@@ -100,6 +132,11 @@ export class BulletSystem {
   private readonly targets: () => HitTarget[];
   private readonly obstacles: () => Obstacle[];
   private readonly watchPoints: (() => readonly Vec3[]) | undefined;
+  private readonly listeners: (() => readonly Vec3[]) | undefined;
+  private readonly passRadiusSq: number;
+  /** Pass records, reused from frame to frame (`passList` holds this frame's). */
+  private readonly passPool: BulletPass[] = [];
+  private readonly passList: BulletPass[] = [];
   private readonly dt: number;
   private readonly maxFlightTime: number;
   private readonly maxFrameDt: number;
@@ -117,6 +154,9 @@ export class BulletSystem {
     this.targets = opts.targets;
     this.obstacles = opts.obstacles ?? (() => NO_OBSTACLES);
     this.watchPoints = opts.watchPoints;
+    this.listeners = opts.listeners;
+    const passRadius = opts.passRadiusM ?? 25;
+    this.passRadiusSq = passRadius * passRadius;
     this.dt = opts.dt ?? DEFAULT_DT;
     if (!Number.isFinite(this.dt) || this.dt <= 0) {
       throw new Error(`BulletSystem: dt must be a positive finite number, got ${this.dt}`);
@@ -130,14 +170,24 @@ export class BulletSystem {
     return this.bullets;
   }
 
+  /** The closest passes reported by the last `update` (pooled records: read them before the next one). */
+  get passes(): readonly BulletPass[] {
+    return this.passList;
+  }
+
   /** Launch a bullet at flight time 0 (or `opts.startTime`). Returns its id. */
   fire(origin: Vec3, velocity: Vec3, bcG7: number, opts: FireOptions = {}): number {
     const id = this.nextId++;
+    const n = this.listeners ? this.listeners().length : 0;
     this.bullets.push({
       id,
       bcG7,
       ghost: opts.ghost ?? false,
       closestSq: Infinity,
+      passSq: n > 0 ? new Float64Array(n).fill(Infinity) : null,
+      passT: n > 0 ? new Float64Array(n) : null,
+      passV: n > 0 ? new Float64Array(n) : null,
+      passDone: n > 0 ? new Uint8Array(n) : null,
       state: {
         pos: { x: origin.x, y: origin.y, z: origin.z },
         vel: { x: velocity.x, y: velocity.y, z: velocity.z },
@@ -154,6 +204,7 @@ export class BulletSystem {
    */
   update(frameDt: number): ImpactEvent[] {
     const events: ImpactEvent[] = [];
+    this.passList.length = 0;
     // NaN, negative and infinite frame times count as 0: one NaN would poison the accumulator.
     const frame = Number.isFinite(frameDt) && frameDt > 0 ? Math.min(frameDt, this.maxFrameDt) : 0;
     this.accumulator += frame;
@@ -169,12 +220,13 @@ export class BulletSystem {
     for (let i = 0; i < obstacles.length; i++) radii[i] = obstacleBoundingRadius(obstacles[i]);
     // Read once per call; with none (the usual case for a mission without snipers) no distance is measured at all.
     const watched = this.watchPoints ? this.watchPoints() : NO_POINTS;
+    const listening = this.listeners ? this.listeners() : NO_POINTS;
     let kept = 0;
     for (let i = 0; i < this.bullets.length; i++) {
       const bullet = this.bullets[i];
       let event: ImpactEvent | null = null;
       for (let n = 0; n < steps && event === null; n++) {
-        event = this.advance(bullet, targets, obstacles, radii, watched);
+        event = this.advance(bullet, targets, obstacles, radii, watched, listening);
       }
       if (event === null) {
         this.bullets[kept++] = bullet;
@@ -194,20 +246,83 @@ export class BulletSystem {
     obstacles: Obstacle[],
     radii: number[],
     watched: readonly Vec3[],
+    listening: readonly Vec3[],
   ): ImpactEvent | null {
     const prev = bullet.state;
     const next = step(prev, this.dt, bullet.bcG7, this.atmo, this.wind);
     bullet.state = next;
     const event = this.contact(prev, next, bullet, targets, obstacles, radii);
+    // Up to where the bullet ended: an impact cuts the substep short, and the part beyond it was never flown.
+    const end = event !== null && event.kind !== 'expired' ? event.point : next.pos;
     if (watched.length > 0) {
-      // Up to where the bullet ended: an impact cuts the substep short, and the part beyond it was never flown.
-      const end = event !== null && event.kind !== 'expired' ? event.point : next.pos;
       for (let i = 0; i < watched.length; i++) {
         const d = pointSegmentDistanceSq(watched[i], prev.pos, end);
         if (d < bullet.closestSq) bullet.closestSq = d;
       }
     }
+    if (bullet.passSq !== null && listening.length > 0) this.listen(bullet, prev, next, end, event, listening);
     return event;
+  }
+
+  /**
+   * The closest passes of one substep (prev -> end, cut short by an impact) by every listener: a new closest point is kept with its
+   * flight time and speed; a substep that comes no closer means the bullet is past him, and a pass within the radius is reported then.
+   * When the flight ends here every pass still open is reported too. No allocation: the records come from the pool.
+   */
+  private listen(bullet: Bullet, prev: BulletState, next: BulletState, end: Vec3, event: ImpactEvent | null, listening: readonly Vec3[]): void {
+    const passSq = bullet.passSq as Float64Array;
+    const passT = bullet.passT as Float64Array;
+    const passV = bullet.passV as Float64Array;
+    const done = bullet.passDone as Uint8Array;
+    const n = Math.min(passSq.length, listening.length);
+    // How much of the full substep was flown (an impact ends it early), and the speeds at its two ends.
+    const span = event !== null && event.kind !== 'expired' ? Math.max(0, Math.min(1, (event.time - prev.t) / this.dt)) : 1;
+    const v0 = Math.hypot(prev.vel.x, prev.vel.y, prev.vel.z);
+    const v1 = Math.hypot(next.vel.x, next.vel.y, next.vel.z);
+    const abx = end.x - prev.pos.x;
+    const aby = end.y - prev.pos.y;
+    const abz = end.z - prev.pos.z;
+    const lengthSq = abx * abx + aby * aby + abz * abz;
+    for (let i = 0; i < n; i++) {
+      if (done[i] === 1) continue;
+      const p = listening[i];
+      const u = lengthSq > 0 ? Math.min(1, Math.max(0, ((p.x - prev.pos.x) * abx + (p.y - prev.pos.y) * aby + (p.z - prev.pos.z) * abz) / lengthSq)) : 0;
+      const dx = prev.pos.x + abx * u - p.x;
+      const dy = prev.pos.y + aby * u - p.y;
+      const dz = prev.pos.z + abz * u - p.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < passSq[i]) {
+        passSq[i] = d;
+        passT[i] = prev.t + u * span * this.dt;
+        passV[i] = v0 + (v1 - v0) * u * span;
+      } else {
+        // No closer than before: he is behind the bullet now.
+        done[i] = 1;
+        if (passSq[i] <= this.passRadiusSq) this.report(bullet, i);
+      }
+    }
+    if (event !== null) {
+      for (let i = 0; i < n; i++) {
+        if (done[i] === 1) continue;
+        done[i] = 1;
+        if (passSq[i] <= this.passRadiusSq) this.report(bullet, i);
+      }
+    }
+  }
+
+  private report(bullet: Bullet, i: number): void {
+    const k = this.passList.length;
+    let rec = this.passPool[k];
+    if (rec === undefined) {
+      rec = { bulletId: 0, listener: 0, distanceM: 0, time: 0, speed: 0 };
+      this.passPool.push(rec);
+    }
+    rec.bulletId = bullet.id;
+    rec.listener = i;
+    rec.distanceM = Math.sqrt((bullet.passSq as Float64Array)[i]);
+    rec.time = (bullet.passT as Float64Array)[i];
+    rec.speed = (bullet.passV as Float64Array)[i];
+    this.passList.push(rec);
   }
 
   /** The earliest thing the substep prev -> next touches (target, obstacle, terrain), or the end of the bullet's life; null if none. */

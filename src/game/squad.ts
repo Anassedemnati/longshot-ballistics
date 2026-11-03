@@ -135,6 +135,16 @@ export class Squad {
     this.add(base * (cue.camo ? SQUAD.camoFactor : 1));
   }
 
+  /**
+   * Something told them a shot was fired without telling them where from (a supersonic crack overhead, a weak suppressed report, see
+   * game/hearing.ts): they are alerted and take cover, but their knowledge of the player does not grow.
+   */
+  alarm(): void {
+    if (this.heard) return;
+    this.heard = true;
+    this.updateState();
+  }
+
   /** A bullet passed or landed within `passNearM` of a living soldier. */
   bulletPassed(): void {
     this.heard = true;
@@ -590,7 +600,7 @@ export class SoldierBrain {
   }
 
   /** The numbers the animation wants (see mission/soldierAnim.ts), written to `out`. */
-  intentInto(out: { speed: number; gait: 'none' | 'sprint' | 'crouchRun'; stance: 'stand' | 'crouch' | 'kneel'; aim: boolean; turnRate: number }): void {
+  intentInto(out: { speed: number; gait: 'none' | 'sprint' | 'crouchRun' | 'walk'; stance: 'stand' | 'crouch' | 'kneel'; aim: boolean; turnRate: number }): void {
     const moving = (this.mode === 'alerted' || this.mode === 'relocating') && this.reactLeft <= 0 && this.speed > 0.05;
     out.speed = this.speed;
     out.gait = moving ? this.moveKind : 'none';

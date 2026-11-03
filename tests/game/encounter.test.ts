@@ -499,3 +499,13 @@ describe('the soldiers that fight back', () => {
     expect(e.ended).toBe(true);
   });
 });
+
+describe('Encounter alert (a crack, game/hearing.ts)', () => {
+  it('sets the snipers searching for good without adding any detection', () => {
+    const e = new Encounter({ camo: true });
+    expect(e.awareness).toBe('unaware');
+    e.alert();
+    expect(e.awareness).toBe('searching');
+    expect(e.detection).toBe(0);
+  });
+});

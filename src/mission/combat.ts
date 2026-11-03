@@ -112,10 +112,19 @@ export class Combat {
     return n;
   }
 
-  /** The player fired: the muzzle blast raises the detection (less with a suppressor or a ghillie suit) and alerts the snipers. */
+  /**
+   * The muzzle report of a player's shot has reached the snipers (game/hearing.ts: `d / c` after the trigger, and a suppressed one only
+   * from close by): it raises the detection (less with a suppressor or a ghillie suit) and alerts them.
+   */
   onShot(): void {
     if (this.deps.snipers.length === 0 && this.deps.squad) return; // no snipers to hear it: the squad hears it through its own channel
     this.deps.encounter.shot({ suppressed: this.deps.suppressed });
+  }
+
+  /** A supersonic bullet cracked past a sniper: they know someone is shooting, but not from where (no detection). */
+  onCrack(): void {
+    if (this.snipersLeft === 0) return;
+    this.deps.encounter.alert();
   }
 
   /** The soldiers hit the player for `points` of health: the same red flash as any other hit (the encounter keeps the health). */

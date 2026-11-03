@@ -157,6 +157,14 @@ export class Encounter {
   }
 
   /**
+   * A bullet cracked past a sniper (see game/hearing.ts): the snipers know someone is shooting, for good, but the crack cannot be placed,
+   * so it adds no detection.
+   */
+  alert(): void {
+    this.alerted = true;
+  }
+
+  /**
    * A bullet's flight ended `closestPassM` metres from the closest live enemy sniper it passed (Infinity when it passed
    * none): the crack and the dust point back at the shooter, whatever the suppressor and the suit (see `bulletCueBump`).
    */

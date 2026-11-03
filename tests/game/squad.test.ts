@@ -219,3 +219,15 @@ describe('SoldierBrain', () => {
     void SQUAD;
   });
 });
+
+describe('Squad alarm (a crack or a weak report, game/hearing.ts)', () => {
+  it('alerts an unaware squad without telling it anything of where the player is', () => {
+    const s = new Squad(1);
+    s.alarm();
+    expect(s.state).toBe('alerted');
+    expect(s.knowledge).toBe(0);
+    s.playerShot({ suppressed: false, camo: false });
+    s.alarm(); // a second alarm changes nothing
+    expect(s.knowledge).toBeCloseTo(SQUAD.heardShot, 9);
+  });
+});

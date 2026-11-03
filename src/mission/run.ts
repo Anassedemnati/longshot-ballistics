@@ -20,6 +20,8 @@ import { BulletSystem } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
 import { MuzzleFlashes } from '../fx/muzzleFlash';
 import { Encounter } from '../game/encounter';
+import { CueQueue, HEARING, crackDelay, crackHeard, reportArrival } from '../game/hearing';
+import type { Cue } from '../game/hearing';
 import type { HitTarget, HitZone } from '../game/hit';
 import { continuedVelocity, exitPoint } from '../game/penetration';
 import { rangeUnderCrosshair } from '../game/rangefinder';
@@ -150,6 +152,22 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     for (const k of snipers.values()) if (!k.sniper.down) watchPoints.push(k.head, k.upperTorso);
   }
   refreshWatchPoints();
+
+  // Who hears the player's shots (game/hearing.ts): the enemy snipers, the soldiers that fight back, and each as a GROUP (the first of them
+  // to hear a cue tells the rest). One table of live points for the whole mission, in a fixed order (a dead listener stays in it and is
+  // skipped): the bullets measure their closest pass by each, for the crack.
+  type Listeners = 'snipers' | 'squad';
+  const listenerPoints: Vec3[] = [];
+  const listenerGroup: Listeners[] = [];
+  const listenerAlive: Array<() => boolean> = [];
+  const cues = new CueQueue<Listeners>();
+  /** Game time, s: the sum of the (capped) frame times, the clock the bullets fly by and the cues arrive by. */
+  let gameTime = 0;
+  /** Game time each bullet in flight was fired at, s (a bullet that came out of a body keeps its own's); and the groups its crack has reached (bit per group). */
+  const firedAt = new Map<number, number>();
+  const cracked = new Map<number, number>();
+  const GROUP_BIT: Record<Listeners, number> = { snipers: 1, squad: 2 };
+
   const bullets = new BulletSystem({
     atmo,
     wind,
@@ -157,6 +175,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     targets: () => liveTargets,
     obstacles: () => obstacles,
     watchPoints: () => watchPoints,
+    listeners: () => listenerPoints,
+    passRadiusM: HEARING.crackRadiusM,
   });
   const weapon = new Weapon(rifle.magazine);
   // The mission clock is stopped until the player's first pointer lock or first shot (whichever comes first).
@@ -284,6 +304,67 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     });
   }
 
+  // The listener table: every sniper's head, every soldier's upper torso (the director moves those points in place), when they fight.
+  if (combat && snipers.size > 0) {
+    for (const k of snipers.values()) {
+      listenerPoints.push(k.head);
+      listenerGroup.push('snipers');
+      listenerAlive.push(() => !k.sniper.down);
+    }
+  }
+  if (director) {
+    for (const s of soldiers.values()) {
+      listenerPoints.push(s.upperTorso);
+      listenerGroup.push('squad');
+      listenerAlive.push(() => !s.dummy.down);
+    }
+  }
+
+  /** Distance from the rifle to the nearest live listener of `group`, m (Infinity when none is left). */
+  function nearestListener(group: Listeners): number {
+    let best = Infinity;
+    for (let i = 0; i < listenerPoints.length; i++) {
+      if (listenerGroup[i] !== group || !listenerAlive[i]()) continue;
+      best = Math.min(best, distance(listenerPoints[i], shooter));
+    }
+    return best;
+  }
+
+  /** The player's shot: its report is on its way to every group, arriving when the sound reaches the nearest of them (if it is heard at all). */
+  function scheduleReports(): void {
+    for (const group of ['snipers', 'squad'] as const) {
+      const arrival = reportArrival(nearestListener(group), atmo.speedOfSound, config.suppressed);
+      if (arrival) cues.schedule({ kind: 'report', group, at: gameTime + arrival.delayS, directional: arrival.directional, suppressed: config.suppressed });
+    }
+  }
+
+  /** The bullets that went past a listener this frame: a supersonic one close enough cracks for his group (once per bullet and group). */
+  function schedulePasses(): void {
+    for (const pass of bullets.passes) {
+      const group = listenerGroup[pass.listener];
+      if (group === undefined || !listenerAlive[pass.listener]()) continue;
+      if (!crackHeard(pass.distanceM, pass.speed, atmo.speedOfSound)) continue;
+      const bit = GROUP_BIT[group];
+      const done = cracked.get(pass.bulletId) ?? 0;
+      if ((done & bit) !== 0) continue;
+      cracked.set(pass.bulletId, done | bit);
+      const shotAt = firedAt.get(pass.bulletId) ?? gameTime - pass.time;
+      cues.schedule({ kind: 'crack', group, at: shotAt + crackDelay(pass.time, pass.distanceM, atmo.speedOfSound), directional: false, suppressed: config.suppressed });
+    }
+  }
+
+  /** A cue has reached its group: the report gives the existing amounts of detection and knowledge; a crack only alarms. */
+  function hear(cue: Cue<Listeners>): void {
+    if (missionDone() || stats.failed) return;
+    if (cue.group === 'snipers') {
+      if (cue.kind === 'report') combat?.onShot();
+      else combat?.onCrack();
+    } else if (director) {
+      if (cue.kind === 'report') director.onPlayerShot({ suppressed: config.suppressed, camo: config.camo });
+      else director.squad.alarm();
+    }
+  }
+
   // Aim assists (T / A / P): only in missions that enable them. They aim at what stands: a soldier's or an enemy
   // sniper's upper torso, a vehicle's engine.
   const assistTargets = (): AimTarget[] => {
@@ -355,11 +436,11 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       return;
     }
     stats = recordShot(startClock(stats, performance.now()));
-    combat?.onShot(); // the muzzle blast gives the player away
-    director?.onPlayerShot({ suppressed: config.suppressed, camo: config.camo }); // ... and the soldiers hear it
+    // The muzzle blast gives the player away, but only once its sound has reached them (game/hearing.ts).
+    scheduleReports();
     hud.setRounds(weapon.ammo, weapon.magazine, false);
     const { origin, velocity } = muzzleLaunch(shooter, view.forward(), view.up(), rifle, zeroElevation);
-    bullets.fire(origin, velocity, rifle.bcG7);
+    firedAt.set(bullets.fire(origin, velocity, rifle.bcG7), gameTime);
     playShot(audio, config.rifle, config.suppressed);
     rifleModel.fire(shot.boltCycle);
     if (shot.boltCycle) playBoltCycle(audio, BOLT_TIME_S);
@@ -406,6 +487,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     blood.spawnExit(out, dir);
     const id = bullets.fire(out, continuedVelocity(event.velocity, penetrationRng), rifle.bcG7, { ghost: true, startTime: event.time });
     throughBullets.set(id, out);
+    firedAt.set(id, firedAt.get(event.bulletId) ?? gameTime - event.time); // it keeps the clock of the shot it came from
   }
 
   /** Decide what an impact does (`applyImpact`, pure) and carry it out; each event is applied before the next is decided. */
@@ -617,10 +699,16 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
     view.look(input.yaw, input.pitch);
 
+    gameTime += dt;
     const events = bullets.update(dt);
+    schedulePasses();
     // Before the impacts are applied: which bullets came near a soldier (the ones that went through a body are not counted; they are still in `throughBullets`).
     director?.observeBullets(bullets.active, events, throughBullets);
     for (const event of events) onImpact(event);
+    for (const event of events) {
+      firedAt.delete(event.bulletId);
+      cracked.delete(event.bulletId);
+    }
     for (const s of soldiers.values()) {
       s.dummy.update(dt);
       // The practice dummy stands up again by itself and can then be hit again.
@@ -632,6 +720,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     for (const v of vehicles.values()) v.target.update(dt);
     for (const k of snipers.values()) k.sniper.update(dt);
+    // The cues that have reached their listeners by now (after this frame's impacts, which may have taken one of them out).
+    cues.deliver(gameTime, hear);
     // The fight with the snipers and the soldiers stands still while the pointer is free and once the mission is over.
     const paused = !input.locked || resultsShown || missionDone() || stats.failed;
     if (director && !paused) director.update(dt, combat !== null && combat.encounter.awareness === 'firing' && combat.snipersLeft > 0);
