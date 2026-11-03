@@ -23,11 +23,13 @@ const base = (over: Partial<MissionConfig>): MissionConfig => clampMission({ ...
 // one hit zones from the same dimensions, and a real bullet from the player's own position (the theme's
 // air, the field's ground, every cover collider of the mission in the way) registers on them.
 describe('real shots at placed snipers', () => {
+  /** How many of the snipers shot at below lie on a roof, ridge strip or open ground (the hides are scored, so a case may have no roof at all). */
+  const seen = { roof: 0, ridge: 0, open: 0 };
+
   for (const [position, seeds] of POSITION_SEEDS) {
     for (const theme of THEMES) {
       it(`${theme}, from the ${position}: a shot at each sniper's head or upper torso, from the player's position, hits him`, () => {
         let shots = 0;
-        let roofs = 0;
         for (const seed of seeds) {
           const config = base({
             theme,
@@ -47,7 +49,7 @@ describe('real shots at placed snipers', () => {
           const atmo = themeAtmosphere(theme);
           const targets = layout.snipers.map((s) => createSniper({ x: s.x, y: s.y, z: s.z }, s.yaw, s.id).hitTarget);
           for (const s of layout.snipers) {
-            if (s.site === 'roof') roofs++;
+            seen[s.site]++;
             const aim = sniperAimPoints(s);
             const head = shootAtPointIn({ field, atmo, targets, obstacles }, aim.head);
             expect(head, `${theme} seed ${seed} ${s.id} (${s.site}, ${s.range.toFixed(0)} m): head`).toHaveLength(1);
@@ -59,8 +61,13 @@ describe('real shots at placed snipers', () => {
           }
         }
         expect(shots).toBe(seeds.length * 6);
-        expect(roofs).toBeGreaterThan(0);
       }, 60_000);
     }
   }
+
+  it('covers every kind of hide over the cases above: shots at rooftop, ridge-strip and open-ground snipers all registered', () => {
+    expect(seen.roof).toBeGreaterThan(0);
+    expect(seen.ridge).toBeGreaterThan(0);
+    expect(seen.open).toBeGreaterThan(0);
+  });
 });

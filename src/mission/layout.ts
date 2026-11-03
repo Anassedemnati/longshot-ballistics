@@ -5,6 +5,7 @@ import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import type { Density, MissionConfig } from './config';
 import { DUMMY_HEAD, DUMMY_UPRIGHT, LOWER_TORSO_CY, UPPER_TORSO_CY } from './dummyDims';
+import { backdropScore, nearestCoverGap, pickHide, scoreHide } from './hide';
 import {
   propBoxes,
   propColliders,
@@ -24,8 +25,9 @@ import { SNIPER_REACH, sniperAimPoints, sniperBoundsObstacle } from './sniperDim
 // Order of work: props (clustered into 1-3 "sites"), then vehicle targets, then soldiers, then the enemy
 // snipers. Every accepted soldier has a clear line of sight from the shooter to the head and upper-torso
 // centres past the terrain, all colliders and the other soldiers; some stand behind low cover (see below).
-// Snipers come last, so they never move anything else: they lie on a house roof, else on high ground at the
-// sector's edge, else in the open, always with a clear line of sight both ways (see `placeSniper`).
+// Snipers come last, so they never move anything else: every roof, ridge and open-ground spot that passes the same hard rules
+// (a clear line of sight both ways) is scored for how well it hides him (see hide.ts) and one of the best is picked, so the hides
+// differ from seed to seed (see `placeSniper`).
 
 export interface SoldierPlacement {
   id: string;
@@ -684,7 +686,7 @@ function sniperBlocked(ctx: Ctx, a: Vec3, b: Vec3): boolean {
  * sector or the allowed range window, too close to another target, his body touching a collider or another
  * body, no clear line of sight both ways between the shooter's eye and his head (and eye -> upper torso)
  * past the terrain, every collider and every soldier, or his body hiding a soldier, an engine or another
- * sniper from the shooter.
+ * sniper (head or upper torso) from the shooter.
  */
 function evaluateSniper(
   ctx: Ctx,
@@ -716,7 +718,9 @@ function evaluateSniper(
     if (segmentBox(eye, o.aim.head, bounds.box) !== null || segmentBox(eye, o.aim.upperTorso, bounds.box) !== null) return null;
   }
   for (const e of ctx.engineCenters) if (segmentBox(eye, e, bounds.box) !== null) return null;
-  for (const o of ctx.snipers) if (segmentBox(eye, o.aim.head, bounds.box) !== null) return null;
+  for (const o of ctx.snipers) {
+    if (segmentBox(eye, o.aim.head, bounds.box) !== null || segmentBox(eye, o.aim.upperTorso, bounds.box) !== null) return null;
+  }
   // Terrain, the dear test last: both ways for the head (the skipped last 2 m differ), one way for the chest.
   if (!terrainClear(eye, aim.head, field) || !terrainClear(aim.head, eye, field) || !terrainClear(eye, aim.upperTorso, field)) return null;
   return { s, aim, bounds };
@@ -750,8 +754,8 @@ function placeOnRoof(ctx: Ctx, window: readonly [number, number]): PlacedSniper 
   return null;
 }
 
-/** On high ground near the sector's edge: draws spots in the outer strip and tries the highest ground first. */
-function placeOnRidge(ctx: Ctx, window: readonly [number, number], stage: Stage): PlacedSniper | null {
+/** Random spots in the outer strip of the sector, the highest ground first. */
+function ridgeSpots(ctx: Ctx, window: readonly [number, number]): Array<{ x: number; z: number; ground: number }> {
   const { field, rng } = ctx;
   const spots: Array<{ x: number; z: number; ground: number }> = [];
   for (let i = 0; i < RIDGE_CANDIDATES; i++) {
@@ -761,8 +765,13 @@ function placeOnRidge(ctx: Ctx, window: readonly [number, number], stage: Stage)
     const z = -range * Math.cos(bearing);
     spots.push({ x, z, ground: field.height(x, z) });
   }
-  spots.sort((a, b) => b.ground - a.ground);
-  for (const spot of spots) {
+  return spots.sort((a, b) => b.ground - a.ground);
+}
+
+/** On high ground near the sector's edge: draws spots in the outer strip and tries the highest ground first. */
+function placeOnRidge(ctx: Ctx, window: readonly [number, number], stage: Stage): PlacedSniper | null {
+  const { rng } = ctx;
+  for (const spot of ridgeSpots(ctx, window)) {
     const yaw = wrapAngle(facingYaw(spot.x, spot.z) + (rng() * 2 - 1) * SNIPER_YAW_JITTER);
     const placed = evaluateSniper(ctx, window, spot.x, spot.ground, spot.z, yaw, 'ridge', stage.spacing);
     if (placed) return placed;
@@ -785,10 +794,96 @@ function placeInOpen(ctx: Ctx, window: readonly [number, number], stage: Stage):
   return null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Choosing a hide
+
+/** A valid place for the next sniper and what it is worth (see hide.ts); `house` is the id of the house whose roof it is. */
+interface Hide {
+  placed: PlacedSniper;
+  score: number;
+  house?: string;
+}
+
+/** At most this many valid ridge spots, and this many valid open-ground spots, are scored per pass (a valid spot is the dear one to find: three long terrain traces). */
+const HIDES_PER_GROUND_KIND = 6;
+
+/** How well `p` hides him: height over the eye, backdrop, hard cover near, apart from the soldiers, off the centre line, the site (hide.ts). */
+function hideScore(ctx: Ctx, p: PlacedSniper): number {
+  const { s, aim } = p;
+  let nearestSoldier = Infinity;
+  for (const o of ctx.soldiers) nearestSoldier = Math.min(nearestSoldier, Math.hypot(o.s.x - s.x, o.s.z - s.z));
+  return scoreHide({
+    headAboveEyeM: aim.head.y - ctx.eye.y,
+    backdrop: backdropScore(ctx.field, ctx.eye, aim.head),
+    coverGapM: Math.min(nearestCoverGap(s.x, s.z, ctx.props), nearestCoverGap(s.x, s.z, ctx.vehicles)),
+    nearestSoldierM: nearestSoldier,
+    bearingRad: Math.atan2(s.x, -s.z),
+    site: s.site,
+  });
+}
+
+/** The best valid probe of each roof in reach (every probe is looked at; a house holds one sniper, so one hide per house). */
+function roofHides(ctx: Ctx, window: readonly [number, number]): Hide[] {
+  const spot = rooftopSpot('house', SNIPER_REACH);
+  if (!spot) return [];
+  const out: Hide[] = [];
+  for (const house of ctx.props) {
+    if (house.kind !== 'house' || ctx.usedRoofs.has(house.id)) continue;
+    const c = Math.cos(house.yaw);
+    const sn = Math.sin(house.yaw);
+    const y = ctx.field.height(house.x, house.z) + spot.top;
+    let best: Hide | null = null;
+    for (let probe = 0; probe < ROOF_PROBES; probe++) {
+      const lx = spot.cx + (ctx.rng() * 2 - 1) * spot.halfX;
+      const lz = spot.cz + (ctx.rng() * 2 - 1) * spot.halfZ;
+      const x = house.x + c * lx + sn * lz;
+      const z = house.z - sn * lx + c * lz;
+      const yaw = wrapAngle(facingYaw(x, z) + (ctx.rng() * 2 - 1) * SNIPER_YAW_JITTER);
+      const placed = evaluateSniper(ctx, window, x, y, z, yaw, 'roof', ROOF_SPACING);
+      if (!placed) continue;
+      const score = hideScore(ctx, placed);
+      if (!best || score > best.score) best = { placed, score, house: house.id };
+    }
+    if (best) out.push(best);
+  }
+  return out;
+}
+
+/** The valid ridge-strip spots of one ground pass, the highest ground first (at most `HIDES_PER_GROUND_KIND`), and the same number of valid open-ground draws. */
+function groundHides(ctx: Ctx, window: readonly [number, number], stage: Stage): Hide[] {
+  const { field, rng } = ctx;
+  const out: Hide[] = [];
+  let valid = 0;
+  for (const spot of ridgeSpots(ctx, window)) {
+    if (valid >= HIDES_PER_GROUND_KIND) break;
+    const yaw = wrapAngle(facingYaw(spot.x, spot.z) + (rng() * 2 - 1) * SNIPER_YAW_JITTER);
+    const placed = evaluateSniper(ctx, window, spot.x, spot.ground, spot.z, yaw, 'ridge', stage.spacing);
+    if (!placed) continue;
+    valid++;
+    out.push({ placed, score: hideScore(ctx, placed) });
+  }
+  valid = 0;
+  for (let attempt = 0; attempt < stage.attempts && valid < HIDES_PER_GROUND_KIND; attempt++) {
+    const range = window[0] + rng() * (window[1] - window[0]);
+    const bearing = (rng() * 2 - 1) * stage.bearing;
+    const x = range * Math.sin(bearing);
+    const z = -range * Math.cos(bearing);
+    const yaw = wrapAngle(facingYaw(x, z) + (rng() * 2 - 1) * SNIPER_YAW_JITTER);
+    const placed = evaluateSniper(ctx, window, x, field.height(x, z), z, yaw, 'open', stage.spacing);
+    if (!placed) continue;
+    valid++;
+    out.push({ placed, score: hideScore(ctx, placed) });
+  }
+  return out;
+}
+
 /**
- * The next enemy sniper: on a roof if a house is in reach, else on high ground at the sector's edge, else in the
- * open. Every ground pass is tried before giving up (spacing relaxes pass by pass; the line-of-sight and
- * not-inside-a-box checks never do), so the caller never drops props for a sniper it could have placed.
+ * The next enemy sniper. Every place that passes `evaluateSniper` (its hard rules: a clear line of sight both ways, nothing
+ * overlapping, the sector and range window) is a candidate: the best valid probe of each roof, the valid ridge-strip spots and the
+ * valid open-ground draws. They are scored for how well they hide him (hide.ts) and one of the best few (the best of each kind of site
+ * among them) is picked with the mission's rng, so a roof is a good site but not an automatic one, and another seed gives another hide. The spacing from the other targets
+ * relaxes pass by pass (the line-of-sight rules never do), so the caller never drops props for a sniper it could have placed. If no
+ * pass finds a candidate, the plain chain runs: a roof if a house is in reach, else high ground at the sector's edge, else the open.
  */
 function placeSniper(ctx: Ctx): PlacedSniper | null {
   const { config } = ctx;
@@ -796,6 +891,20 @@ function placeSniper(ctx: Ctx): PlacedSniper | null {
     Math.max(MIN_SNIPER_RANGE, config.rangeMin - SNIPER_BAND_MARGIN),
     Math.min(SECTOR_MAX_RANGE, config.rangeMax + SNIPER_BAND_MARGIN),
   ] as const;
+  const roofs = roofHides(ctx, window);
+  for (const stage of SNIPER_STAGES) {
+    const hides = [...roofs, ...groundHides(ctx, window, stage)];
+    const pick = pickHide(hides.map((h) => ({ score: h.score, site: h.placed.s.site })), ctx.rng);
+    if (pick < 0) continue;
+    const chosen = hides[pick];
+    if (chosen.house !== undefined) ctx.usedRoofs.add(chosen.house);
+    return chosen.placed;
+  }
+  return placeSniperPlain(ctx, window);
+}
+
+/** The plain chain, the fallback of `placeSniper`: on a roof if a house is in reach, else on high ground at the sector's edge, else in the open. */
+function placeSniperPlain(ctx: Ctx, window: readonly [number, number]): PlacedSniper | null {
   const roof = placeOnRoof(ctx, window);
   if (roof) return roof;
   for (const stage of SNIPER_STAGES) {

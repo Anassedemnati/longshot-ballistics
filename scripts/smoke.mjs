@@ -88,7 +88,7 @@ const THEME_NAMES = { d: 'desert', a: 'arctic', v: 'valley' };
 const MAX_DRAW_CALLS = 400;
 const MISSION_MAX = 'v1.d.100.1500.10.3.120.3.338.m.m.1'; // the largest mission: 10 soldiers + 3 vehicle targets, many buildings and vehicles, 12 m/s
 const MISSION_MAX_SNIPERS = 'v2.d.100.1500.10.3.120.3.338.m.m.1.r.0.3.0'; // the same with 3 enemy snipers
-/** 1 soldier at 300 m among many buildings, calm, 2 enemy snipers (seed 2 puts both on rooftops, 198 and 320 m out). */
+/** 1 soldier at 300 m among many buildings, calm, 2 enemy snipers (seed 2 puts both on rooftops, 199 and 321 m out). */
 const MISSION_SNIPERS = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.2.0';
 /** The same with one enemy sniper, for the mission-failed path. */
 const MISSION_SNIPER_ONE = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0';
@@ -96,6 +96,8 @@ const MISSION_SNIPER_ONE = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0';
 const MISSION_SNIPERS_ASSISTS = 'v2.d.300.300.1.0.45.9.308.m.n.2.r.0.2.1';
 /** 1 soldier at 300 m among many buildings, calm, 1 enemy sniper (as MISSION_SNIPER_ONE), in a ghillie suit: a v3 code. */
 const MISSION_GHILLIE = 'v3.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0.1';
+/** The same with a suppressor and no ghillie suit: a shot is quiet (9 %), so what a missed bullet adds near the sniper shows on its own. */
+const MISSION_BULLET_CUE = 'v3.d.300.300.1.0.0.9.308.m.n.2.r.1.1.0.0';
 /** The largest mission with everything on: mountain, suppressor, 3 enemy snipers, aim assists. */
 const MISSION_MAX_ALL = 'v2.d.100.1500.10.3.120.3.338.m.m.1.m.1.3.1';
 /** The longest the threat line gets (3 snipers, a bombardment coming, pointer free). */
@@ -1538,6 +1540,7 @@ async function run() {
     check((await fight.locator('.hud-hint').boundingBox()).height < 24, 'the hint is a single line');
     check(st.targetsLeft === 3, 'the snipers are targets: 3 targets standing');
     check((await fight.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'HUD says "Targets 3/3"');
+    // The hides are chosen by score (src/mission/hide.ts) and a roof is not automatic, but seed 2 of this band gives two roofs.
     check(st.snipers.every((k) => k.site === 'roof'), `both snipers lie on rooftops (${st.snipers.map((k) => k.site).join(', ')})`);
     check(st.health === 100 && st.detection === 0 && !st.covered, 'the fight starts at full health, undetected, exposed');
     await animationFrames(fight, 5);
@@ -1747,6 +1750,25 @@ async function run() {
       check(/Enemy searching for you · C: cover( · PAUSED)?$/.test(searchingGhillie), `the threat line says the enemy is searching ("${searchingGhillie}")`);
     }
     await ghillie.close();
+
+    // 12c3. The bullet cue, end to end (run.ts watch points -> BulletSystem closest pass -> Combat.onBulletEnd -> Encounter.bulletCue): a
+    // suppressed shot is quiet (9 %), but a bullet that ends within a few metres of a sniper is not: its crack and dust point back at the
+    // shooter (+25 % at 5 m or less). The pointer stays free, so the fight is paused and only the shots move the detection.
+    const cue = await openPage();
+    await startGame(cue, `m=${MISSION_BULLET_CUE}&debug=1`);
+    st = await gameState(cue);
+    check(st.snipers.length === 1 && st.detection === 0 && st.awareness === 'unaware', 'the bullet cue mission starts undetected, the enemy unaware');
+    const cueSniper = st.snipers[0];
+    const cueRange = Math.hypot(cueSniper.head.x, cueSniper.head.z);
+    const cueResult = await shootAt(cue, { x: cueSniper.head.x, y: cueSniper.head.y + 1.5, z: cueSniper.head.z }, holdFor(cueRange));
+    check(/^MISS|^Hit cover/.test(cueResult), `a shot 1.5 m over the sniper's head passes him by ("${cueResult}")`);
+    await animationFrames(cue, 3);
+    st = await gameState(cue);
+    check(
+      st.snipersLeft === 1 && Math.abs(st.detection - 34) < 1.5 && st.awareness === 'searching',
+      `the suppressed shot (9 %) and the bullet that passed within a few metres of the sniper (+25 %) read ${st.detection.toFixed(1)} %, the enemy is searching`,
+    );
+    await cue.close();
 
     // 12d. Enemy snipers, aim assists and the first-person rifle in one mission: the panels share the screen without overlapping, the
     // rifle is not drawn in cover, the cover mask sits between the picture and the HUD, and the assists aim at enemy snipers too.

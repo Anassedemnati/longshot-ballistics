@@ -13,6 +13,7 @@ import {
   soldierUprightBounds,
 } from '../../src/mission/layout';
 import type { MissionLayout, SniperPlacement } from '../../src/mission/layout';
+import { backdropScore } from '../../src/mission/hide';
 import { propColliders, rooftopSpot, vehicleEngineObstacle } from '../../src/mission/props';
 import { createRng } from '../../src/mission/random';
 import {
@@ -262,26 +263,79 @@ describe('sniper placement', () => {
     expect(seen.size).toBeGreaterThanOrEqual(10);
   });
 
-  it('lies on a rooftop whenever a house is in reach and in view', () => {
-    let withHouse = 0;
-    let onRoof = 0;
-    for (let seed = 1; seed <= 24; seed++) {
-      for (const theme of THEMES) {
-        const config = base({ theme, rangeMin: 400, rangeMax: 700, buildings: 'many', vehicles: 'none', enemySnipers: 1, soldiers: 3, seed });
+  it('uses a roof where a roof is a good hide, and not otherwise: some roofs among the hides, never all of them', { timeout: 60_000 }, () => {
+    const roofs = { valley: 0, ridge: 0, mountain: 0 };
+    const total = { valley: 0, ridge: 0, mountain: 0 };
+    for (const position of POSITIONS) {
+      for (let seed = 1; seed <= 90; seed++) {
+        const config = base({ theme: THEMES[seed % 3], position, rangeMin: 400, rangeMax: 700, buildings: 'many', vehicles: 'none', enemySnipers: 1, soldiers: 3, seed });
         const { field, layout } = setup(config);
         checkSnipers(config, field, layout);
-        const inReach = layout.props.some((p) => {
-          if (p.kind !== 'house') return false;
-          const r = Math.hypot(p.x, p.z);
-          return r >= 250 && r <= 850;
-        });
-        if (!inReach) continue;
-        withHouse++;
-        if (layout.snipers[0].site === 'roof') onRoof++;
+        if (!layout.props.some((p) => p.kind === 'house')) continue;
+        total[position]++;
+        if (layout.snipers[0].site === 'roof') roofs[position]++;
       }
     }
-    expect(withHouse).toBeGreaterThan(30);
-    expect(onRoof / withHouse).toBeGreaterThanOrEqual(0.9);
+    for (const position of POSITIONS) expect(total[position], position).toBeGreaterThan(60);
+    // From the mountain the ground behind every roof is a backdrop and the houses are the hard cover: with houses about, roofs are the usual hide, but never the only one.
+    expect(roofs.mountain / total.mountain).toBeGreaterThan(0.5);
+    // From the ridge, where the valley walls make better hides, a roof is a minority pick but still happens; from the valley floor, where a roof stands against the sky, it is rare.
+    expect(roofs.ridge).toBeGreaterThan(0);
+    expect(roofs.ridge / total.ridge).toBeLessThan(0.6);
+    expect(roofs.valley / total.valley).toBeLessThan(0.3);
+    // Nowhere is a roof automatic any more, the mountain included.
+    for (const position of POSITIONS) expect(roofs[position] / total[position], position).toBeLessThan(0.95);
+  });
+
+  it('picks varied hides: different seeds give different sites and spots, all three kinds of site turn up, and the bearing runs to both flanks', () => {
+    const sites = new Set<string>();
+    const spots = new Set<string>();
+    const sides = new Set<number>();
+    for (const position of POSITIONS) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const theme = THEMES[seed % 3];
+        const config = base({ theme, position, rangeMin: 400, rangeMax: 700, buildings: 'many', vehicles: 'few', enemySnipers: 1, soldiers: 3, seed });
+        const s = setup(config).layout.snipers[0];
+        sites.add(s.site);
+        spots.add(`${position},${seed},${s.x.toFixed(1)},${s.z.toFixed(1)}`);
+        sides.add(Math.sign(s.x));
+      }
+    }
+    expect(sites).toEqual(new Set(['roof', 'ridge', 'open']));
+    expect(spots.size).toBe(120);
+    expect(sides).toEqual(new Set([-1, 1]));
+  });
+
+  it('a given seed always gives the same hide, and another seed (same everything else) gives another', () => {
+    const at = (seed: number) => {
+      const s = setup(base({ rangeMin: 400, rangeMax: 700, buildings: 'many', enemySnipers: 1, seed })).layout.snipers[0];
+      return `${s.site}@${s.x.toFixed(2)},${s.z.toFixed(2)}`;
+    };
+    expect(at(7)).toBe(at(7));
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 20; seed++) seen.add(at(seed));
+    expect(seen.size).toBeGreaterThanOrEqual(18);
+  });
+
+  it('hides them: on a ridge or mountain most are backed by the ground behind them, and from the ridge most lie well away from the soldiers', () => {
+    let backed = 0;
+    let apart = 0;
+    let n = 0;
+    let nRidge = 0;
+    for (const position of ['ridge', 'mountain'] as const) {
+      for (let seed = 1; seed <= 30; seed++) {
+        const config = base({ theme: THEMES[seed % 3], position, rangeMin: 400, rangeMax: 700, buildings: 'few', vehicles: 'few', enemySnipers: 1, soldiers: 4, seed });
+        const { field, layout } = setup(config);
+        const s = layout.snipers[0];
+        n++;
+        if (backdropScore(field, field.shooter, sniperAimPoints(s).head) > -0.5) backed++;
+        if (position !== 'ridge') continue;
+        nRidge++;
+        if (Math.min(...layout.soldiers.map((o) => Math.hypot(o.x - s.x, o.z - s.z))) >= 40) apart++;
+      }
+    }
+    expect(backed / n).toBeGreaterThan(0.8);
+    expect(apart / nRidge).toBeGreaterThan(0.8);
   });
 
   it('with no buildings the snipers lie on the ground: on high ground at the sector edge first, in the open when it is full', () => {
@@ -330,6 +384,65 @@ describe('sniper placement', () => {
           expect(Math.hypot(spots[i].x - spots[j].x, spots[i].z - spots[j].z)).toBeGreaterThanOrEqual(2);
         }
       }
+    }
+  });
+});
+
+describe('sniper placement: fuzz', () => {
+  it('200 seeds, every theme and firing position, snipers 1-3: no placement throws and every promise (line of sight both ways, clear of boxes, in the window) holds', { timeout: 120_000 }, () => {
+    const sites = new Set<string>();
+    for (let seed = 1; seed <= 200; seed++) {
+      const theme = THEMES[seed % 3];
+      const position = POSITIONS[Math.floor(seed / 3) % 3];
+      const [rangeMin, rangeMax] = BANDS[seed % BANDS.length];
+      const config = base({
+        theme,
+        position,
+        rangeMin,
+        rangeMax,
+        enemySnipers: 1 + (seed % 3),
+        soldiers: 2 + (seed % 5),
+        vehicleTargets: seed % 2,
+        buildings: (['none', 'few', 'many'] as const)[seed % 3],
+        vehicles: 'few',
+        seed: 5000 + seed * 13,
+      });
+      const { field, layout } = setup(config);
+      checkSnipers(config, field, layout);
+      for (const s of layout.snipers) sites.add(s.site);
+    }
+    expect(sites).toEqual(new Set(['roof', 'ridge', 'open']));
+  });
+
+  it('the crowded worst case (10 soldiers, 3 vehicle targets, 3 snipers, many/many) still places them, from every position, in every theme', { timeout: 120_000 }, () => {
+    for (let k = 0; k < 27; k++) {
+      const theme = THEMES[k % 3];
+      const position = POSITIONS[Math.floor(k / 3) % 3];
+      const config = base({
+        theme,
+        position,
+        rangeMin: [100, 100, 800][Math.floor(k / 9)],
+        rangeMax: [100, 1500, 800][Math.floor(k / 9)],
+        soldiers: 10,
+        vehicleTargets: 3,
+        buildings: 'many',
+        vehicles: 'many',
+        enemySnipers: 3,
+        seed: 900 + k * 31,
+      });
+      const { field, layout } = setup(config);
+      checkSnipers(config, field, layout);
+    }
+  });
+
+  it('keeps the other targets and props where they were: the snipers are placed last and move nothing', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const config = base({ theme: THEMES[seed % 3], position: POSITIONS[seed % 3], buildings: 'many', vehicles: 'many', enemySnipers: 3, soldiers: 5, vehicleTargets: 1, seed });
+      const withSnipers = setup(config).layout;
+      const without = setup({ ...config, enemySnipers: 0 }).layout;
+      expect(without.soldiers).toEqual(withSnipers.soldiers);
+      expect(without.vehicleTargets).toEqual(withSnipers.vehicleTargets);
+      expect(without.props).toEqual(withSnipers.props);
     }
   });
 });

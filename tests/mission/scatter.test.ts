@@ -3,6 +3,10 @@ import { propColliders, propFootprintRadius, vehicleTargetColliders } from '../.
 import {
   EYE_CLEARANCE,
   EYE_CLEAR_RADIUS,
+  HIDE_ROCK_ACROSS_MAX,
+  HIDE_ROCK_ACROSS_MIN,
+  HIDE_ROCK_ALONG_MAX,
+  HIDE_ROCK_ALONG_MIN,
   LANE_MARGIN,
   LOW_SHRUB_HEIGHT,
   LOW_SHRUB_WIDTH,
@@ -193,6 +197,54 @@ describe('planScatter', () => {
     const p = planScatter({ field, layout, seed: 4, position: 'ridge' });
     expect(p.firs.length).toBeGreaterThan(300);
     expect(p.boulders.length).toBeGreaterThan(50);
+  });
+});
+
+describe('planScatter: hide dressing', () => {
+  /** A rock's place in a ground sniper's frame: across the line to the shooter, and along it (positive = toward the shooter). */
+  function frame(s: { x: number; z: number }, shooter: { x: number; z: number }, b: { x: number; z: number }): { across: number; along: number } {
+    const dist = Math.hypot(shooter.x - s.x, shooter.z - s.z);
+    const ux = (shooter.x - s.x) / dist;
+    const uz = (shooter.z - s.z) / dist;
+    const dx = b.x - s.x;
+    const dz = b.z - s.z;
+    return { across: -uz * dx + ux * dz, along: ux * dx + uz * dz };
+  }
+
+  it('puts rocks beside most snipers who lie on the ground (the busiest mission), on both flanks over many missions, and never between him and the shooter', () => {
+    let ground = 0;
+    let dressed = 0;
+    const flanks = new Set<number>();
+    for (const theme of THEMES) {
+      for (const position of POSITIONS) {
+        const m = bigMission(theme, 11, position);
+        const p = plan(m);
+        for (const s of m.layout.snipers) {
+          if (s.site === 'roof') continue;
+          ground++;
+          // The rocks of his dressing lie within the box the constants describe (plus the rock's own size); other boulders may be there by chance.
+          const mine = p.boulders.filter((b) => {
+            const f = frame(s, m.field.shooter, b);
+            return (
+              Math.abs(f.across) >= HIDE_ROCK_ACROSS_MIN - 1e-9 &&
+              Math.abs(f.across) <= HIDE_ROCK_ACROSS_MAX + 1e-9 &&
+              f.along >= HIDE_ROCK_ALONG_MIN - 1e-9 &&
+              f.along <= HIDE_ROCK_ALONG_MAX + 1e-9
+            );
+          });
+          if (mine.length > 0) dressed++;
+          for (const b of mine) {
+            flanks.add(Math.sign(frame(s, m.field.shooter, b).across));
+            // Never in his way: clear of the sight line to him by the lane margin plus the rock's size.
+            expect(toSegment(b.x, b.z, m.field.shooter.x, m.field.shooter.z, s.x, s.z), `${s.id} rock`).toBeGreaterThanOrEqual(LANE_MARGIN + b.radius - 1e-6);
+          }
+        }
+      }
+    }
+    expect(ground).toBeGreaterThan(8);
+    // The busiest mission there is (10 soldiers and 3 vehicle targets leave lanes clear all over the sector): about two in three get rocks.
+    expect(dressed / ground).toBeGreaterThan(0.5);
+    expect([...flanks].sort()).toEqual([-1, 1]);
   });
 });
 

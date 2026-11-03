@@ -14,7 +14,8 @@ import type { ThemeId } from './themes';
 // Where the vegetation and the boulders go (pure, no three.js; the instanced meshes are in scene/vegetation.ts):
 //   - firs (arctic, valley) on the valley walls and around the map edges, denser the higher the ground (below the tree
 //     line), in stands; dead trees (standing snags and fallen logs) and dry shrubs, sparse, in the desert;
-//   - boulders in every theme, on the slopes, around the compounds and in the near field;
+//   - boulders in every theme, on the slopes, around the compounds and in the near field, and a couple of rocks on the flanks of each
+//     sniper who lies on the ground (his hide: beside him and a little behind, never between him and the shooter);
 //   - grass clumps in the valley, near the shooter and along the floor.
 // Seeded from (mission seed, theme, firing position), so a mission looks the same every time. Everything is visual
 // only (no colliders), so it keeps off everything the player must see or shoot past:
@@ -61,6 +62,15 @@ export const LOW_SHRUB_WIDTH = 0.8;
 export const LOW_SHRUB_HEIGHT = 0.8;
 /** Items stay inside this part of the 4 km map (the map's own edge is 2000 / -3000 / 1000). */
 export const SCATTER_BOUNDS = { xMin: -1950, xMax: 1950, zMin: -2950, zMax: 950 } as const;
+
+/** Hide dressing: rocks beside each ground sniper, how many, and where (m): across the line to the shooter, and along it (negative = behind him). */
+export const HIDE_ROCKS = 2;
+export const HIDE_ROCK_ACROSS_MIN = 4;
+export const HIDE_ROCK_ACROSS_MAX = 7.5;
+export const HIDE_ROCK_ALONG_MIN = -3;
+export const HIDE_ROCK_ALONG_MAX = 1;
+/** Positions tried per sniper for his rocks. */
+const HIDE_ROCK_ATTEMPTS = 14;
 
 const DEG = Math.PI / 180;
 
@@ -524,6 +534,28 @@ export function planScatter(inputs: ScatterInputs): ScatterPlan {
     for (let attempts = 0; placed < nearBy && attempts < nearBy * 120; attempts++) {
       const p = nearField(rng, 10, 150, 1.5, 0.25);
       if (add(p, 0.35 + 0.9 * Math.pow(rng(), 2), 0.5)) placed++;
+    }
+    // hide dressing: a rock or two on the flanks of every sniper who lies on the ground (a roof sniper has his house), to the side of him and
+    // a little behind, never between him and the shooter: `add` keeps the lane to him and the 3 m round him clear like for any other item
+    for (const sniper of layout.snipers) {
+      if (sniper.site === 'roof') continue;
+      const toX = field.shooter.x - sniper.x;
+      const toZ = field.shooter.z - sniper.z;
+      const dist = Math.hypot(toX, toZ);
+      if (!(dist > 1)) continue;
+      const ux = toX / dist; // from him toward the shooter
+      const uz = toZ / dist;
+      let side = rng() < 0.5 ? 1 : -1;
+      let dressed = 0;
+      for (let attempts = 0; dressed < HIDE_ROCKS && attempts < HIDE_ROCK_ATTEMPTS; attempts++) {
+        const across = side * (HIDE_ROCK_ACROSS_MIN + (HIDE_ROCK_ACROSS_MAX - HIDE_ROCK_ACROSS_MIN) * rng());
+        const along = HIDE_ROCK_ALONG_MIN + (HIDE_ROCK_ALONG_MAX - HIDE_ROCK_ALONG_MIN) * rng();
+        const p = { x: sniper.x - uz * across + ux * along, z: sniper.z + ux * across + uz * along };
+        if (add(p, 0.35 + 0.45 * rng(), 0.6)) {
+          dressed++;
+          side = -side; // the next one goes on the other flank
+        }
+      }
     }
   }
 

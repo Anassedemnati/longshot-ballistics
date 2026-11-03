@@ -33,6 +33,7 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - They start out unaware of you. Without a ghillie suit, a few seconds in the open is enough to make them search.
   - A shot gives you away twice: by the muzzle report, and by the crack and dust of the bullet, which point back at you when it ends near one of them. A suppressor only quiets the first.
   - Once they are searching their scopes narrow in on you and glint more often. Keep exposed and they find you, shoot back and call in bombardments.
+  - They hide with some thought: every mission each one picks, from the spots that give him a clear shot at you, one that is well concealed (a backdrop behind him, hard cover close by, away from the soldiers, on a flank, sometimes a rooftop), so the hides change with the seed.
   - Press **C** to duck into cover.
 - **Mission setup menu**
   - Three themes: desert, arctic and green valley.
