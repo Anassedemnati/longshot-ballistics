@@ -17,11 +17,27 @@ import { rifleTextures } from './rifleTextures';
 // All parts are baked into one mesh per material (7 draw calls at most) and built once; nothing here allocates per frame.
 
 /** Barrel length by rifle, m: the .338 is the longer rifle. */
-export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47 };
+export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47, '300': 0.43, '408': 0.5, '50': 0.55, '127': 0.53, '127s': 0.3 };
 /** Stock colour by rifle: .308 olive polymer, .338 sand chassis. */
-const STOCK_COLOR: Readonly<Record<Rifle['id'], number>> = { '308': 0x535c3d, '338': 0x957f5c };
+const STOCK_COLOR: Readonly<Record<Rifle['id'], number>> = {
+  '308': 0x535c3d,
+  '338': 0x957f5c,
+  '300': 0x535c3d,
+  '408': 0x957f5c,
+  '50': 0x2e3030,
+  '127': 0x3d4430,
+  '127s': 0x2e3030,
+};
 /** The grip's rubber overmould by rifle: a darker shade of the stock. */
-const GRIP_COLOR: Readonly<Record<Rifle['id'], number>> = { '308': 0x3d4430, '338': 0x8a7656 };
+const GRIP_COLOR: Readonly<Record<Rifle['id'], number>> = {
+  '308': 0x3d4430,
+  '338': 0x8a7656,
+  '300': 0x3d4430,
+  '408': 0x8a7656,
+  '50': 0x222424,
+  '127': 0x2e3326,
+  '127s': 0x222424,
+};
 
 /** Where the barrel starts (the receiver's front), m along the model's z axis (negative = forward). */
 const BARREL_START_Z = -0.5;

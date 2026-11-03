@@ -13,8 +13,11 @@ export interface BulletState {
   t: number;
 }
 
+/** The rifles, by calibre. Used as-is in mission links (between dots), so letters and digits only. */
+export type RifleId = '308' | '338' | '300' | '408' | '50' | '127' | '127s';
+
 export interface Rifle {
-  id: '308' | '338';
+  id: RifleId;
   name: string;
   /** G7 ballistic coefficient, lb/in^2. */
   bcG7: number;

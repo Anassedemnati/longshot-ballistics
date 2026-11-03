@@ -127,6 +127,12 @@ export interface ArtCrop {
 export const RIFLE_ART: Record<MissionConfig['rifle'], ArtCrop> = {
   '308': { x: 52, y: 0, w: 790, h: 255 },
   '338': { x: 22, y: 248, w: 900, h: 290 },
+  // The heavier calibres have no art of their own yet: they borrow the long rifle's.
+  '300': { x: 52, y: 0, w: 790, h: 255 },
+  '408': { x: 22, y: 248, w: 900, h: 290 },
+  '50': { x: 22, y: 248, w: 900, h: 290 },
+  '127': { x: 22, y: 248, w: 900, h: 290 },
+  '127s': { x: 52, y: 0, w: 790, h: 255 },
 };
 
 /** CSS numbers that make a box of `aspect` (width / height) show only `crop` of the art. Percentages of the box. */

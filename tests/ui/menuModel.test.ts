@@ -181,7 +181,7 @@ describe('starting a mission', () => {
 
   it('startSearch gives a ?m= URL the router reads back as that mission with the new seed', () => {
     const search = startSearch({ ...DEFAULT_MISSION, theme: 'arctic', soldiers: 7 }, 424242, false);
-    expect(search.startsWith('?m=v4.')).toBe(true);
+    expect(search.startsWith('?m=v5.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('mission');
@@ -224,7 +224,7 @@ describe('starting a mission', () => {
   it('menuSearch gives a ?last= URL the router reads back as the menu holding that mission', () => {
     const cfg = { ...DEFAULT_MISSION, theme: 'valley' as const, soldiers: 8, rangeMin: 250, rangeMax: 250, seed: 777 };
     const search = menuSearch(cfg, false);
-    expect(search.startsWith('?last=v4.')).toBe(true);
+    expect(search.startsWith('?last=v5.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('menu');

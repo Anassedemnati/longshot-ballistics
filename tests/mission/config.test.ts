@@ -1,3 +1,4 @@
+import { RIFLES } from '../../src/ballistics/rifles';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MISSION,
@@ -43,6 +44,7 @@ describe('DEFAULT_MISSION', () => {
       assists: false,
       camo: false,
       soldiersFightBack: true,
+      objective: 'clear',
     });
   });
 
@@ -216,8 +218,8 @@ describe('encodeMission / decodeMission', () => {
     expect(decodeMission(encodeMission(DEFAULT_MISSION))).toEqual(DEFAULT_MISSION);
   });
 
-  it('writes the v4 code: the v1 fields, then position, suppressor, snipers, assists, the ghillie suit and fight back', () => {
-    expect(encodeMission(DEFAULT_MISSION)).toBe('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1');
+  it('writes the v5 code: the v1 fields, then position, suppressor, snipers, assists, the ghillie suit, fight back and the objective', () => {
+    expect(encodeMission(DEFAULT_MISSION)).toBe('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1.c');
     const c: MissionConfig = {
       ...DEFAULT_MISSION,
       theme: 'arctic',
@@ -227,9 +229,10 @@ describe('encodeMission / decodeMission', () => {
       assists: true,
       camo: true,
       soldiersFightBack: false,
+      objective: 'clear',
       seed: 77,
     };
-    expect(encodeMission(c)).toBe('v4.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1.1.0');
+    expect(encodeMission(c)).toBe('v5.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1.1.0.c');
     expect(decodeMission('v4.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1.1.0')).toEqual(c);
     expect(decodeMission('v4.d.600.1000.3.0.45.9.308.f.f.1.v.0.0.0.0.1')).toEqual({
       ...DEFAULT_MISSION,
@@ -237,8 +240,8 @@ describe('encodeMission / decodeMission', () => {
       enemySnipers: 0,
     });
     // The ghillie flag and the fight-back flag are the last two fields and nothing else.
-    expect(encodeMission({ ...DEFAULT_MISSION, camo: true })).toBe('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.1.1');
-    expect(encodeMission({ ...DEFAULT_MISSION, soldiersFightBack: false })).toBe('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.0');
+    expect(encodeMission({ ...DEFAULT_MISSION, camo: true })).toBe('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.1.1.c');
+    expect(encodeMission({ ...DEFAULT_MISSION, soldiersFightBack: false })).toBe('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.0.c');
   });
 
   it('still decodes a v3 link (sixteen fields) with the soldiers standing still', () => {
@@ -253,16 +256,36 @@ describe('encodeMission / decodeMission', () => {
       camo: true,
       seed: 77,
       soldiersFightBack: false,
+      objective: 'clear',
     });
-    // An old link becomes a v4 code with fight back OFF: the encoder writes the new version, and the soldiers stay as they were.
+    // An old link becomes a v5 code with fight back OFF: the encoder writes the new version, and the soldiers stay as they were.
     const c = decodeMission('v3.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0');
-    expect(encodeMission(c as MissionConfig)).toBe('v4.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0');
+    expect(encodeMission(c as MissionConfig)).toBe('v5.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0.c');
   });
 
   it('reads the fight-back flag of a v4 link, and defaults one that is not 0/1 to the menu default (on)', () => {
     expect(decodeMission('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.0')?.soldiersFightBack).toBe(false);
     expect(decodeMission('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1')?.soldiersFightBack).toBe(true);
     expect(decodeMission('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.x')?.soldiersFightBack).toBe(true);
+  });
+
+  it('reads the objective of a v5 link, and reads every older link as clear the area', () => {
+    expect(decodeMission('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1.h')?.objective).toBe('hvt');
+    expect(decodeMission('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1.c')?.objective).toBe('clear');
+    expect(decodeMission('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1.x')?.objective).toBe('clear');
+    expect(decodeMission('v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1')).toEqual(DEFAULT_MISSION);
+    expect(decodeMission('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1')).toBeNull(); // v5 needs the objective field
+    const hvt = { ...DEFAULT_MISSION, objective: 'hvt' as const };
+    expect(encodeMission(hvt)).toBe('v5.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.1.h');
+    expect(decodeMission(encodeMission(hvt))).toEqual(hvt);
+  });
+
+  it('round-trips every rifle, and reads an unknown one as the default', () => {
+    for (const id of Object.keys(RIFLES) as MissionConfig['rifle'][]) {
+      const c = { ...DEFAULT_MISSION, rifle: id };
+      expect(decodeMission(encodeMission(c))).toEqual(c);
+    }
+    expect(decodeMission('v5.d.600.1000.3.0.45.9.999.f.f.1.r.0.1.0.0.1.c')?.rifle).toBe(DEFAULT_MISSION.rifle);
   });
 
   it('still decodes a v2 link (fifteen fields) with no ghillie suit', () => {
@@ -277,10 +300,11 @@ describe('encodeMission / decodeMission', () => {
       seed: 77,
       camo: false,
       soldiersFightBack: false,
+      objective: 'clear',
     });
-    // A v2 code does not become a v4 one by accident: the encoder always writes the new version.
+    // A v2 code does not become a v5 one by accident: the encoder always writes the new version.
     const c = decodeMission('v2.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0');
-    expect(encodeMission(c as MissionConfig)).toBe('v4.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0');
+    expect(encodeMission(c as MissionConfig)).toBe('v5.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0.c');
   });
 
   it('reads the ghillie flag of a v3 link, and defaults a flag that is not 0/1 to off', () => {
@@ -317,6 +341,7 @@ describe('encodeMission / decodeMission', () => {
       assists: true,
       camo: true,
       soldiersFightBack: false,
+      objective: 'hvt',
     };
     expect(decodeMission(encodeMission(c))).toEqual(c);
   });
@@ -325,7 +350,7 @@ describe('encodeMission / decodeMission', () => {
     const rng = createRng(5);
     for (let i = 0; i < 50; i++) {
       const s = encodeMission(randomMission(rng));
-      expect(s.startsWith('v4.')).toBe(true);
+      expect(s.startsWith('v5.')).toBe(true);
       expect(s).toMatch(/^[A-Za-z0-9._-]+$/);
       expect(s.length).toBeLessThan(64);
     }
@@ -383,6 +408,7 @@ describe('encodeMission / decodeMission', () => {
       assists: false,
       camo: false,
       soldiersFightBack: false,
+      objective: 'clear',
     });
   });
 
@@ -412,13 +438,14 @@ describe('encodeMission / decodeMission', () => {
       assists: false,
       camo: false,
       soldiersFightBack: false,
+      objective: 'clear',
     });
   });
 
-  it('turns a v1 link into a v4 code', () => {
+  it('turns a v1 link into a v5 code', () => {
     const c = decodeMission('v1.d.300.300.3.0.0.9.308.n.n.1');
     expect(c).not.toBeNull();
-    expect(encodeMission(c as MissionConfig)).toBe('v4.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0');
+    expect(encodeMission(c as MissionConfig)).toBe('v5.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0.c');
   });
 
   it('uses the default for a missing or unrecognised field', () => {
@@ -486,7 +513,7 @@ describe('randomMission', () => {
       expect(clampMission(c)).toEqual(c);
     }
     expect([...themes].sort()).toEqual(['arctic', 'desert', 'valley']);
-    expect([...rifles].sort()).toEqual(['308', '338']);
+    expect([...rifles].sort()).toEqual(Object.keys(RIFLES).sort());
     expect([...buildings].sort()).toEqual(['few', 'many', 'none']);
     expect([...vehicles].sort()).toEqual(['few', 'many', 'none']);
     expect([...clocks].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
@@ -503,7 +530,8 @@ describe('randomMission', () => {
 
   it('draws the ghillie flag last: the first fifteen fields are what they were before the flag existed', () => {
     // Golden values from before the flag: its draw comes after every other one, so a fresh rng still yields them.
-    const { camo, soldiersFightBack, ...earlier } = randomMission(createRng(31));
+    // The rifle is left out: the draw is the same, but there are more rifles to land on now.
+    const { camo, soldiersFightBack, objective, rifle, ...earlier } = randomMission(createRng(31));
     expect(earlier).toEqual({
       theme: 'valley',
       rangeMin: 1041,
@@ -512,7 +540,6 @@ describe('randomMission', () => {
       vehicleTargets: 1,
       windSpeedMps: 4.1,
       windClock: 1,
-      rifle: '338',
       buildings: 'many',
       vehicles: 'few',
       seed: 1376210325,
@@ -523,6 +550,8 @@ describe('randomMission', () => {
     });
     expect(typeof camo).toBe('boolean');
     expect(typeof soldiersFightBack).toBe('boolean');
+    expect(['clear', 'hvt']).toContain(objective);
+    expect(Object.keys(RIFLES)).toContain(rifle);
   });
 
   it('draws a fresh seed each time', () => {
@@ -601,6 +630,7 @@ describe('routeFromSearch', () => {
       assists: false,
       camo: false,
       soldiersFightBack: false,
+      objective: 'clear',
     });
   });
 
