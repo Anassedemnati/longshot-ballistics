@@ -8,7 +8,7 @@ import { SNIPER_SPHERES_FOR, SNIPER_SPHERE_ROWS } from './sniperSpheres';
 export { SNIPER_CLOTH, SNIPER_METAL, SNIPER_PARTS, SNIPER_SKIN, SNIPER_VEST } from './sniperParts';
 export type { SniperPart } from './sniperParts';
 
-// Pure dimensions of a prone enemy sniper (no three.js): the visible mesh in scene/sniper.ts, the hit
+// Pure dimensions of a prone enemy sniper (no three.js): the visible mesh in scene/sniper.ts (drawn from mission/sniperModel.ts), the hit
 // zones (small spheres blanketing each body part) and the mission layout (aim points, bounds, how much
 // room the body needs on a roof) are all built from these numbers, so they cannot drift apart.
 //
@@ -16,7 +16,7 @@ export type { SniperPart } from './sniperParts';
 // head end, like the standing dummy's front), +X to the sniper's left, +Y up. A placement turns the
 // body by `yaw` about +Y like three.js `rotation.y`: local (x, z) maps to world (c x + s z, -s x + c z).
 
-/** The helmet: the upper part of a sphere over the head (decoration, not a hit zone: the head sphere is). */
+/** The old helmet over the head, kept for the bounds: a hat and hood (mission/sniperModel.ts) are drawn there now (decoration, not a hit zone: the head sphere is). */
 export const SNIPER_HELMET = { cy: 0.42, cz: 0.13, radius: 0.14, color: SNIPER_CLOTH } as const;
 
 /** The rifle, in its own frame: it pivots about `pivot` when the sniper sweeps his scope. */

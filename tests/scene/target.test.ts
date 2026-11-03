@@ -4,51 +4,16 @@ import {
   DUMMY_BOXES,
   DUMMY_HEAD,
   FALL_DURATION,
-  MAX_OVERHANG,
   RESET_DELAY,
   createTargetDummy,
   createTargetDummyAtRange,
   dummyHitSpheres,
-  dummyParts,
 } from '../../src/scene/target';
+import { enemyMaterial } from '../../src/scene/enemyMaterial';
 import { terrainHeight } from '../../src/scene/terrainHeight';
 import { shootAtDummy } from '../helpers/shoot';
 
 const RANGE = 800;
-
-type Point = [number, number];
-
-/** The convex hull of a point set (Andrew's monotone chain), counter-clockwise. */
-function convexHull(points: Point[]): Point[] {
-  const sorted = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cross = (o: Point, a: Point, b: Point): number => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const chain = (list: Point[]): Point[] => {
-    const out: Point[] = [];
-    for (const p of list) {
-      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
-      out.push(p);
-    }
-    out.pop();
-    return out;
-  };
-  return [...chain(sorted), ...chain([...sorted].reverse())];
-}
-
-/** Distance from a point to a convex counter-clockwise polygon: 0 inside it. */
-function distanceToPolygon(p: Point, polygon: Point[]): number {
-  let inside = true;
-  let best = Infinity;
-  for (let i = 0; i < polygon.length; i++) {
-    const a = polygon[i];
-    const b = polygon[(i + 1) % polygon.length];
-    const ex = b[0] - a[0];
-    const ey = b[1] - a[1];
-    if (ex * (p[1] - a[1]) - ey * (p[0] - a[0]) < 0) inside = false;
-    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / (ex * ex + ey * ey)));
-    best = Math.min(best, Math.hypot(p[0] - a[0] - t * ex, p[1] - a[1] - t * ey));
-  }
-  return inside ? 0 : best;
-}
 
 /** Kind and zone of the first impact of a shot through (x, height above the feet) at 800 m. */
 function shotAt(x: number, height: number): { kind: string; zone?: string } {
@@ -139,39 +104,10 @@ describe('dummy hit zones match the visible dummy', () => {
     }
     expect(uncovered).toEqual([]);
   });
-
-  it('hit spheres overhang the silhouette of the drawn shapes by at most 3 cm', () => {
-    // The shapes as the scene draws them (rounded boxes, head sphere, goggles, scarf), not the sharp DUMMY_BOXES
-    // they are built from: the outline of each convex mesh seen from the front is the hull of its vertices.
-    const outlines: Point[][] = [];
-    for (const part of dummyParts()) {
-      const position = part.geometry.getAttribute('position');
-      const points: Point[] = [];
-      for (let i = 0; i < position.count; i++) points.push([position.getX(i), position.getY(i)]);
-      outlines.push(convexHull(points));
-    }
-    expect(outlines.length).toBe(DUMMY_BOXES.length - 1 + 3); // no neck (the scarf covers it), plus head, goggles, scarf
-    let worst = 0;
-    let where = '';
-    for (const s of dummyHitSpheres()) {
-      for (let k = 0; k < 360; k++) {
-        const a = (k / 360) * 2 * Math.PI;
-        const p: Point = [s.x + Math.cos(a) * s.radius, s.y + Math.sin(a) * s.radius];
-        if (p[1] < 0) continue; // below the ground nobody sees it
-        const d = Math.min(...outlines.map((outline) => distanceToPolygon(p, outline)));
-        if (d > worst) {
-          worst = d;
-          where = `${s.name} sphere (${s.x.toFixed(3)}, ${s.y.toFixed(3)}) r${s.radius} at (${p[0].toFixed(3)}, ${p[1].toFixed(3)})`;
-        }
-      }
-    }
-    // Half a millimetre of slack for the polygons that stand in for the rounded corners.
-    expect(worst, where).toBeLessThanOrEqual(MAX_OVERHANG + 0.0005);
-  });
 });
 
 describe('dummy body mesh', () => {
-  it('is every part merged into one geometry with its colour in a vertex attribute (a soldier is one draw call)', () => {
+  it('is one mesh with the shared enemy material (a soldier is one draw call), casting and receiving shadows', () => {
     const dummy = createTargetDummy({ x: 0, y: 0, z: 0 }, 0);
     const meshes: THREE.Mesh[] = [];
     dummy.group.traverse((o) => {
@@ -179,21 +115,15 @@ describe('dummy body mesh', () => {
     });
     expect(meshes).toHaveLength(1);
     const body = meshes[0];
-    const parts = dummyParts();
-    const vertices = (g: THREE.BufferGeometry): number => (g.index ? g.index.count : g.getAttribute('position').count); // merged non-indexed: three per triangle
-    expect(body.geometry.getAttribute('position').count).toBe(parts.reduce((n, p) => n + vertices(p.geometry), 0));
-    expect(body.geometry.getAttribute('color')).toBeDefined();
-    expect((body.material as THREE.MeshStandardMaterial).vertexColors).toBe(true);
+    expect(body.material).toBe(enemyMaterial());
     expect(body.castShadow && body.receiveShadow).toBe(true);
-    // the colours are the parts': khaki head and vest/limbs from DUMMY_BOXES, dark goggles
-    const colors = body.geometry.getAttribute('color');
-    const first = new THREE.Color(parts[0].color);
-    expect([colors.getX(0), colors.getY(0), colors.getZ(0)]).toEqual([first.r, first.g, first.b].map((v) => Math.fround(v)));
-    expect(new Set(parts.map((p) => p.color)).size).toBeGreaterThanOrEqual(3);
-    // and the merged body stays inside the boxes the hit spheres are built for
+    // the colour, surface and texture coordinates the shared material reads are on the geometry
+    for (const name of ['position', 'normal', 'uv', 'color', 'surface']) expect(body.geometry.getAttribute(name), name).toBeDefined();
+    // and the drawn soldier stands on the ground at about the height of the boxes the hit spheres are built for
     body.geometry.computeBoundingBox();
     const box = body.geometry.boundingBox as THREE.Box3;
     expect(box.min.y).toBeGreaterThanOrEqual(-0.02);
+    expect(box.max.y).toBeGreaterThan(1.75);
     expect(box.max.y).toBeLessThan(1.95);
   });
 });

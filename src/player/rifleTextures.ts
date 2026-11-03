@@ -8,19 +8,19 @@ import * as THREE from 'three';
 //   fabric  camo-tan glove cloth: blotchy tan colours over a woven thread pattern, and the weave as a normal map
 
 /** Integer hash of a lattice point and a seed to [0, 1). */
-function hash2(ix: number, iy: number, seed: number): number {
+export function hash2(ix: number, iy: number, seed: number): number {
   let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(seed + 1, 1442695041);
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
 
-function wrap(i: number, period: number): number {
+export function wrap(i: number, period: number): number {
   return ((i % period) + period) % period;
 }
 
 /** Tileable value noise in [0, 1): (x, y) in lattice units, repeating every `px` / `py` lattice cells. */
-function valueNoise(x: number, y: number, px: number, py: number, seed: number): number {
+export function valueNoise(x: number, y: number, px: number, py: number, seed: number): number {
   const x0 = Math.floor(x);
   const y0 = Math.floor(y);
   const fx = x - x0;
@@ -37,7 +37,7 @@ function valueNoise(x: number, y: number, px: number, py: number, seed: number):
 }
 
 /** Tileable fractal noise in [0, 1): `period` lattice cells across (u, v in [0, 1)) at the first octave. */
-function fbm(u: number, v: number, period: number, octaves: number, seed: number): number {
+export function fbm(u: number, v: number, period: number, octaves: number, seed: number): number {
   let sum = 0;
   let amp = 0.5;
   let norm = 0;
@@ -51,17 +51,17 @@ function fbm(u: number, v: number, period: number, octaves: number, seed: number
   return sum / norm;
 }
 
-function smoothstep(a: number, b: number, x: number): number {
+export function smoothstep(a: number, b: number, x: number): number {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 }
 
-function clamp01(x: number): number {
+export function clamp01(x: number): number {
   return Math.min(1, Math.max(0, x));
 }
 
 /** Wrap a pixel array in a repeating, mip-mapped, anisotropic texture. */
-function toTexture(pixels: Uint8Array, size: number, colour: boolean): THREE.DataTexture {
+export function toTexture(pixels: Uint8Array, size: number, colour: boolean): THREE.DataTexture {
   const texture = new THREE.DataTexture(pixels, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
@@ -122,7 +122,7 @@ export function metalPixels(size = 256, seed = 11): Uint8Array {
 }
 
 /** Tangent-space normals (as pixels) from a tileable height field; `strength` scales the slope. */
-function normalPixels(height: Float32Array, size: number, strength: number): Uint8Array {
+export function normalPixels(height: Float32Array, size: number, strength: number): Uint8Array {
   const pixels = new Uint8Array(size * size * 4);
   const h = (x: number, y: number) => height[wrap(y, size) * size + wrap(x, size)];
   for (let y = 0; y < size; y++) {
@@ -177,7 +177,7 @@ export function pebblePixels(size = 128, seed = 37): Uint8Array {
 }
 
 /** Thread height of a plain weave: `threads` threads across the tile, over and under. */
-function weaveHeight(u: number, v: number, threads: number): number {
+export function weaveHeight(u: number, v: number, threads: number): number {
   const a = Math.sin(Math.PI * 2 * threads * u);
   const b = Math.sin(Math.PI * 2 * threads * v);
   const over = Math.sin(Math.PI * threads * (u + v)) > 0 ? 1 : 0;

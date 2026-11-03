@@ -1,5 +1,6 @@
-// Pure dummy dimensions (no three.js): the visible mesh in scene/target.ts, the hit spheres and the
-// mission layout (aim points, upright bounds) are all built from these numbers, so they cannot drift apart.
+// Pure dummy dimensions (no three.js): the hit spheres and the mission layout (aim points, upright bounds) are built from these
+// numbers, so they cannot drift apart. What is drawn (mission/soldierModel.ts) is a rifleman who covers these boxes; the test
+// tests/scene/soldierMesh.test.ts measures that against the real triangles.
 
 export const DUMMY_KHAKI = 0x70623f;
 
@@ -9,11 +10,10 @@ const VEST_COLOR = 0x3f3a26;
 const BOOT_COLOR = 0x2b251a;
 
 // ---------------------------------------------------------------------------------------------
-// Dummy dimensions, m. Origin at the feet, +Z toward the shooter. The visible mesh AND the hit
-// spheres are both built from these numbers, so they cannot drift apart.
+// Dummy dimensions, m. Origin at the feet, +Z toward the shooter. The hit spheres and the layout are built from these numbers.
 // ---------------------------------------------------------------------------------------------
 
-/** An axis-aligned box of the visible dummy. (cx, cy, cz) is its centre. */
+/** An axis-aligned box of the dummy the hit spheres cover. (cx, cy, cz) is its centre. */
 export interface DummyBox {
   name: string;
   cx: number;
@@ -77,26 +77,9 @@ export const boot = (side: -1 | 1): DummyBox => ({
 });
 
 /**
- * Corner radius of the rounded box drawn for each DUMMY_BOXES entry, m (the neck is covered by the scarf and not
- * drawn). The hit spheres are frozen against the sharp boxes and already reach MAX_OVERHANG past their faces, so
- * the drawn corners may only trim what the spheres' own corners leave to spare: small radii, and no capsules.
- * scene/target.ts builds the mesh with exactly these numbers and tests/scene/target.test.ts measures the result.
+ * Every box the hit spheres and the layout are built from (the head is a sphere of DUMMY_HEAD.radius, not listed here). The soldier is
+ * drawn as a rifleman (mission/soldierModel.ts), not as these boxes; he covers them to within MAX_OVERHANG.
  */
-export const DUMMY_CORNER_RADIUS: Readonly<Record<string, number>> = {
-  vest: 0.03,
-  pelvis: 0.025,
-  'left arm': 0.02,
-  'right arm': 0.02,
-  'left leg': 0.02,
-  'right leg': 0.02,
-  'left boot': 0.02,
-  'right boot': 0.02,
-};
-
-/** The corner radius the mesh of `box` is drawn with, m. */
-export const cornerRadius = (box: DummyBox): number => DUMMY_CORNER_RADIUS[box.name] ?? 0;
-
-/** Every box of the visible dummy (the head is a sphere of DUMMY_HEAD.radius, not listed here). */
 export const DUMMY_BOXES: readonly DummyBox[] = [
   NECK,
   VEST,

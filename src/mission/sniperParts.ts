@@ -2,7 +2,7 @@ import type { ZoneName } from '../game/hit';
 
 // The prone sniper's body parts: pure data with no imports of its own, so scripts/gen-sniper-spheres.mjs can
 // load it straight from Node. mission/sniperDims.ts re-exports everything here and builds the hit spheres,
-// the bounds and the pose maths from it; scene/sniper.ts draws the same ellipsoids.
+// the bounds and the pose maths from it; the drawn body (mission/sniperModel.ts) is made of the same ellipsoids, a few percent larger, under its ghillie suit.
 //
 // Local frame: origin on the ground (or the roof) under the sniper's belly, +Z toward the shooter (the
 // head end, like the standing dummy's front), +X to the sniper's left, +Y up.

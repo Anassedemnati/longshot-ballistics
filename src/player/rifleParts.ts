@@ -69,7 +69,7 @@ function paint(geometry: THREE.BufferGeometry, key: MaterialKey, style: PartStyl
  * Box-project the texture coordinates of an unindexed geometry: every triangle is flattened along the axis its face
  * points at, `tileM` metres to one repeat. One texel size on every part, whatever the part's own UVs were.
  */
-function projectUVs(geometry: THREE.BufferGeometry, tileM: number): void {
+export function projectUVs(geometry: THREE.BufferGeometry, tileM: number): void {
   const position = geometry.attributes.position;
   const uv = new Float32Array(position.count * 2);
   const a = new THREE.Vector3();

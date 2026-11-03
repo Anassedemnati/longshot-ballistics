@@ -1,12 +1,8 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../ballistics/types';
 import type { HitTarget, HitZone, ZoneName } from '../game/hit';
 import {
-  DUMMY_BOXES,
   DUMMY_HEAD,
-  DUMMY_KHAKI,
   LEG_X,
   MAX_OVERHANG,
   LOWER_TORSO_CY,
@@ -15,9 +11,10 @@ import {
   VEST,
   arm,
   boot,
-  cornerRadius,
   leg,
 } from '../mission/dummyDims';
+import { enemyMaterial } from './enemyMaterial';
+import { soldierGeometry } from './soldierMesh';
 import { terrainHeight } from './terrainHeight';
 
 // The pure dummy dimensions live in mission/dummyDims.ts (the mission layout uses them too).
@@ -165,96 +162,22 @@ export interface TargetDummy {
 /** The broad-phase sphere of a dummy is this much bigger than the farthest zone edge, m (a grazing hit must never be rejected). */
 const BOUNDS_MARGIN = 0.05;
 
-// Meshes of all dummies share their geometries and materials (ten soldiers would otherwise build a
-// hundred of each); nothing changes them after creation. They live as long as the page.
-// The look is smoother than the hit spheres need: rounded boxes for the trunk, the limbs and the boots (corner
-// radii from dummyDims' DUMMY_CORNER_RADIUS, small enough that the spheres do not stick out of what is drawn by
-// more than MAX_OVERHANG), a sphere head, goggles and a scarf. Every piece stays inside the DUMMY_BOXES
-// dimensions (the hit spheres and the layout are built from those), and the goggles and scarf sit within the
-// head and torso spheres.
-const dummyGeometries = new Map<string, THREE.BufferGeometry>();
+// All soldiers share one geometry and one material (scene/soldierMesh.ts and scene/enemyMaterial.ts; nothing changes
+// them after creation, they live as long as the page). The soldier is drawn as a rifleman in uniform, helmet and kit
+// (mission/soldierModel.ts), merged into ONE mesh with ONE material: one draw call, as the boxy dummy was. The hit
+// spheres above are built from the old DUMMY_BOXES and are unchanged; what is drawn covers every one of them to
+// within MAX_OVERHANG (tests/scene/soldierMesh.test.ts).
 
-/** Goggles and scarf (mesh only: they sit inside the head and upper-torso hit zones). */
-const GOGGLES = { cy: 1.68, cz: 0.105, w: 0.19, h: 0.045, d: 0.045, color: 0x1c2524 } as const;
-const SCARF = { cy: 1.56, rTop: 0.1, rBottom: 0.08, h: 0.1, color: 0x7b7352 } as const;
-
-function sharedGeometry(key: string, make: () => THREE.BufferGeometry): THREE.BufferGeometry {
-  let g = dummyGeometries.get(key);
-  if (!g) {
-    g = make();
-    dummyGeometries.set(key, g);
-  }
-  return g;
-}
-
-/** A box with edges rounded to `radius` (the silhouette loses about 0.41 * radius at a corner); a quarter of the thinnest side by default. */
-function roundedBox(w: number, h: number, d: number, radius = Math.min(w, h, d) * 0.25): THREE.BufferGeometry {
-  return sharedGeometry(`rb|${w}x${h}x${d}|${radius}`, () => new RoundedBoxGeometry(w, h, d, 3, radius));
-}
-
-function headGeometry(): THREE.BufferGeometry {
-  return sharedGeometry('head', () => new THREE.SphereGeometry(DUMMY_HEAD.radius, 22, 16));
-}
-
-/** One drawn part of the dummy, positioned in the dummy's own frame (feet at the origin, front +Z), with its colour (sRGB hex). */
-export interface DummyPart {
-  name: string;
-  geometry: THREE.BufferGeometry;
-  color: number;
-}
-
-let partList: DummyPart[] | null = null;
-
-/**
- * Every drawn part of the dummy (head, the rounded boxes of DUMMY_BOXES but the neck, goggles, scarf), baked into the dummy's
- * frame. Built once. The dummy draws them merged into one mesh (it falls and stands as a whole, so its parts never move relative
- * to each other): a soldier is one draw call, not eleven. Exported for the tests, which measure each part's outline.
- */
-export function dummyParts(): DummyPart[] {
-  if (partList) return partList;
-  const at = (g: THREE.BufferGeometry, x: number, y: number, z: number): THREE.BufferGeometry => g.clone().translate(x, y, z);
-  const parts: DummyPart[] = [{ name: 'head', geometry: at(headGeometry(), 0, DUMMY_HEAD.cy, 0), color: DUMMY_KHAKI }];
-  for (const b of DUMMY_BOXES) {
-    if (b.name === 'neck') continue; // the scarf covers it
-    parts.push({ name: b.name, geometry: at(roundedBox(b.w, b.h, b.d, cornerRadius(b)), b.cx, b.cy, b.cz), color: b.color });
-  }
-  parts.push({ name: 'goggles', geometry: at(roundedBox(GOGGLES.w, GOGGLES.h, GOGGLES.d), 0, GOGGLES.cy, GOGGLES.cz), color: GOGGLES.color });
-  const scarf = sharedGeometry('scarf', () => new THREE.CylinderGeometry(SCARF.rTop, SCARF.rBottom, SCARF.h, 18));
-  parts.push({ name: 'scarf', geometry: at(scarf, 0, SCARF.cy, 0), color: SCARF.color });
-  partList = parts;
-  return parts;
-}
-
-let bodyGeometry: THREE.BufferGeometry | null = null;
 let bodyMaterial: THREE.MeshStandardMaterial | null = null;
 
-/** All the parts as one geometry with the colours in a vertex attribute (shared by every dummy). */
+/** The soldier's geometry and material (shared by every dummy). */
 function dummyBody(): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial } {
-  if (!bodyGeometry || !bodyMaterial) {
-    const colored = dummyParts().map((part) => {
-      const g = part.geometry.index ? part.geometry.toNonIndexed() : part.geometry.clone(); // the rounded boxes are not indexed, the sphere and the cylinder are: merge them alike
-      const count = g.getAttribute('position').count;
-      const c = new THREE.Color(part.color); // linear, like the material colour it replaces
-      const colors = new Float32Array(count * 3);
-      for (let i = 0; i < count; i++) {
-        colors[i * 3] = c.r;
-        colors[i * 3 + 1] = c.g;
-        colors[i * 3 + 2] = c.b;
-      }
-      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      return g;
-    });
-    const merged = mergeGeometries(colored);
-    if (!merged) throw new Error('target: the dummy parts could not be merged');
-    merged.computeBoundingSphere();
-    bodyGeometry = merged;
-    bodyMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
-  }
-  return { geometry: bodyGeometry, material: bodyMaterial };
+  bodyMaterial ??= enemyMaterial();
+  return { geometry: soldierGeometry(), material: bodyMaterial };
 }
 
 /**
- * A ~1.8 m low-poly humanoid standing with its feet at `position` (x, ground height, z), turned by
+ * A ~1.8 m rifleman standing with its feet at `position` (x, ground height, z), turned by
  * `yaw` about +Y like three.js `rotation.y`: its front (+Z) points at (sin yaw, cos yaw), so
  * `yaw = facingYaw(x, z)` makes it look at a shooter at the origin. The hit spheres turn with it.
  * `id` is the HitTarget id the bullets report. `autoReset` (default true, the stage-1 practice range)
@@ -276,7 +199,7 @@ export function createTargetDummy(
   group.rotation.order = 'YXZ';
   group.rotation.y = yaw;
 
-  // The whole body is one mesh (see `dummyParts`); the boots, goggles and scarf are too small to be worth a shadow-pass draw of their own, so they ride along.
+  // The whole body is one mesh (see `dummyBody`): the helmet, rifle, pouches and boots are too small to be worth a draw of their own, so they ride along.
   const body = dummyBody();
   const mesh = new THREE.Mesh(body.geometry, body.material);
   mesh.name = 'dummy-body';

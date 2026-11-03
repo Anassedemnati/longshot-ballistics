@@ -1,23 +1,17 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../ballistics/types';
 import type { Awareness } from '../game/encounter';
 import type { HitTarget } from '../game/hit';
-import {
-  SNIPER_BOUNDS,
-  SNIPER_BOUNDS_MARGIN,
-  SNIPER_HELMET,
-  SNIPER_PARTS,
-  SNIPER_RIFLE,
-  sniperWorldPoint,
-  sniperZones,
-} from '../mission/sniperDims';
+import { SNIPER_BOUNDS, SNIPER_BOUNDS_MARGIN, SNIPER_RIFLE, sniperWorldPoint, sniperZones } from '../mission/sniperDims';
+import { enemyMaterial } from './enemyMaterial';
+import { sniperGeometries } from './sniperMesh';
 import type { TargetDummy } from './target';
 
-// A prone enemy sniper: a low-poly body lying on the ground or a roof, head toward the shooter, with a
-// rifle that sweeps and a glint (the scope lens catching the sun). The visible body and the hit spheres
-// are both built from mission/sniperDims.ts. All snipers share one body geometry, one rifle geometry and
-// one material (vertex colours), so a sniper costs three draw calls: body, rifle, glint.
+// A prone enemy sniper: a rifleman in a ghillie suit lying on the ground or a roof, head toward the shooter, with a
+// rifle that sweeps and a glint (the scope lens catching the sun). The hit spheres are built from mission/sniperDims.ts,
+// the drawn body (mission/sniperModel.ts) covers them to within MAX_OVERHANG. All snipers share one body geometry, one rifle
+// geometry and one material (the enemy material: per-vertex camo, skin, cloth and steel), so a sniper costs three draw
+// calls: body, rifle, glint.
 
 export interface Sniper extends TargetDummy {
   /**
@@ -55,20 +49,6 @@ interface Shared {
 
 let shared: Shared | null = null;
 
-/** Paint every vertex of `geometry` with `hex` (sRGB hex, as the rest of the scene's colours). */
-function tint(geometry: THREE.BufferGeometry, hex: number): THREE.BufferGeometry {
-  const color = new THREE.Color(hex);
-  const count = geometry.getAttribute('position').count;
-  const colors = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    colors[i * 3] = color.r;
-    colors[i * 3 + 1] = color.g;
-    colors[i * 3 + 2] = color.b;
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  return geometry;
-}
-
 function glintTexture(): THREE.DataTexture {
   const size = 64;
   const data = new Uint8Array(size * size * 4);
@@ -94,43 +74,8 @@ function glintTexture(): THREE.DataTexture {
 }
 
 function buildShared(): Shared {
-  const unit = new THREE.SphereGeometry(1, 16, 12);
-  const bodyParts: THREE.BufferGeometry[] = SNIPER_PARTS.map((p) => {
-    const g = unit.clone();
-    g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(p.cx, p.cy, p.cz), new THREE.Quaternion(), new THREE.Vector3(p.rx, p.ry, p.rz)));
-    return tint(g, p.color);
-  });
-  const h = SNIPER_HELMET;
-  const helmet = new THREE.SphereGeometry(h.radius, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.6);
-  helmet.translate(0, h.cy, h.cz);
-  bodyParts.push(tint(helmet, h.color));
-  unit.dispose();
-
-  const { tubes, bipod } = SNIPER_RIFLE;
-  const rifleParts: THREE.BufferGeometry[] = [];
-  for (const t of tubes) {
-    const g = new THREE.CylinderGeometry(t.radius, t.radius, t.length, 16);
-    g.rotateX(Math.PI / 2); // the cylinder's axis along Z
-    g.translate(0, t.y, t.z);
-    rifleParts.push(tint(g, SNIPER_RIFLE.color));
-  }
-  for (const leg of bipod) {
-    const g = new THREE.CylinderGeometry(leg.radius, leg.radius, leg.length, 8);
-    g.rotateZ(leg.tilt);
-    g.translate(leg.x, leg.y, leg.z);
-    rifleParts.push(tint(g, SNIPER_RIFLE.color));
-  }
-  // The rifle's geometry is in its own frame; the rifle group sits at the pivot.
-  const rifle = mergeGeometries(rifleParts);
-  const body = mergeGeometries(bodyParts);
-  for (const g of [...bodyParts, ...rifleParts]) g.dispose();
-  if (!body || !rifle) throw new Error('sniper geometry could not be merged');
-  return {
-    body,
-    rifle,
-    material: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.05 }),
-    glintTexture: glintTexture(),
-  };
+  const { body, rifle } = sniperGeometries();
+  return { body, rifle, material: enemyMaterial(), glintTexture: glintTexture() };
 }
 
 function sharedParts(): Shared {
