@@ -6,7 +6,6 @@ import {
   impactGain,
   impactSoundDelay,
   soundTravelTime,
-  windAmbienceGain,
 } from '../../src/audio/timing';
 
 const C = 353.6; // desert speed of sound, m/s
@@ -40,32 +39,6 @@ describe('impactSoundDelay', () => {
     const far = impactSoundDelay({ x: 0, y: 0, z: -1500 }, ORIGIN, C);
     expect(far).toBeGreaterThan(near);
     expect(far).toBeCloseTo(1500 / C, 9);
-  });
-});
-
-describe('windAmbienceGain', () => {
-  it('is exactly 0 in calm air', () => {
-    expect(windAmbienceGain(0)).toBe(0);
-  });
-
-  it('rises monotonically from 0 to 12 m/s', () => {
-    let previous = windAmbienceGain(0);
-    for (let v = 0.5; v <= 12; v += 0.5) {
-      const g = windAmbienceGain(v);
-      expect(g).toBeGreaterThan(previous);
-      previous = g;
-    }
-  });
-
-  it('reaches 1 at 12 m/s and stays clamped at 1 above', () => {
-    expect(windAmbienceGain(12)).toBe(1);
-    expect(windAmbienceGain(20)).toBe(1);
-    expect(windAmbienceGain(500)).toBe(1);
-  });
-
-  it('depends on the wind speed, not its direction, and tolerates garbage', () => {
-    expect(windAmbienceGain(-6)).toBe(windAmbienceGain(6));
-    expect(windAmbienceGain(NaN)).toBe(0);
   });
 });
 

@@ -32,8 +32,6 @@ export class AudioEngine {
   private readonly clips = new ClipBank();
   /** True once creating the context failed: do not retry on every click. */
   private unavailable = false;
-  /** The wind loop's level node once it is running (see `startWindAmbience`). */
-  windLevel: GainNode | null = null;
 
   /** The context, or null before the first `resume()` (or if the browser has no Web Audio). */
   get ctx(): AudioContext | null {

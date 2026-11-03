@@ -3,9 +3,6 @@ import type { Vec3 } from '../ballistics/types';
 // Pure sound timing and level maths (no DOM, no three.js): unit-tested in Node. The Web Audio code
 // in engine.ts / sounds.ts only turns these numbers into nodes.
 
-/** Wind speed at and above which the wind ambience is at full level, m/s. */
-const WIND_FULL_MPS = 12;
-
 /** Distance below which an impact sounds as loud and bright as it gets, m. */
 const NEAR_RANGE_M = 100;
 /** Distance at and beyond which an impact is as dull as it gets, m. */
@@ -33,13 +30,6 @@ export function soundTravelTime(from: Vec3, to: Vec3, speedOfSound: number): num
  */
 export function impactSoundDelay(impactPoint: Vec3, listener: Vec3, speedOfSound: number): number {
   return soundTravelTime(impactPoint, listener, speedOfSound);
-}
-
-/** Level of the wind ambience, 0 in calm air rising smoothly to 1 at 12 m/s and above. Direction is ignored. */
-export function windAmbienceGain(windSpeedMps: number): number {
-  const u = Math.min(1, Math.abs(windSpeedMps) / WIND_FULL_MPS);
-  if (!(u > 0)) return 0; // calm, or NaN
-  return u * u * (3 - 2 * u); // smoothstep
 }
 
 /** Linear loudness factor of an impact heard from `distanceM`: 1 up close, 1/2 at 300 m, ~1/6 at 1500 m. */

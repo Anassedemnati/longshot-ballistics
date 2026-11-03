@@ -10,9 +10,7 @@ import {
   playImpactMetal,
   playReload,
   playShot,
-  startWindAmbience,
 } from '../audio/sounds';
-import { windAmbienceGain } from '../audio/timing';
 import { muzzleLaunch } from '../game/aim';
 import type { AimTarget } from '../game/assistance';
 import { BulletSystem } from '../game/bullets';
@@ -204,11 +202,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   // Audio: the context only starts on a user gesture (the first click that grabs the pointer).
   const audio = new AudioEngine();
-  const windLevel = windAmbienceGain(config.windSpeedMps);
 
   function unlockAudio(): void {
     audio.resume();
-    startWindAmbience(audio, windLevel); // starts the loop once; later calls only set its level
   }
 
   // Enemy snipers (spec B.4): the fight with them (detection, fire, bombardments, cover) and its threat line,

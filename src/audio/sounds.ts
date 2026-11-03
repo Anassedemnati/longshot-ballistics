@@ -16,7 +16,7 @@ import { distanceCutoffHz, distanceGain, impactGain } from './timing';
 /**
  * Relative loudness of the recordings (all are loudness-normalised, so these set the mix). The shot
  * is the loudest sound. `impactHit` is the level at 100 m, `impactGain` lowers it further out. Tune
- * by ear. The wind has its own `WIND_MAKEUP`.
+ * by ear.
  */
 const LEVELS = {
   shot: 1.0,
@@ -45,8 +45,6 @@ const DEFAULT_BOLT_CYCLE_S = 1.2;
 const BOLT_CLICK_GAP_S = 0.25;
 /** Level of a synthesised impact heard from right next to it (distanceGain = 1); real impacts are quieter. */
 const IMPACT_LEVEL = 2;
-/** Wind loop makeup: bandpassed noise is quiet, and the wind must stay under the effects. */
-const WIND_MAKEUP = 0.3;
 
 /** What a sound needs from the engine once there is a running context. */
 interface Stage {
@@ -430,65 +428,4 @@ export function playDryFire(e: AudioEngine): void {
     (clip) => playClip(s, clip, { level: LEVELS.dryFire }),
     () => synthDryFire(s),
   );
-}
-
-/**
- * Looping wind: shared noise through band and low-pass filters, with a slow swell on its level and a
- * slow drift of its pitch. `gain` is 0..1 (see `windAmbienceGain`); calling again just changes the
- * level. It keeps running while muted (the master gain silences it) so unmuting brings it back.
- */
-export function startWindAmbience(e: AudioEngine, gain: number): void {
-  const { ctx, bus, noise } = e;
-  if (!ctx || !bus || !noise) return;
-  const level = Number.isFinite(gain) ? Math.min(1, Math.max(0, gain)) * WIND_MAKEUP : 0;
-  if (e.windLevel) {
-    e.windLevel.gain.setTargetAtTime(level, ctx.currentTime, 0.3);
-    return;
-  }
-  if (level <= 0) return;
-
-  const source = ctx.createBufferSource();
-  source.buffer = noise;
-  source.loop = true;
-  source.playbackRate.value = 0.85;
-
-  const band = ctx.createBiquadFilter();
-  band.type = 'bandpass';
-  band.frequency.value = 400;
-  band.Q.value = 0.6;
-  const soften = ctx.createBiquadFilter();
-  soften.type = 'lowpass';
-  soften.frequency.value = 900;
-
-  // swell: 0.65 + 0.3 * sine(0.17 Hz); levelNode scales the whole thing.
-  const swell = ctx.createGain();
-  swell.gain.value = 0.65;
-  const swellLfo = ctx.createOscillator();
-  swellLfo.frequency.value = 0.17;
-  const swellDepth = ctx.createGain();
-  swellDepth.gain.value = 0.3;
-  swellLfo.connect(swellDepth);
-  swellDepth.connect(swell.gain);
-
-  // drift: the band's centre wanders +-150 Hz at 0.11 Hz.
-  const driftLfo = ctx.createOscillator();
-  driftLfo.frequency.value = 0.11;
-  const driftDepth = ctx.createGain();
-  driftDepth.gain.value = 150;
-  driftLfo.connect(driftDepth);
-  driftDepth.connect(band.frequency);
-
-  const levelNode = ctx.createGain();
-  levelNode.gain.value = level;
-
-  source.connect(band);
-  band.connect(soften);
-  soften.connect(swell);
-  swell.connect(levelNode);
-  levelNode.connect(bus);
-
-  source.start(0, Math.random() * noise.duration);
-  swellLfo.start();
-  driftLfo.start();
-  e.windLevel = levelNode;
 }
