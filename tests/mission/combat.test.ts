@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../src/ballistics/types';
 import { Encounter } from '../../src/game/encounter';
+import type { Awareness } from '../../src/game/encounter';
 import { Combat, incomingPoints } from '../../src/mission/combat';
 import type { CombatSniper } from '../../src/mission/combat';
 import type { TerrainField } from '../../src/scene/terrainField';
@@ -12,14 +13,14 @@ const FLAT = { height: () => 11 } as Pick<TerrainField, 'height'>;
 
 class FakeSniper implements CombatSniper {
   down = false;
-  scans: Array<{ time: number; detected: boolean; covered: boolean }> = [];
-  scan(time: number, detected: boolean, covered: boolean): void {
-    this.scans.push({ time, detected, covered });
+  scans: Array<{ time: number; awareness: Awareness; detected: boolean; covered: boolean }> = [];
+  scan(time: number, awareness: Awareness, covered: boolean): void {
+    this.scans.push({ time, awareness, detected: awareness === 'firing', covered });
   }
 }
 
-function fixture(snipers = 2, suppressed = false, line?: ThreatLine) {
-  const encounter = new Encounter();
+function fixture(snipers = 2, suppressed = false, line?: ThreatLine, camo = false) {
+  const encounter = new Encounter({ camo });
   const sn = Array.from({ length: snipers }, () => new FakeSniper());
   const log = { text: '', covered: false, flashes: [] as number[], dust: [] as Vec3[], sounds: [] as number[], scopeDrops: 0 };
   const ui: ThreatView = {
@@ -77,6 +78,34 @@ describe('Combat: detection and fire', () => {
     const b = fixture(1, true);
     b.combat.onShot();
     expect(b.encounter.detection).toBe(9);
+  });
+
+  it('a shot in a ghillie suit raises the detection by 28, or 7.2 with a suppressor too', () => {
+    const a = fixture(1, false, undefined, true);
+    a.combat.onShot();
+    expect(a.encounter.detection).toBeCloseTo(28, 9);
+    const b = fixture(1, true, undefined, true);
+    b.combat.onShot();
+    expect(b.encounter.detection).toBeCloseTo(7.2, 9);
+  });
+
+  it('the crack and dust of a bullet that ended near a sniper raise the detection, suppressor or not', () => {
+    for (const suppressed of [false, true]) {
+      const f = fixture(1, suppressed);
+      f.combat.onBulletEnd(5);
+      expect(f.encounter.detection).toBe(25);
+      f.combat.onBulletEnd(32.5);
+      expect(f.encounter.detection).toBeCloseTo(25 + 12.5, 9);
+    }
+  });
+
+  it('a bullet that came near no sniper (undefined, Infinity or far) changes nothing', () => {
+    const f = fixture(1);
+    f.combat.onBulletEnd(undefined);
+    f.combat.onBulletEnd(Infinity);
+    f.combat.onBulletEnd(300);
+    expect(f.encounter.detection).toBe(0);
+    expect(f.encounter.awareness).toBe('unaware');
   });
 
   it('sniper fire hurts, throws dust near the player, sounds and flashes the screen', () => {
@@ -141,6 +170,34 @@ describe('Combat: detection and fire', () => {
     f.combat.toggleCover(false);
     f.combat.update(0.1, false);
     expect(f.sn.every((s) => s.scans.at(-1)?.covered === true)).toBe(true);
+  });
+
+  it('feeds every sniper the awareness: unaware, then searching after a shot, then firing', () => {
+    const f = fixture(2, true);
+    f.combat.update(0.1, false);
+    expect(f.sn.every((s) => s.scans.at(-1)?.awareness === 'unaware')).toBe(true);
+    f.combat.onShot(); // a suppressed shot: 9 %, below the fire threshold
+    f.combat.update(0.1, false);
+    expect(f.sn.every((s) => s.scans.at(-1)?.awareness === 'searching')).toBe(true);
+    f.encounter.setDetection(80);
+    f.combat.update(0.1, false);
+    expect(f.sn.every((s) => s.scans.at(-1)?.awareness === 'firing')).toBe(true);
+  });
+
+  it('the threat line follows the awareness, and tells of the ghillie suit while unaware', () => {
+    const plain = fixture(1);
+    plain.combat.update(0.1, false);
+    expect(plain.log.text).toMatch(/Enemy unaware$/);
+    plain.combat.onShot();
+    plain.combat.update(0.1, false);
+    expect(plain.log.text).toMatch(/Enemy searching for you · C: cover$/);
+
+    const suit = fixture(1, false, undefined, true);
+    suit.combat.update(0.1, false);
+    expect(suit.log.text).toMatch(/Enemy unaware · ghillie suit$/);
+    suit.combat.onShot();
+    suit.combat.update(0.1, false);
+    expect(suit.log.text).toMatch(/Enemy searching for you · C: cover$/);
   });
 
   it('reports the death of the player, and the mission stays failed', () => {

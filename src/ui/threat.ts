@@ -2,6 +2,8 @@
 // cover, health, detection, snipers left and the countdown to the next incoming fire), the damage flash
 // and the cover mask. All DOM, styled in index.html. The text and the flash level are pure functions.
 
+import type { Awareness } from '../game/encounter';
+
 /** What the threat line shows. */
 export interface ThreatState {
   health: number;
@@ -13,6 +15,10 @@ export interface ThreatState {
   warning: number;
   /** The snipers are firing (detection at or above the threshold). */
   firing: boolean;
+  /** How well the snipers know where the player is (`firing` goes with `firing` above). */
+  awareness: Awareness;
+  /** The player wears a ghillie suit. */
+  camo: boolean;
   /** Seconds until the next sniper shot. */
   fireIn: number;
   /** The game is not running (pointer free). */
@@ -27,7 +33,11 @@ export interface ThreatState {
 const tenths = (seconds: number): number => Math.round(seconds * 10);
 const showTenths = (seconds: number): string => (tenths(seconds) / 10).toFixed(1);
 
-/** The threat line, e.g. "EXPOSED · Health 82 · Detection 70 % · 2 snipers left · SNIPER FIRING IN 2.1 s". */
+/**
+ * The threat line, e.g. "EXPOSED · Health 82 · Detection 70 % · 2 snipers left · SNIPER FIRING IN 2.1 s". When nothing is
+ * coming it says what the snipers know: "Enemy unaware" (and "ghillie suit" when he wears one) until a shot or the exposure
+ * gives him away, then "Enemy searching for you · C: cover".
+ */
 export function threatText(s: ThreatState): string {
   if (s.failed) return 'MISSION FAILED · you were killed';
   if (s.cleared) return `ALL SNIPERS DOWN · threat cleared · Health ${Math.ceil(s.health)}`;
@@ -39,7 +49,10 @@ export function threatText(s: ThreatState): string {
   ];
   if (s.warning > 0) parts.push(`INCOMING BOMBARDMENT ${showTenths(s.warning)} s — C: COVER`);
   else if (s.firing) parts.push(`SNIPER FIRING IN ${showTenths(s.fireIn)} s`);
-  else parts.push('Enemy searching · C: cover');
+  else if (s.awareness === 'unaware') {
+    parts.push('Enemy unaware');
+    if (s.camo) parts.push('ghillie suit');
+  } else parts.push('Enemy searching for you · C: cover');
   if (s.paused) parts.push('PAUSED');
   return parts.join(' · ');
 }
@@ -47,7 +60,7 @@ export function threatText(s: ThreatState): string {
 /**
  * The threat line as a cache: `line(state)` is called every frame and hands back the same string until something
  * the line shows changes (the rounded health, the rounded detection, the countdown to a tenth of a second, the
- * snipers left, a flag), so a frame in which nothing changed builds no string and makes no array.
+ * snipers left, a flag, the awareness), so a frame in which nothing changed builds no string and makes no array.
  */
 export class ThreatLine {
   private readonly format: (s: ThreatState) => string;
@@ -65,7 +78,14 @@ export class ThreatLine {
 
   line(s: ThreatState): string {
     const flags =
-      (s.covered ? 1 : 0) | (s.firing ? 2 : 0) | (s.paused ? 4 : 0) | (s.failed ? 8 : 0) | (s.cleared ? 16 : 0) | (s.warning > 0 ? 32 : 0);
+      (s.covered ? 1 : 0) |
+      (s.firing ? 2 : 0) |
+      (s.paused ? 4 : 0) |
+      (s.failed ? 8 : 0) |
+      (s.cleared ? 16 : 0) |
+      (s.warning > 0 ? 32 : 0) |
+      (s.awareness === 'searching' ? 64 : s.awareness === 'firing' ? 128 : 0) |
+      (s.camo ? 256 : 0);
     const health = Math.ceil(s.health);
     const detection = Math.round(s.detection);
     const countdown = s.warning > 0 ? tenths(s.warning) : s.firing ? tenths(s.fireIn) : 0;

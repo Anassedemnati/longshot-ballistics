@@ -3,11 +3,15 @@ import type { Atmosphere, BulletState, Vec3, WindField } from '../ballistics/typ
 import { obstacleBoundingRadius, segmentBox, segmentSphere } from './hit';
 import type { HitTarget, Material, Obstacle, TerrainHeight, ZoneName } from './hit';
 
+/**
+ * How a bullet's flight ended. With the `watchPoints` option every variant also carries `closestWatchM`: the closest the bullet came
+ * to any watched point along its whole flight, m (up to where it ended). Without watch points the field is absent.
+ */
 export type ImpactEvent =
-  | { bulletId: number; kind: 'target'; targetId: string; zone: ZoneName; point: Vec3; time: number }
-  | { bulletId: number; kind: 'obstacle'; obstacleId: string; material: Material; point: Vec3; time: number }
-  | { bulletId: number; kind: 'terrain'; point: Vec3; time: number }
-  | { bulletId: number; kind: 'expired'; time: number };
+  | { bulletId: number; kind: 'target'; targetId: string; zone: ZoneName; point: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'obstacle'; obstacleId: string; material: Material; point: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'terrain'; point: Vec3; time: number; closestWatchM?: number }
+  | { bulletId: number; kind: 'expired'; time: number; closestWatchM?: number };
 
 export interface BulletSystemOptions {
   atmo: Atmosphere;
@@ -20,6 +24,11 @@ export interface BulletSystemOptions {
    * array every time. Default: none.
    */
   obstacles?: () => Obstacle[];
+  /**
+   * Points the flight is measured against (the enemy snipers' heads and upper torsos); read once per update() call and may return
+   * the same array every time. Every impact event then carries `closestWatchM`. Default: none, and no distance is computed at all.
+   */
+  watchPoints?: () => readonly Vec3[];
   /** Fixed substep, s. Default 0.001. */
   dt?: number;
   /** A bullet expires when its flight time reaches this, s. Default 6. */
@@ -32,6 +41,8 @@ interface Bullet {
   id: number;
   state: BulletState;
   bcG7: number;
+  /** Squared closest distance to a watch point so far, m^2 (Infinity until a substep has been measured). */
+  closestSq: number;
 }
 
 /** Float drift guard for flight-time and substep-count comparisons, s. */
@@ -40,9 +51,24 @@ const EPS = 1e-9;
 const TERRAIN_TOLERANCE = 0.01;
 const MAX_BISECTIONS = 32;
 const NO_OBSTACLES: Obstacle[] = [];
+const NO_POINTS: readonly Vec3[] = [];
 
 function lerp(a: number, b: number, u: number): number {
   return a + (b - a) * u;
+}
+
+/** Squared distance from point `p` to the segment a -> b, m^2. */
+export function pointSegmentDistanceSq(p: Vec3, a: Vec3, b: Vec3): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const lengthSq = abx * abx + aby * aby + abz * abz;
+  // The foot of the perpendicular, kept on the segment; a zero-length segment is the point a.
+  const u = lengthSq > 0 ? Math.min(1, Math.max(0, ((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / lengthSq)) : 0;
+  const dx = a.x + abx * u - p.x;
+  const dy = a.y + aby * u - p.y;
+  const dz = a.z + abz * u - p.z;
+  return dx * dx + dy * dy + dz * dz;
 }
 
 /**
@@ -50,7 +76,8 @@ function lerp(a: number, b: number, u: number): number {
  * segment prev->next against every target zone, every obstacle box and the terrain, and the earliest
  * contact wins (on an exact tie: target, then obstacle, then terrain). Fast bullets never tunnel
  * through targets or thin walls and long frames never skip hits. Targets with `bounds` and all
- * obstacles are rejected with one cheap segment-sphere test before their narrow tests run.
+ * obstacles are rejected with one cheap segment-sphere test before their narrow tests run. With `watchPoints` each bullet
+ * also keeps the closest any of its substep segments came to any watch point, and reports it on its impact event.
  */
 export class BulletSystem {
   private readonly atmo: Atmosphere;
@@ -58,6 +85,7 @@ export class BulletSystem {
   private readonly terrainHeight: TerrainHeight;
   private readonly targets: () => HitTarget[];
   private readonly obstacles: () => Obstacle[];
+  private readonly watchPoints: (() => readonly Vec3[]) | undefined;
   private readonly dt: number;
   private readonly maxFlightTime: number;
   private readonly maxFrameDt: number;
@@ -74,6 +102,7 @@ export class BulletSystem {
     this.terrainHeight = opts.terrainHeight;
     this.targets = opts.targets;
     this.obstacles = opts.obstacles ?? (() => NO_OBSTACLES);
+    this.watchPoints = opts.watchPoints;
     this.dt = opts.dt ?? DEFAULT_DT;
     if (!Number.isFinite(this.dt) || this.dt <= 0) {
       throw new Error(`BulletSystem: dt must be a positive finite number, got ${this.dt}`);
@@ -93,6 +122,7 @@ export class BulletSystem {
     this.bullets.push({
       id,
       bcG7,
+      closestSq: Infinity,
       state: {
         pos: { x: origin.x, y: origin.y, z: origin.z },
         vel: { x: velocity.x, y: velocity.y, z: velocity.z },
@@ -122,16 +152,19 @@ export class BulletSystem {
     const radii = this.obstacleRadii;
     radii.length = obstacles.length;
     for (let i = 0; i < obstacles.length; i++) radii[i] = obstacleBoundingRadius(obstacles[i]);
+    // Read once per call; with none (the usual case for a mission without snipers) no distance is measured at all.
+    const watched = this.watchPoints ? this.watchPoints() : NO_POINTS;
     let kept = 0;
     for (let i = 0; i < this.bullets.length; i++) {
       const bullet = this.bullets[i];
       let event: ImpactEvent | null = null;
       for (let n = 0; n < steps && event === null; n++) {
-        event = this.advance(bullet, targets, obstacles, radii);
+        event = this.advance(bullet, targets, obstacles, radii, watched);
       }
       if (event === null) {
         this.bullets[kept++] = bullet;
       } else {
+        if (this.watchPoints) event.closestWatchM = Math.sqrt(bullet.closestSq); // Infinity when nothing was ever watched
         events.push(event);
       }
     }
@@ -145,10 +178,32 @@ export class BulletSystem {
     targets: HitTarget[],
     obstacles: Obstacle[],
     radii: number[],
+    watched: readonly Vec3[],
   ): ImpactEvent | null {
     const prev = bullet.state;
     const next = step(prev, this.dt, bullet.bcG7, this.atmo, this.wind);
     bullet.state = next;
+    const event = this.contact(prev, next, bullet, targets, obstacles, radii);
+    if (watched.length > 0) {
+      // Up to where the bullet ended: an impact cuts the substep short, and the part beyond it was never flown.
+      const end = event !== null && event.kind !== 'expired' ? event.point : next.pos;
+      for (let i = 0; i < watched.length; i++) {
+        const d = pointSegmentDistanceSq(watched[i], prev.pos, end);
+        if (d < bullet.closestSq) bullet.closestSq = d;
+      }
+    }
+    return event;
+  }
+
+  /** The earliest thing the substep prev -> next touches (target, obstacle, terrain), or the end of the bullet's life; null if none. */
+  private contact(
+    prev: BulletState,
+    next: BulletState,
+    bullet: Bullet,
+    targets: HitTarget[],
+    obstacles: Obstacle[],
+    radii: number[],
+  ): ImpactEvent | null {
 
     // Earliest target contact along prev -> next.
     let uTarget = Infinity;

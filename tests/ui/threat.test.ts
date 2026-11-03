@@ -9,6 +9,8 @@ const state = (over: Partial<ThreatState> = {}): ThreatState => ({
   snipersLeft: 2,
   warning: 0,
   firing: false,
+  awareness: 'unaware',
+  camo: false,
   fireIn: 4,
   paused: false,
   failed: false,
@@ -17,8 +19,28 @@ const state = (over: Partial<ThreatState> = {}): ThreatState => ({
 });
 
 describe('threatText', () => {
-  it('says the enemy is searching while the player is not detected, and tells him about cover', () => {
-    expect(threatText(state())).toBe('EXPOSED · Health 100 · Detection 0 % · 2 snipers left · Enemy searching · C: cover');
+  it('says the enemy is unaware while nothing has given the player away', () => {
+    expect(threatText(state())).toBe('EXPOSED · Health 100 · Detection 0 % · 2 snipers left · Enemy unaware');
+  });
+
+  it('adds the ghillie suit to "Enemy unaware" when he wears one', () => {
+    expect(threatText(state({ camo: true }))).toBe('EXPOSED · Health 100 · Detection 0 % · 2 snipers left · Enemy unaware · ghillie suit');
+    expect(threatText(state({ camo: false }))).not.toContain('ghillie');
+  });
+
+  it('says the enemy is searching for him once he is heard or seen, and tells him about cover', () => {
+    expect(threatText(state({ awareness: 'searching', detection: 28 }))).toBe(
+      'EXPOSED · Health 100 · Detection 28 % · 2 snipers left · Enemy searching for you · C: cover',
+    );
+    // The same words in a ghillie suit: a searching enemy does not need the reminder of the suit.
+    expect(threatText(state({ awareness: 'searching', camo: true }))).toContain('Enemy searching for you · C: cover');
+    expect(threatText(state({ awareness: 'searching', camo: true }))).not.toContain('ghillie');
+  });
+
+  it('shows the countdown, not the awareness, once the snipers fire', () => {
+    const text = threatText(state({ awareness: 'firing', firing: true, detection: 70, fireIn: 3 }));
+    expect(text).toContain('SNIPER FIRING IN 3.0 s');
+    expect(text).not.toContain('Enemy');
   });
 
   it('counts down to the next sniper shot once detected', () => {
@@ -92,6 +114,9 @@ describe('ThreatLine (the per-frame cache of the line)', () => {
       { paused: true },
       { warning: 3.4 },
       { firing: false },
+      { awareness: 'searching' },
+      { awareness: 'firing' },
+      { camo: true },
       { cleared: true },
       { failed: true },
     ];
@@ -102,6 +127,19 @@ describe('ThreatLine (the per-frame cache of the line)', () => {
       line.line(state(base)); // back to the first state: that is a change too
       expect(log.built, `back from ${JSON.stringify(change)}`).toBe(++expected);
     }
+  });
+
+  it('re-renders when the awareness changes, and not before', () => {
+    const { log, line } = counted();
+    expect(line.line(state())).toContain('Enemy unaware');
+    expect(line.line(state())).toContain('Enemy unaware');
+    expect(log.built).toBe(1);
+    expect(line.line(state({ awareness: 'searching' }))).toContain('Enemy searching for you');
+    expect(log.built).toBe(2);
+    expect(line.line(state({ awareness: 'searching' }))).toContain('Enemy searching for you');
+    expect(log.built).toBe(2);
+    line.line(state({ awareness: 'firing', firing: true }));
+    expect(log.built).toBe(3);
   });
 
   it('shows the countdown of a bombardment, not the shot, and follows it in tenths', () => {

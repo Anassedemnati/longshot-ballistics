@@ -5,7 +5,7 @@ import { DEFAULT_DT } from '../../src/ballistics/integrator';
 import { RIFLES } from '../../src/ballistics/rifles';
 import { findZeroElevation } from '../../src/ballistics/trajectory';
 import type { Vec3, WindField } from '../../src/ballistics/types';
-import { BulletSystem } from '../../src/game/bullets';
+import { BulletSystem, pointSegmentDistanceSq } from '../../src/game/bullets';
 import type { BulletSystemOptions, ImpactEvent } from '../../src/game/bullets';
 import type { HitTarget } from '../../src/game/hit';
 
@@ -291,5 +291,135 @@ describe('BulletSystem', () => {
     expect(runUntilEvents(sys, 0.016)).toHaveLength(1);
     expect(sys.update(0.1)).toEqual([]);
     expect(sys.active).toHaveLength(0);
+  });
+});
+
+describe('BulletSystem: closest pass to the watch points', () => {
+  /** Fly one zero-elevation bullet down -Z until it ends, against `opts`; returns its only event. */
+  function fly(opts: Partial<BulletSystemOptions>): ImpactEvent {
+    const sys = makeSystem(opts);
+    sys.fire(MUZZLE, zeroVelocity(), BC);
+    const events = runUntilEvents(sys, 0.016);
+    expect(events).toHaveLength(1);
+    return events[0];
+  }
+  const wall = (z: number): HitTarget => ball('wall', { x: 0, y: 0, z }, 0.3);
+
+  it('adds nothing to the events, not even the field, without watch points', () => {
+    const e = fly({ targets: () => [wall(-200)] });
+    expect(e.kind).toBe('target');
+    expect('closestWatchM' in e).toBe(false);
+  });
+
+  it('is Infinity on every event when there is nothing to watch', () => {
+    expect(fly({ targets: () => [wall(-200)], watchPoints: () => [] }).closestWatchM).toBe(Infinity);
+  });
+
+  it('measures the closest the bullet came to a point beside its path', () => {
+    // The zero check puts the bullet on the line of sight (y = 0) at 100 m: a point 2 m to the side of it there is 2 m away.
+    const e = fly({ targets: () => [wall(-200)], watchPoints: () => [{ x: 2, y: 0, z: -100 }] });
+    expect(e.closestWatchM).toBeGreaterThan(1.9);
+    expect(e.closestWatchM).toBeLessThan(2.1);
+  });
+
+  it('keeps the nearest of several points, wherever along the flight they are', () => {
+    const near = { x: 1.5, y: 0, z: -150 };
+    const e = fly({
+      targets: () => [wall(-200)],
+      watchPoints: () => [{ x: 6, y: 0, z: -50 }, near, { x: 9, y: 0, z: -120 }],
+    });
+    expect(e.closestWatchM).toBeGreaterThan(1.4);
+    expect(e.closestWatchM).toBeLessThan(1.9);
+  });
+
+  it('measures to the segment, not to the substep ends: a point between two substeps (0.8 m apart) is still found', () => {
+    const e = fly({ targets: () => [wall(-200)], watchPoints: () => [{ x: 0.2, y: 0, z: -100.3 }] });
+    expect(e.closestWatchM).toBeLessThan(0.3);
+  });
+
+  it('stops measuring where the bullet ends: a point just past the impact is that far away, not zero', () => {
+    const e = fly({ targets: () => [wall(-100)], watchPoints: () => [{ x: 0, y: 0, z: -110 }] });
+    expect(e.kind).toBe('target');
+    expect(e.closestWatchM).toBeGreaterThan(9.5);
+    expect(e.closestWatchM).toBeLessThan(10.7);
+  });
+
+  it('a point the bullet never got near is far, and a bullet that hits the point itself reads about 0', () => {
+    expect(fly({ targets: () => [wall(-200)], watchPoints: () => [{ x: 300, y: 0, z: -100 }] }).closestWatchM).toBeGreaterThan(290);
+    expect(fly({ targets: () => [ball('t', { x: 0, y: 0, z: -100 }, 0.3)], watchPoints: () => [{ x: 0, y: 0, z: -100 }] }).closestWatchM).toBeLessThan(0.4);
+  });
+
+  it('is there on terrain, obstacle and expired events too', () => {
+    const watch = () => [{ x: 3, y: 0, z: -20 }];
+    const terrain = fly({ terrainHeight: (_x, z) => (z < -60 ? 10 : -100), watchPoints: watch });
+    expect(terrain.kind).toBe('terrain');
+    expect(terrain.closestWatchM).toBeGreaterThan(2.9);
+    expect(terrain.closestWatchM).toBeLessThan(3.2);
+    const box = {
+      id: 'box',
+      material: 'wall' as const,
+      box: { center: { x: 0, y: 0, z: -60 }, halfSize: { x: 2, y: 2, z: 0.5 }, yaw: 0 },
+    };
+    const obstacle = fly({ obstacles: () => [box], watchPoints: watch });
+    expect(obstacle.kind).toBe('obstacle');
+    expect(obstacle.closestWatchM).toBeGreaterThan(2.9);
+    expect(obstacle.closestWatchM).toBeLessThan(3.2);
+    const expired = fly({ maxFlightTime: 0.05, watchPoints: watch });
+    expect(expired.kind).toBe('expired');
+    expect(expired.closestWatchM).toBeGreaterThan(2.9);
+    expect(expired.closestWatchM).toBeLessThan(3.2);
+  });
+
+  it('reads the watch points once per update, and the watched list may be refilled in place between updates', () => {
+    const points = [{ x: 0, y: 0, z: -300 }];
+    let reads = 0;
+    const sys = makeSystem({
+      watchPoints: () => {
+        reads++;
+        return points;
+      },
+      targets: () => [wall(-100)],
+    });
+    sys.fire(MUZZLE, zeroVelocity(), BC);
+    sys.update(0.05); // 50 substeps: still in the air
+    expect(reads).toBe(1);
+    points.length = 0; // the sniper went down
+    const events: ImpactEvent[] = [];
+    for (let i = 0; i < 100 && events.length === 0; i++) events.push(...sys.update(0.016));
+    expect(events[0].closestWatchM).toBeGreaterThan(190); // the 50 m flown while he was still up put the bullet 250 m or more away
+  });
+
+  it('every bullet has its own closest pass', () => {
+    const broad = ball('broad', { x: 0, y: 0, z: -200 }, 10); // wide enough for both bullets
+    const sys = makeSystem({ targets: () => [broad], watchPoints: () => [{ x: 0, y: 0, z: -100 }] });
+    sys.fire(MUZZLE, zeroVelocity(), BC);
+    sys.fire({ ...MUZZLE, x: 5 }, zeroVelocity(), BC);
+    const events: ImpactEvent[] = [];
+    for (let i = 0; i < 200 && events.length < 2; i++) events.push(...sys.update(0.016));
+    expect(events).toHaveLength(2);
+    const [straight, wide] = events.sort((a, b) => a.bulletId - b.bulletId);
+    expect(straight.closestWatchM).toBeLessThan(0.3);
+    expect(wide.closestWatchM).toBeGreaterThan(4.7);
+    expect(wide.closestWatchM).toBeLessThan(5.3);
+  });
+});
+
+describe('pointSegmentDistanceSq', () => {
+  const a = { x: 0, y: 0, z: 0 };
+  const b = { x: 10, y: 0, z: 0 };
+
+  it('is the perpendicular distance beside the segment', () => {
+    expect(pointSegmentDistanceSq({ x: 4, y: 3, z: 0 }, a, b)).toBeCloseTo(9, 12);
+    expect(pointSegmentDistanceSq({ x: 4, y: 3, z: 4 }, a, b)).toBeCloseTo(25, 12);
+  });
+
+  it('is the distance to the nearer end past either end', () => {
+    expect(pointSegmentDistanceSq({ x: 13, y: 4, z: 0 }, a, b)).toBeCloseTo(25, 12);
+    expect(pointSegmentDistanceSq({ x: -3, y: 0, z: 4 }, a, b)).toBeCloseTo(25, 12);
+  });
+
+  it('is 0 on the segment, and the distance to the point for a segment of no length', () => {
+    expect(pointSegmentDistanceSq({ x: 7, y: 0, z: 0 }, a, b)).toBe(0);
+    expect(pointSegmentDistanceSq({ x: 3, y: 4, z: 0 }, a, a)).toBeCloseTo(25, 12);
   });
 });

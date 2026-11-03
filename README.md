@@ -23,12 +23,16 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - .308 Win: G7 BC 0.243 at 790 m/s.
   - .338 Lapua: G7 BC 0.322 at 900 m/s.
   - Each has an optional suppressor: no muzzle flash, a quieter report and slower detection.
-- **Optional ghillie suit** (a switch in the menu): hard for the enemy to spot while you hold fire, and your sleeves wear the map's camouflage. Your shots still give you away.
+- **Optional ghillie suit** (a switch in the menu)
+  - While you hold fire the enemy cannot pick you out: lying still in plain view never builds more than 30 % detection.
+  - Your sleeves wear the map's camouflage.
+  - Your shots still give you away, though the muzzle report counts for less.
 - **Variable-power scope** with a mil reticle, mouse-wheel zoom and a moving bolt.
   - Sound travels at the speed of sound: at long range you hear the impact well after the shot.
 - **Enemy counter-snipers**
-  - They build up detection every time you fire.
-  - Once they find you, they shoot back and call in bombardments.
+  - They start out unaware of you. Without a ghillie suit, a few seconds in the open is enough to make them search.
+  - A shot gives you away twice: by the muzzle report, and by the crack and dust of the bullet, which point back at you when it ends near one of them. A suppressor only quiets the first.
+  - Once they are searching their scopes narrow in on you and glint more often. Keep exposed and they find you, shoot back and call in bombardments.
   - Press **C** to duck into cover.
 - **Mission setup menu**
   - Three themes: desert, arctic and green valley.

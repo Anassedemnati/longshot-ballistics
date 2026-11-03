@@ -139,17 +139,49 @@ describe('createSniper: glint', () => {
   it('sweeps: visible while the scope looks at the player, hidden while it looks away', () => {
     const { sniper } = at(0, -400);
     const glint = glintOf(sniper.group);
-    sniper.scan(0, false, false, EYE);
+    sniper.scan(0, 'unaware', false, EYE);
     expect(glint.visible).toBe(true); // sin(0) = 0: looking straight at the player
-    sniper.scan(1.8, false, false, EYE);
+    sniper.scan(1.8, 'unaware', false, EYE);
     expect(glint.visible).toBe(false); // sin(1.53) ~ 1: looking away
     expect(sniper.glintVisible).toBe(false);
+  });
+
+  it('narrows the sweep and shows the glint more often once the snipers are searching', () => {
+    const { sniper } = at(0, -400);
+    const glint = glintOf(sniper.group);
+    const rifleOf = (): THREE.Object3D => sniper.group.children.find((c) => c.type === 'Group' && c.children.some((k) => k === glint)) as THREE.Object3D;
+    // Over a full sweep the glint is up for more of the time than it is while unaware.
+    let unaware = 0;
+    let searching = 0;
+    let widestUnaware = 0;
+    let widestSearching = 0;
+    for (let i = 0; i < 400; i++) {
+      const t = i * 0.05;
+      sniper.scan(t, 'unaware', false, EYE);
+      if (sniper.glintVisible) unaware++;
+      widestUnaware = Math.max(widestUnaware, Math.abs(rifleOf().rotation.y));
+      sniper.scan(t, 'searching', false, EYE);
+      if (sniper.glintVisible) searching++;
+      widestSearching = Math.max(widestSearching, Math.abs(rifleOf().rotation.y));
+    }
+    expect(searching).toBeGreaterThan(unaware * 1.5);
+    expect(searching).toBeLessThan(400); // still a sweep, not steady
+    expect(widestSearching).toBeLessThan(widestUnaware * 0.5);
+    expect(widestSearching).toBeGreaterThan(0);
+  });
+
+  it('a searching sniper still looks away at the far end of his sweep (hidden at 1.8 s, as unaware)', () => {
+    const { sniper } = at(0, -400);
+    sniper.scan(1.8, 'searching', false, EYE);
+    expect(sniper.glintVisible).toBe(false);
+    sniper.scan(0, 'searching', false, EYE);
+    expect(sniper.glintVisible).toBe(true);
   });
 
   it('is steady once the player is detected, and the rifle then points at him', () => {
     const { sniper } = at(0, -400);
     const glint = glintOf(sniper.group);
-    sniper.scan(1.8, true, false, EYE);
+    sniper.scan(1.8, 'firing', false, EYE);
     expect(glint.visible).toBe(true);
     expect(glint.material.opacity).toBeCloseTo(0.95, 9);
     expect(sniper.glintVisible).toBe(true);
@@ -157,15 +189,15 @@ describe('createSniper: glint', () => {
 
   it('is hidden while the player is in cover', () => {
     const { sniper } = at(0, -400);
-    sniper.scan(1.8, true, true, EYE);
+    sniper.scan(1.8, 'firing', true, EYE);
     expect(sniper.glintVisible).toBe(false);
   });
 
   it('grows with the distance so it stays a cue at a kilometre', () => {
     const near = at(0, -100).sniper;
     const far = at(0, -1000).sniper;
-    near.scan(0, true, false, EYE);
-    far.scan(0, true, false, EYE);
+    near.scan(0, 'firing', false, EYE);
+    far.scan(0, 'firing', false, EYE);
     expect(glintOf(near.group).scale.x).toBeCloseTo(0.8, 9);
     expect(glintOf(far.group).scale.x).toBeGreaterThan(3);
   });
@@ -173,8 +205,8 @@ describe('createSniper: glint', () => {
   it('two snipers do not sweep in step', () => {
     const a = at(0, -400, 'sniper-0').sniper;
     const b = at(10, -400, 'sniper-1').sniper;
-    a.scan(0, false, false, EYE);
-    b.scan(0, false, false, EYE);
+    a.scan(0, 'unaware', false, EYE);
+    b.scan(0, 'unaware', false, EYE);
     expect(a.glintVisible).not.toBe(b.glintVisible);
   });
 });
@@ -183,14 +215,14 @@ describe('createSniper: knocked down', () => {
   it('loses its glint for good, whatever the scan says afterwards', () => {
     const { sniper } = at(0, -400);
     const glint = glintOf(sniper.group);
-    sniper.scan(0, true, false, EYE);
+    sniper.scan(0, 'firing', false, EYE);
     sniper.knockDown();
     expect(sniper.down).toBe(true);
     expect(glint.parent).toBeNull();
     expect(glint.material.opacity).toBe(0);
     for (let i = 0; i < 300; i++) {
       sniper.update(0.1);
-      sniper.scan(i * 0.1, true, false, EYE);
+      sniper.scan(i * 0.1, 'firing', false, EYE);
     }
     expect(sniper.glintVisible).toBe(false);
     expect(glint.parent).toBeNull();
@@ -216,7 +248,7 @@ describe('createSniper: knocked down', () => {
     const { sniper } = at(0, -400);
     sniper.knockDown();
     sniper.reset();
-    sniper.scan(0, true, false, EYE);
+    sniper.scan(0, 'firing', false, EYE);
     expect(sniper.down).toBe(false);
     expect(sniper.group.rotation.z).toBe(0);
     expect(sniper.glintVisible).toBe(true);

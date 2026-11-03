@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Vec3 } from '../ballistics/types';
+import type { Awareness } from '../game/encounter';
 import type { HitTarget } from '../game/hit';
 import {
   SNIPER_BOUNDS,
@@ -20,11 +21,12 @@ import type { TargetDummy } from './target';
 
 export interface Sniper extends TargetDummy {
   /**
-   * Sweep the scope and place the glint. `time` is the game clock (s, runs only while the game does); `detected`
-   * makes the glint steady and the rifle point at the player; `covered` (the player is ducked) hides it; `eye`
+   * Sweep the scope and place the glint. `time` is the game clock (s, runs only while the game does); `awareness` is how well the
+   * snipers know where the player is: `unaware` is the slow wide lazy sweep, `searching` a sweep narrowed toward the player whose
+   * glint shows more often, `firing` a steady glint with the rifle pointing at him; `covered` (the player is ducked) hides it; `eye`
    * is the player's eye (the glint grows with the distance so it stays a visible cue at 1 km). A downed sniper has no glint.
    */
-  scan(time: number, detected: boolean, covered: boolean, eye: Vec3): void;
+  scan(time: number, awareness: Awareness, covered: boolean, eye: Vec3): void;
   /** True while the glint cue is on screen (the sniper is up and the glint is switched on). */
   readonly glintVisible: boolean;
   /** Release what this sniper alone owns (its glint material); the shared geometry and body material stay. */
@@ -37,9 +39,12 @@ const FALL_RATE = 3;
 /** A glint is this wide per metre of distance, m (so it spans a few pixels at any range), at least MIN_GLINT. */
 const GLINT_PER_M = 0.0035;
 const MIN_GLINT = 0.8;
-/** The scope sweeps by +-SWEEP_YAW rad; it catches the player's eye while |sin| stays under LOOK_WINDOW. */
+/** An unaware sniper's scope sweeps by +-SWEEP_YAW rad; it catches the player's eye while |sin| stays under LOOK_WINDOW. */
 const SWEEP_YAW = 0.3;
 const LOOK_WINDOW = 0.38;
+/** A searching sniper narrows his sweep to +-SEARCH_YAW rad (toward where the shot came from) and catches the eye while |sin| stays under SEARCH_WINDOW: the glint shows about twice as often. */
+const SEARCH_YAW = 0.1;
+const SEARCH_WINDOW = 0.8;
 
 interface Shared {
   body: THREE.BufferGeometry;
@@ -220,16 +225,19 @@ export function createSniper(position: Vec3, yaw: number, id: string): Sniper {
       fall = Math.min(1, fall + dt * FALL_RATE);
       group.rotation.z = fall * FALL_ROLL;
     },
-    scan(time: number, detected: boolean, covered: boolean, eye: Vec3) {
+    scan(time: number, awareness: Awareness, covered: boolean, eye: Vec3) {
       if (down) {
         glint.visible = false;
         return;
       }
+      const firing = awareness === 'firing';
+      const searching = awareness === 'searching';
+      const window = searching ? SEARCH_WINDOW : LOOK_WINDOW;
       const sweep = Math.sin(time * 0.85 + index * 2.1);
-      const lookingAtPlayer = detected || Math.abs(sweep) < LOOK_WINDOW;
-      rifle.rotation.y = detected ? 0 : sweep * SWEEP_YAW;
+      const lookingAtPlayer = firing || Math.abs(sweep) < window;
+      rifle.rotation.y = firing ? 0 : sweep * (searching ? SEARCH_YAW : SWEEP_YAW);
       glint.visible = lookingAtPlayer && !covered;
-      glintMaterial.opacity = detected ? 0.95 : Math.max(0.15, 1 - Math.abs(sweep) / LOOK_WINDOW);
+      glintMaterial.opacity = firing ? 0.95 : Math.max(0.15, 1 - Math.abs(sweep) / window);
       toEye.set(eye.x - position.x, eye.y - position.y, eye.z - position.z);
       glint.scale.setScalar(Math.max(MIN_GLINT, toEye.length() * GLINT_PER_M));
     },

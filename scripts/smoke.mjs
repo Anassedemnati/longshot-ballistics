@@ -94,6 +94,8 @@ const MISSION_SNIPERS = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.2.0';
 const MISSION_SNIPER_ONE = 'v2.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0';
 /** 1 soldier, 2 rooftop snipers (seed 2), 4.5 m/s from 9 o'clock, aim assists ON: the three features that share the screen. */
 const MISSION_SNIPERS_ASSISTS = 'v2.d.300.300.1.0.45.9.308.m.n.2.r.0.2.1';
+/** 1 soldier at 300 m among many buildings, calm, 1 enemy sniper (as MISSION_SNIPER_ONE), in a ghillie suit: a v3 code. */
+const MISSION_GHILLIE = 'v3.d.300.300.1.0.0.9.308.m.n.2.r.0.1.0.1';
 /** The largest mission with everything on: mountain, suppressor, 3 enemy snipers, aim assists. */
 const MISSION_MAX_ALL = 'v2.d.100.1500.10.3.120.3.338.m.m.1.m.1.3.1';
 /** The longest the threat line gets (3 snipers, a bombardment coming, pointer free). */
@@ -1541,7 +1543,8 @@ async function run() {
     await animationFrames(fight, 5);
     check((await fight.locator('.threat-panel').count()) === 1, 'the threat panel exists');
     const searching = (await fight.locator('.threat-panel').textContent()) ?? '';
-    check(/EXPOSED/.test(searching) && /Health 100/.test(searching) && /2 snipers left/.test(searching) && /Enemy searching/.test(searching), `the threat line reads "${searching}"`);
+    check(/EXPOSED/.test(searching) && /Health 100/.test(searching) && /2 snipers left/.test(searching) && /Enemy unaware( · PAUSED)?$/.test(searching), `the threat line reads "${searching}" (nothing has given the player away: the enemy is unaware)`);
+    check(st.awareness === 'unaware', `the debug state reads awareness "${st.awareness}" at the start`);
     check(/PAUSED/.test(searching), 'the threat line says PAUSED while the pointer is free');
     st = await gameState(fight);
     check(st.snipers.some((k) => k.glint), 'a sniper scope glint is on screen (the scope sweeps toward the player)');
@@ -1716,6 +1719,35 @@ async function run() {
     check(st.render.calls <= MAX_DRAW_CALLS, `with 3 enemy snipers it stays within the draw-call budget (${st.render.calls} <= ${MAX_DRAW_CALLS})`);
     await bigFight.close();
 
+    // 12c2. The ghillie suit (a v3 link): the threat line says so, a still player stays unaware however long he is exposed, and the
+    // first shot gives him away (the muzzle report; the bullet's path adds more near a sniper): the snipers start searching.
+    const ghillie = await openPage();
+    await startGame(ghillie, `m=${MISSION_GHILLIE}&debug=1`);
+    await ghillie.evaluate(() => window.__game.unlockAudio());
+    await ghillie.mouse.click(640, 360);
+    await ghillie.waitForFunction(() => document.pointerLockElement !== null, undefined, { timeout: 5000 });
+    st = await gameState(ghillie);
+    check(st.snipers.length === 1 && st.soldiers.length === 1 && st.awareness === 'unaware', 'the ghillie mission starts with the enemy unaware');
+    await animationFrames(ghillie, 3);
+    const hidden = (await ghillie.locator('.threat-panel').textContent()) ?? '';
+    check(/Enemy unaware · ghillie suit( · PAUSED)?$/.test(hidden), `the threat line mentions the ghillie suit ("${hidden}")`);
+    await waitGameSeconds(ghillie, 4);
+    st = await gameState(ghillie);
+    check(st.awareness === 'unaware' && st.detection > 0 && st.detection <= 30 && st.health === 100, `exposed and still: detection ${st.detection.toFixed(1)} % (30 % at most), still unaware, no damage`);
+    await ghillie.screenshot({ path: join(OUT_DIR, 'ghillie-unaware.png') });
+    const target = st.soldiers[0];
+    const ghillieShot = await shootAt(ghillie, target.upperTorso, holdFor(Math.hypot(target.upperTorso.x, target.upperTorso.z)));
+    check(/^HIT/.test(ghillieShot), 'the soldier is hit from the ghillie suit');
+    await animationFrames(ghillie, 3);
+    st = await gameState(ghillie);
+    check(st.awareness === 'searching' || st.awareness === 'firing', `the shot gave him away: awareness "${st.awareness}"`);
+    check(st.detection >= 28, `the muzzle report and the bullet raised the detection (${st.detection.toFixed(1)} %, 28 % of the report alone)`);
+    if (st.awareness === 'searching') {
+      const searchingGhillie = (await ghillie.locator('.threat-panel').textContent()) ?? '';
+      check(/Enemy searching for you · C: cover( · PAUSED)?$/.test(searchingGhillie), `the threat line says the enemy is searching ("${searchingGhillie}")`);
+    }
+    await ghillie.close();
+
     // 12d. Enemy snipers, aim assists and the first-person rifle in one mission: the panels share the screen without overlapping, the
     // rifle is not drawn in cover, the cover mask sits between the picture and the HUD, and the assists aim at enemy snipers too.
     const combo = await openPage();
@@ -1889,7 +1921,7 @@ async function run() {
     check(problems.length === 0, `no console errors or failed requests${problems.length ? `: ${problems.join(' | ')}` : ''}`);
 
     writeFileSync(join(OUT_DIR, 'smoke.json'), JSON.stringify({ frames, naked, scope, result, nearResult, againResult }, null, 2));
-    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, assists-trajectory, assists-arc, assists-marker, assists-all, assists-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-new-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-last-target, snipers-failed, snipers-assists-rifle, snipers-assists-1024, snipers-assists-cover, snipers-assists-scoped, fatal-start, fatal-frame (.png)');
+    log('screenshots in test-results/: naked, scope, result, standing-100m, hit-100m, reset-100m, rifle-unscoped, rifle-scoped, rifle-suppressed, mission-start, mission-hit, mission-results, assists-trajectory, assists-arc, assists-marker, assists-all, assists-results, mission-cover, mission-cover-scoped, mission-vehicle, mission-max, mission-arctic, mission-valley, menu, menu-short, menu-controls, menu-new-controls, menu-<theme>, menu-<theme>-mission, mission-default, mission, menu-back, hud-menu, hud-menu-scope, snipers-scoped, snipers-hit, snipers-cover, snipers-bombardment, snipers-complete, snipers-last-target, snipers-failed, snipers-assists-rifle, snipers-assists-1024, ghillie-unaware, snipers-assists-cover, snipers-assists-scoped, fatal-start, fatal-frame (.png)');
   } finally {
     await cleanup();
   }

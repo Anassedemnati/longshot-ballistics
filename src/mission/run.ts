@@ -130,12 +130,21 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   const { scene, dust, sparks, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal } = world;
 
   // Game state
+  // The enemy snipers still up, as the points a bullet's flight is measured against (head and upper torso of each): the crack and the dust of a
+  // bullet that ends near one tell him where the shot came from (`combat.onBulletEnd`). One array, refilled in place when a sniper goes down.
+  const watchPoints: Vec3[] = [];
+  function refreshWatchPoints(): void {
+    watchPoints.length = 0;
+    for (const k of snipers.values()) if (!k.sniper.down) watchPoints.push(k.head, k.upperTorso);
+  }
+  refreshWatchPoints();
   const bullets = new BulletSystem({
     atmo,
     wind,
     terrainHeight: field.height,
     targets: () => liveTargets,
     obstacles: () => obstacles,
+    watchPoints: () => watchPoints,
   });
   const weapon = new Weapon(rifle.magazine);
   // The mission clock is stopped until the player's first pointer lock or first shot (whichever comes first).
@@ -214,7 +223,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   const combat: Combat | null =
     hasSnipers
       ? new Combat({
-          encounter: new Encounter(),
+          encounter: new Encounter({ camo: config.camo }),
           snipers: [...snipers.values()].map((k) => k.sniper),
           ui: new ThreatUi(document.body),
           field,
@@ -346,6 +355,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     });
     stats = result.stats;
 
+    // A bullet that kills a sniper passed within a hair of him: that is no cue for the others, who only see him go down.
+    const killedSniper = result.killedTargetId !== null && snipers.has(result.killedTargetId);
+    if (!killedSniper) combat?.onBulletEnd(event.closestWatchM);
+
     if (result.killedTargetId !== null) {
       const soldier = soldiers.get(result.killedTargetId);
       const vehicle = vehicles.get(result.killedTargetId);
@@ -354,6 +367,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         sniper.sniper.knockDown();
         sniper.live = false;
         removeLive(sniper.sniper.hitTarget);
+        refreshWatchPoints();
       } else if (soldier) {
         soldier.dummy.knockDown();
         soldier.live = false;
@@ -454,6 +468,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
           health: () => combat.encounter.health,
           detection: () => combat.encounter.detection,
           covered: () => combat.covered,
+          awareness: () => combat.encounter.awareness,
           snipersLeft: () => combat.snipersLeft,
         },
         render: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),

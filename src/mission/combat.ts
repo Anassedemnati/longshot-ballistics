@@ -20,7 +20,7 @@ export interface CombatDeps {
   field: TerrainField;
   /** The player's eye. */
   shooter: Vec3;
-  /** The rifle has a suppressor: shots give the player away less. */
+  /** The rifle has a suppressor: shots give the player away less. (A ghillie suit is the encounter's: `encounter.camo`.) */
   suppressed: boolean;
   /** Where the player is looking, rad (the view's yaw): incoming fire lands in front of him. */
   yaw(): number;
@@ -79,6 +79,8 @@ export class Combat {
     snipersLeft: 0,
     warning: 0,
     firing: false,
+    awareness: 'unaware',
+    camo: false,
     fireIn: 0,
     paused: false,
     failed: false,
@@ -102,9 +104,17 @@ export class Combat {
     return n;
   }
 
-  /** The player fired: the muzzle blast raises the detection. */
+  /** The player fired: the muzzle blast raises the detection (less with a suppressor or a ghillie suit) and alerts the snipers. */
   onShot(): void {
-    this.deps.encounter.shot(this.deps.suppressed);
+    this.deps.encounter.shot({ suppressed: this.deps.suppressed });
+  }
+
+  /**
+   * A bullet's flight ended `closestPassM` metres from the closest live enemy sniper it passed (undefined or Infinity: none, so
+   * nothing happens): the crack and the dust it raised point back at the player, suppressor or not.
+   */
+  onBulletEnd(closestPassM: number | undefined): void {
+    if (closestPassM !== undefined) this.deps.encounter.bulletCue(closestPassM);
   }
 
   /**
@@ -135,8 +145,8 @@ export class Combat {
     const before = encounter.health;
     const events = encounter.update(dt, alive, this.covered, paused);
 
-    const detected = encounter.firing;
-    for (const s of snipers) s.scan(this.clock, detected, this.covered, shooter);
+    const awareness = encounter.awareness;
+    for (const s of snipers) s.scan(this.clock, awareness, this.covered, shooter);
 
     for (const event of events) this.land(event);
     const damage = before - encounter.health;
@@ -155,6 +165,8 @@ export class Combat {
     state.snipersLeft = alive;
     state.warning = encounter.warning;
     state.firing = encounter.firing;
+    state.awareness = awareness;
+    state.camo = encounter.camo;
     state.fireIn = encounter.fireIn;
     state.paused = paused;
     state.failed = encounter.failed;

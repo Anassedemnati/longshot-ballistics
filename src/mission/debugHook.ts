@@ -1,4 +1,5 @@
 import type { Vec3 } from '../ballistics/types';
+import type { Awareness } from '../game/encounter';
 import type { MissionStats } from './stats';
 import type { EnemySniper, Soldier, Vehicle } from './world';
 
@@ -20,6 +21,8 @@ export interface GameDebugState {
   detection: number;
   /** The player is ducked behind cover. */
   covered: boolean;
+  /** How well the snipers know where the player is ('unaware' in a mission without snipers). */
+  awareness: Awareness;
   /** Enemy snipers still up. */
   snipersLeft: number;
   /** Draw calls and triangles of the last rendered frame. */
@@ -70,6 +73,7 @@ export interface DebugSources {
     health(): number;
     detection(): number;
     covered(): boolean;
+    awareness(): Awareness;
     snipersLeft(): number;
   } | null;
   render(): { calls: number; triangles: number };
@@ -109,6 +113,7 @@ export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources:
       health: fight ? fight.health() : 100,
       detection: fight ? fight.detection() : 0,
       covered: fight ? fight.covered() : false,
+      awareness: fight ? fight.awareness() : 'unaware',
       snipersLeft: fight ? fight.snipersLeft() : 0,
       render: sources.render(),
     }),
