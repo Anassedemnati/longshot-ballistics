@@ -4,7 +4,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { describe, expect, it } from 'vitest';
 import { DUMMY_BOXES, DUMMY_HEAD, DUMMY_KHAKI, MAX_OVERHANG } from '../../src/mission/dummyDims';
 import { SURFACES } from '../../src/mission/enemySurface';
-import { SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR, soldierModel } from '../../src/mission/soldierModel';
+import { OFFICER_BERET, SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR, soldierModel } from '../../src/mission/soldierModel';
+import type { SoldierVariant } from '../../src/mission/soldierModel';
 import { camoPixels, meanLinear } from '../../src/scene/enemyTextures';
 import { soldierGeometry } from '../../src/scene/soldierMesh';
 import { dummyHitSpheres } from '../../src/scene/target';
@@ -45,13 +46,18 @@ function oldBoxySoldier(): THREE.BufferGeometry {
 /** From a valley (10 degrees up), level, and from a hill (10 and 20 degrees down): the shooter's eye is a dozen metres above the ground, so these span every range of a mission. */
 const VIEWS = [-10, 0, 10, 20];
 
+/** Every body drawn on the soldier's skeleton: the rifleman, the HVT officer and his bodyguards share the hit spheres, so each must cover them. */
+const VARIANTS: readonly SoldierVariant[] = ['rifleman', 'officer', 'guard'];
+
 describe('soldier mesh covers the hit spheres', () => {
-  for (const deg of VIEWS) {
-    it(`seen from ${deg === 0 ? 'the front' : `${Math.abs(deg)} degrees ${deg > 0 ? 'above' : 'below'}`}, no sphere's disc reaches 3 cm past the silhouette`, () => {
-      const silhouette = rasterize(soldierGeometry(), pitched(deg));
-      const bad = overhangs(silhouette, discs(deg), MAX_OVERHANG + 0.0005, 180, 0);
-      expect(bad.slice(0, 5)).toEqual([]);
-    });
+  for (const variant of VARIANTS) {
+    for (const deg of VIEWS) {
+      it(`${variant}, seen from ${deg === 0 ? 'the front' : `${Math.abs(deg)} degrees ${deg > 0 ? 'above' : 'below'}`}: no sphere's disc reaches 3 cm past the silhouette`, () => {
+        const silhouette = rasterize(soldierGeometry(variant), pitched(deg));
+        const bad = overhangs(silhouette, discs(deg), MAX_OVERHANG + 0.0005, 180, 0);
+        expect(bad.slice(0, 5)).toEqual([]);
+      });
+    }
   }
 
   it('the measure passes the old boxy soldier (so it is not asking for the impossible)', () => {
@@ -120,6 +126,47 @@ describe('soldier mesh shape', () => {
     for (const key of ['camo', 'gear', 'skin', 'metal'] as const) {
       const def = SURFACES[key];
       expect(camo.has([def.camo, def.roughness, def.metalness, def.bump].map((v) => v.toFixed(2)).join()), key).toBe(true);
+    }
+  });
+});
+
+describe('the HVT and his bodyguards look different from the riflemen', () => {
+  const parts = (v: SoldierVariant) => soldierModel(v).flatMap((group) => group.parts);
+
+  it('the officer: a red beret and no helmet, a plain (not camo) uniform, a bare face and bare hands, no rifle and no pack', () => {
+    const officer = parts('officer');
+    expect(officer.some((p) => p.color === OFFICER_BERET && p.surface === 'cloth')).toBe(true);
+    expect(officer.filter((p) => p.kind === 'lathe' && p.surface === 'camo')).toEqual([]); // no helmet (nor any camo at all)
+    expect(officer.filter((p) => p.surface === 'camo')).toEqual([]);
+    expect(officer.filter((p) => p.skin === 'rifle')).toEqual([]);
+    expect(officer.filter((p) => p.surface === 'glass')).toEqual([]);
+    expect(officer.filter((p) => p.surface === 'skin').length).toBeGreaterThanOrEqual(parts('rifleman').filter((p) => p.surface === 'skin').length + 2); // face and hands
+    const g = soldierGeometry('officer');
+    g.computeBoundingBox();
+    const box = g.boundingBox as THREE.Box3;
+    expect(box.max.z).toBeLessThan(0.55); // nothing held out in front of him: his hands at most (the rifleman's muzzle reaches 0.7)
+    expect(box.min.z).toBeGreaterThan(-0.2); // no pack
+    expect(box.max.y).toBeGreaterThan(1.75); // the beret on top
+    expect(box.max.y).toBeLessThan(1.85);
+  });
+
+  it('the bodyguard: no camo, a plate carrier and a compact rifle shorter than the rifleman\'s', () => {
+    const guard = parts('guard');
+    expect(guard.filter((p) => p.surface === 'camo')).toEqual([]);
+    expect(guard.filter((p) => p.skin === 'rifle').length).toBeGreaterThanOrEqual(6);
+    const reach = (v: SoldierVariant): number => {
+      const g = soldierGeometry(v);
+      g.computeBoundingBox();
+      return (g.boundingBox as THREE.Box3).max.z;
+    };
+    expect(reach('guard')).toBeLessThan(reach('rifleman') - 0.1);
+  });
+
+  it('each variant stays within the triangles an enemy may cost', () => {
+    for (const v of VARIANTS) {
+      const triangles = soldierGeometry(v).getAttribute('position').count / 3;
+      expect(triangles, v).toBeGreaterThan(1500);
+      expect(triangles, v).toBeLessThanOrEqual(5000);
     }
   });
 });

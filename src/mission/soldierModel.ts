@@ -28,6 +28,83 @@ const LENS = 0x12171a;
 const STEEL = 0x26292b;
 const FURNITURE = 0x2f302b;
 
+/**
+ * Who the body is (the same skeleton, pose and hit spheres for all three; only what is drawn on it changes):
+ *   * `rifleman`: the soldier above;
+ *   * `officer`: the high-value target, a colonel, made to be told apart through a scope at 800 m: a bright red beret instead of a helmet,
+ *     a bare face, a plain dark olive uniform with no plate carrier, no pack and no rifle, a brown leather belt with a pistol holster;
+ *   * `guard`: his bodyguards, all in black: black uniform, a black plate carrier and helmet, no pack, a compact rifle.
+ */
+export type SoldierVariant = 'rifleman' | 'officer' | 'guard';
+
+/** What a variant wears: the uniform (camo print or a plain colour), its kit, and its rifle. */
+interface Look {
+  /** The uniform: a printed camo (tinted white: as printed) or a plain dyed cloth, and its darker shade (helmet cover, shoulders). */
+  uniform: { surface: 'camo' | 'cloth'; color: number; dark: number; pocket: number };
+  carrier: { color: number; pouch: number } | null;
+  pack: boolean;
+  headgear: 'helmet' | 'beret';
+  /** Helmet colour (a helmet), beret colour (a beret). */
+  hat: number;
+  faceWrap: boolean;
+  glasses: boolean;
+  /** Gloves (else bare hands), knee and elbow pads. */
+  gloves: boolean;
+  pads: boolean;
+  /** The hip kit's colour and the belt's: pouches, or a leather holster and map case. */
+  hips: { color: number; flap: number; belt: number };
+  rifle: 'assault' | 'compact' | null;
+}
+
+/** The dark olive of the officer's uniform: plain, and darker than the camo, so his outline and his red beret stand out against the men round him. */
+const OLIVE = 0x4f5236;
+const LEATHER = 0x4a2e1a;
+/** The beret: a saturated red that survives the haze of 800 m (a darker maroon goes brown at range). */
+export const OFFICER_BERET = 0xb3161a;
+const BLACK = 0x232426;
+
+const LOOKS: Record<SoldierVariant, Look> = {
+  rifleman: {
+    uniform: { surface: 'camo', color: CAMO, dark: CAMO_DARK, pocket: 0xd6d0bd },
+    carrier: { color: CARRIER, pouch: POUCH },
+    pack: true,
+    headgear: 'helmet',
+    hat: CAMO_DARK,
+    faceWrap: true,
+    glasses: true,
+    gloves: true,
+    pads: true,
+    hips: { color: POUCH, flap: CARRIER, belt: CARRIER },
+    rifle: 'assault',
+  },
+  officer: {
+    uniform: { surface: 'cloth', color: OLIVE, dark: 0x45482f, pocket: 0x585b3d },
+    carrier: null,
+    pack: false,
+    headgear: 'beret',
+    hat: OFFICER_BERET,
+    faceWrap: false,
+    glasses: false,
+    gloves: false,
+    pads: false,
+    hips: { color: LEATHER, flap: 0x3a2414, belt: LEATHER },
+    rifle: null,
+  },
+  guard: {
+    uniform: { surface: 'cloth', color: 0x2c2e31, dark: 0x26282b, pocket: 0x303236 },
+    carrier: { color: BLACK, pouch: 0x1d1e20 },
+    pack: false,
+    headgear: 'helmet',
+    hat: 0x1f2022,
+    faceWrap: false,
+    glasses: true,
+    gloves: true,
+    pads: true,
+    hips: { color: 0x1d1e20, flap: BLACK, belt: BLACK },
+    rifle: 'compact',
+  },
+};
+
 /** Where the weapon lies: the stock end, and the way it points (forward and to his left, a little down). */
 export const SOLDIER_RIFLE_BUTT: V3 = [-0.3, 1.155, 0.08];
 export const SOLDIER_RIFLE_DIR: V3 = [0.78, -0.12, 0.62];
@@ -66,7 +143,8 @@ const e = (c: V3, r: V3, surface: ModelPart['surface'], color: number, rot?: V3,
 const b = (c: V3, size: V3, radius: number, surface: ModelPart['surface'], color: number, rot?: V3): ModelPart => ({ kind: 'box', c, size, radius, surface, color, rot });
 
 /** The legs, pelvis, belt and hip kit. The leg on his left (+X) is a step forward. */
-function lowerBody(): ModelPart[] {
+function lowerBody(look: Look): ModelPart[] {
+  const U = look.uniform;
   const parts: ModelPart[] = [];
   for (const side of [-1, 1] as const) {
     const x = 0.1 * side;
@@ -75,12 +153,12 @@ function lowerBody(): ModelPart[] {
     const ankleZ = -0.01 + 0.05 * front;
     const bone = side > 0 ? 'L' : 'R';
     parts.push(
-      ...skinned([t([x, 0.95, 0], [x, 0.5, kneeZ], 0.083, 0.078, 'camo', CAMO)], `thigh${bone}`), // thigh
+      ...skinned([t([x, 0.95, 0], [x, 0.5, kneeZ], 0.083, 0.078, U.surface, U.color)], `thigh${bone}`), // thigh
       ...skinned(
         [
-          t([x, 0.5, kneeZ], [x, 0.16, ankleZ], 0.078, 0.078, 'camo', CAMO), // shin, trousers bloused over the boot
-          e([x, 0.195, ankleZ], [0.084, 0.06, 0.086], 'camo', CAMO), // the blousing
-          b([x, 0.52, kneeZ + 0.082], [0.1, 0.11, 0.046], 0.02, 'gear', KNEE), // knee pad
+          t([x, 0.5, kneeZ], [x, 0.16, ankleZ], 0.078, 0.078, U.surface, U.color), // shin, trousers bloused over the boot
+          e([x, 0.195, ankleZ], [0.084, 0.06, 0.086], U.surface, U.color), // the blousing
+          ...(look.pads ? [b([x, 0.52, kneeZ + 0.082], [0.1, 0.11, 0.046], 0.02, 'gear', KNEE)] : []), // knee pad
           t([x, 0.06, ankleZ + 0.015], [x, 0.21, ankleZ], 0.079, 0.079, 'polymer', BOOT, { caps: 2 }), // boot shaft, down to the sole
           e([x, 0.05, ankleZ + 0.065], [0.084, 0.066, 0.15], 'polymer', BOOT), // boot
         ],
@@ -91,47 +169,69 @@ function lowerBody(): ModelPart[] {
   parts.push(
     ...skinned(
       [
-        e([0, 0.99, 0], [0.18, 0.135, 0.125], 'camo', CAMO, undefined, 1), // pelvis
-        { kind: 'lathe', profile: [[0.96, -0.032], [1, -0.024], [1, 0.024], [0.96, 0.032]], c: [0, 1.065, 0], scale: [0.19, 1, 0.135], surface: 'gear', color: CARRIER, sides: 16 }, // belt
-        b([-0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // right hip: holster and utility pouch
-        b([-0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER), // its flap
-        b([0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', POUCH), // left hip: dump pouch
-        b([0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', CARRIER),
+        e([0, 0.99, 0], [0.18, 0.135, 0.125], U.surface, U.color, undefined, 1), // pelvis
+        { kind: 'lathe', profile: [[0.96, -0.032], [1, -0.024], [1, 0.024], [0.96, 0.032]], c: [0, 1.065, 0], scale: [0.19, 1, 0.135], surface: 'gear', color: look.hips.belt, sides: 16 }, // belt
+        b([-0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', look.hips.color), // right hip: holster and utility pouch (the officer's pistol holster)
+        b([-0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', look.hips.flap), // its flap
+        b([0.262, 1.04, 0.005], [0.13, 0.22, 0.1], 0.028, 'gear', look.hips.color), // left hip: dump pouch (the officer's map case)
+        b([0.262, 1.1, 0.06], [0.1, 0.04, 0.03], 0.01, 'gear', look.hips.flap),
       ],
       'pelvis',
     ),
-    ...pair({ ...b([0.19, 0.74, 0.01], [0.05, 0.17, 0.13], 0.022, 'camo', 0xd6d0bd), skin: 'thighL' }), // cargo pockets (the mirrored one rides the right thigh)
+    ...pair({ ...b([0.19, 0.74, 0.01], [0.05, 0.17, 0.13], 0.022, U.surface, U.pocket), skin: 'thighL' }), // cargo pockets (the mirrored one rides the right thigh)
   );
   return parts;
 }
 
-/** Torso: uniform, plate carrier with three magazine pouches, shoulder pads, assault pack, neck wrap. */
-function upperBody(): ModelPart[] {
+/** Torso: uniform, plate carrier with three magazine pouches, shoulder pads, assault pack, neck wrap (the officer: a plain tunic, a Sam Browne belt and a collar). */
+function upperBody(look: Look): ModelPart[] {
+  const U = look.uniform;
   const parts: ModelPart[] = [
-    e([0, 1.19, 0], [0.165, 0.12, 0.115], 'camo', CAMO, undefined, 1), // abdomen
-    e([0, 1.38, -0.005], [0.19, 0.17, 0.125], 'camo', CAMO, undefined, 1), // chest
-    { kind: 'lathe', profile: [[0.96, -0.07], [1, -0.06], [1, 0.06], [0.96, 0.07]], c: [0, 1.185, 0], scale: [0.185, 1, 0.13], surface: 'gear', color: CARRIER, sides: 16 }, // cummerbund
-    b([0, 1.36, 0.12], [0.31, 0.33, 0.05], 0.022, 'gear', CARRIER), // front plate
-    b([-0.095, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', POUCH), // three magazine pouches
-    b([0, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', POUCH),
-    b([0.095, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', POUCH),
-    b([-0.095, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', CARRIER), // their flaps
-    b([0, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', CARRIER),
-    b([0.095, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', CARRIER),
-    b([0.085, 1.45, 0.152], [0.105, 0.07, 0.04], 0.014, 'gear', POUCH), // admin pouch
-    b([0, 1.28, -0.2], [0.32, 0.38, 0.15], 0.05, 'camo', 0xb7b29d), // assault pack
-    t([-0.15, 1.5, -0.2], [0.15, 1.5, -0.2], 0.042, 0.042, 'gear', 0x5b5a3c), // sleeping mat rolled on top of it
+    e([0, 1.19, 0], [0.165, 0.12, 0.115], U.surface, U.color, undefined, 1), // abdomen
+    e([0, 1.38, -0.005], [0.19, 0.17, 0.125], U.surface, U.color, undefined, 1), // chest
     t([0, 1.5, 0], [0, 1.6, 0.015], 0.052, 0.05, 'skin', SKIN, { sides: 8 }), // neck
-    e([0, 1.548, 0.01], [0.098, 0.052, 0.098], 'cloth', WRAP), // neck wrap
   ];
-  // Shoulders: carrier straps and a shemagh draped over them, so the top row of the torso spheres (they reach y = 1.63) has something under it.
-  parts.push(...pair(b([0.15, 1.52, 0.0], [0.17, 0.05, 0.19], 0.02, 'gear', CARRIER)));
-  parts.push(...pair(e([0.15, 1.54, 0.012], [0.115, 0.068, 0.1], 'camo', CAMO_DARK)));
+  const C = look.carrier;
+  if (C) {
+    parts.push(
+      { kind: 'lathe', profile: [[0.96, -0.07], [1, -0.06], [1, 0.06], [0.96, 0.07]], c: [0, 1.185, 0], scale: [0.185, 1, 0.13], surface: 'gear', color: C.color, sides: 16 }, // cummerbund
+      b([0, 1.36, 0.12], [0.31, 0.33, 0.05], 0.022, 'gear', C.color), // front plate
+      b([-0.095, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', C.pouch), // three magazine pouches
+      b([0, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', C.pouch),
+      b([0.095, 1.255, 0.16], [0.08, 0.125, 0.045], 0.012, 'gear', C.pouch),
+      b([-0.095, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', C.color), // their flaps
+      b([0, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', C.color),
+      b([0.095, 1.31, 0.17], [0.075, 0.03, 0.045], 0.008, 'gear', C.color),
+      b([0.085, 1.45, 0.152], [0.105, 0.07, 0.04], 0.014, 'gear', C.pouch), // admin pouch
+    );
+    // Shoulders: carrier straps over them, so the top row of the torso spheres (they reach y = 1.63) has something under it.
+    parts.push(...pair(b([0.15, 1.52, 0.0], [0.17, 0.05, 0.19], 0.02, 'gear', C.color)));
+  } else {
+    // The officer's tunic: a waist band in the uniform's cloth (the same volume as the cummerbund), a Sam Browne belt across the chest,
+    // two breast pockets, a column of brass buttons and epaulettes where the straps would be.
+    parts.push(
+      { kind: 'lathe', profile: [[0.96, -0.07], [1, -0.06], [1, 0.06], [0.96, 0.07]], c: [0, 1.185, 0], scale: [0.185, 1, 0.13], surface: U.surface, color: U.dark, sides: 16 }, // tunic skirt
+      b([0.03, 1.33, 0.118], [0.04, 0.42, 0.012], 0.005, 'gear', LEATHER, [0, 0, 0.62]), // cross strap
+      ...pair(b([0.085, 1.42, 0.112], [0.085, 0.075, 0.02], 0.01, U.surface, U.pocket)), // breast pockets
+      ...[1.47, 1.38, 1.29, 1.2].map((y) => e([0, y, 0.122], [0.009, 0.009, 0.006], 'metal', 0xb08d3a)), // buttons
+    );
+    parts.push(...pair(b([0.15, 1.52, 0.0], [0.17, 0.05, 0.19], 0.02, U.surface, U.dark))); // epaulettes
+  }
+  if (look.pack) {
+    parts.push(
+      b([0, 1.28, -0.2], [0.32, 0.38, 0.15], 0.05, 'camo', 0xb7b29d), // assault pack
+      t([-0.15, 1.5, -0.2], [0.15, 1.5, -0.2], 0.042, 0.042, 'gear', 0x5b5a3c), // sleeping mat rolled on top of it
+    );
+  }
+  // The neck: a tan shemagh, or the collar of the officer's shirt.
+  parts.push(e([0, 1.548, 0.01], [0.098, 0.052, 0.098], 'cloth', look.faceWrap ? WRAP : look.carrier ? U.dark : 0xc9bf9a));
+  // A shemagh (or the cloth of the shoulders) draped over them, so the top row of the torso spheres (they reach y = 1.63) has something under it.
+  parts.push(...pair(e([0.15, 1.54, 0.012], [0.115, 0.068, 0.1], U.surface, U.dark)));
   return skinned(parts, SPINE);
 }
 
-/** Head: skull, face wrap, sunglasses, ears, and the helmet with its cover, goggles and mount. */
-function head(): ModelPart[] {
+/** Head: skull, face wrap, sunglasses, ears, and the helmet with its cover, goggles and mount (the officer: a bare face and a red beret). */
+function head(look: Look): ModelPart[] {
   const helmet: ModelPart = {
     kind: 'lathe',
     // skirt, side wall, crown (radius, height above the rim), scaled to 0.30 m wide and 0.35 m long
@@ -147,33 +247,48 @@ function head(): ModelPart[] {
     c: [0, 1.7, -0.016],
     scale: [1.0, 1.03, 1.1],
     rot: [-0.3, 0, 0],
-    surface: 'camo',
-    color: CAMO_DARK,
+    surface: look.uniform.surface === 'camo' ? 'camo' : 'gear',
+    color: look.hat,
     sides: 16,
   };
-  return skinned([
+  const parts: ModelPart[] = [
     e([0, 1.645, 0.012], [0.1, 0.117, 0.11], 'skin', SKIN, undefined, 1), // skull and face
     ...pair(e([0.1, 1.652, -0.005], [0.022, 0.042, 0.03], 'skin', SKIN)), // ears
-    e([0, 1.604, 0.054], [0.1, 0.058, 0.074], 'cloth', WRAP), // face wrap over nose and mouth
-    e([0, 1.666, 0.086], [0.085, 0.02, 0.035], 'glass', LENS, undefined, 1), // wraparound sunglasses
-    helmet,
-    { kind: 'lathe', profile: [[0.154, -0.014], [0.166, -0.012], [0.166, 0.012], [0.154, 0.014]], c: [0, 1.716, -0.016], scale: [1.0, 1.03, 1.1], rot: [-0.3, 0, 0], surface: 'gear', color: GLOVE, sides: 16 }, // helmet band
     e([0, 1.632, 0.113], [0.014, 0.024, 0.022], 'skin', SKIN), // nose
-  ], 'head');
+  ];
+  if (look.faceWrap) parts.push(e([0, 1.604, 0.054], [0.1, 0.058, 0.074], 'cloth', WRAP)); // face wrap over nose and mouth
+  else parts.push(e([0, 1.585, 0.07], [0.078, 0.045, 0.06], 'skin', 0x8d6a4d)); // jaw and chin, a shade darker (a day's beard)
+  if (look.glasses) parts.push(e([0, 1.666, 0.086], [0.085, 0.02, 0.035], 'glass', LENS, undefined, 1)); // wraparound sunglasses
+  if (look.headgear === 'helmet') {
+    parts.push(
+      helmet,
+      { kind: 'lathe', profile: [[0.154, -0.014], [0.166, -0.012], [0.166, 0.012], [0.154, 0.014]], c: [0, 1.716, -0.016], scale: [1.0, 1.03, 1.1], rot: [-0.3, 0, 0], surface: 'gear', color: GLOVE, sides: 16 }, // helmet band
+    );
+  } else {
+    // The beret: a full, soft disc of felt pulled down over his right ear and puffed up to his left, wider than the head so its colour
+    // reads as a blob at range; a black leather band round the brow and a gold badge over the left eye.
+    parts.push(
+      e([0.03, 1.745, -0.006], [0.14, 0.05, 0.135], 'cloth', look.hat, [0.05, 0, 0.22], 1),
+      { kind: 'lathe', profile: [[0.104, -0.012], [0.108, -0.006], [0.108, 0.006], [0.104, 0.012]], c: [0, 1.712, 0.004], scale: [1, 1, 1.1], rot: [-0.08, 0, 0.12], surface: 'gear', color: 0x1a1412, sides: 16 },
+      e([0.045, 1.73, 0.11], [0.018, 0.022, 0.008], 'metal', 0xc79a3a),
+    );
+  }
+  return skinned(parts, 'head');
 }
 
 /** The arms: shoulder to elbow hanging at the side, elbow to hand carrying the rifle; gloves. */
-function arms(): ModelPart[] {
+function arms(look: Look): ModelPart[] {
+  const U = look.uniform;
   const { rightElbow, leftElbow, rightHand, leftHand, shoulderX, shoulderY } = SOLDIER_JOINTS;
   const parts: ModelPart[] = [];
   const arm = (shoulder: V3, elbow: V3, hand: V3, bone: 'L' | 'R'): void => {
     parts.push(
-      ...skinned([t(shoulder, elbow, 0.073, 0.058, 'camo', CAMO, { caps: 2 })], `upperArm${bone}`), // upper arm, its rounded top is the shoulder
+      ...skinned([t(shoulder, elbow, 0.073, 0.058, U.surface, U.color, { caps: 2 })], `upperArm${bone}`), // upper arm, its rounded top is the shoulder
       ...skinned(
         [
-          e(elbow, [0.058, 0.058, 0.052], 'gear', KNEE), // elbow pad
-          t(elbow, hand, 0.054, 0.042, 'camo', CAMO), // forearm
-          e(hand, [0.046, 0.046, 0.056], 'gear', GLOVE), // gloved hand
+          look.pads ? e(elbow, [0.058, 0.058, 0.052], 'gear', KNEE) : e(elbow, [0.058, 0.058, 0.052], U.surface, U.color), // elbow pad, or the sleeve's elbow
+          t(elbow, hand, 0.054, 0.042, U.surface, U.color), // forearm
+          look.gloves ? e(hand, [0.046, 0.046, 0.056], 'gear', GLOVE) : e(hand, [0.044, 0.044, 0.052], 'skin', SKIN), // gloved or bare hand
         ],
         `foreArm${bone}`,
       ),
@@ -184,8 +299,20 @@ function arms(): ModelPart[] {
   return parts;
 }
 
-/** The assault rifle, along +Z from the butt (z = 0) to the muzzle (z = 0.84), top at +Y. */
-function rifle(): ModelPart[] {
+/** The assault rifle, along +Z from the butt (z = 0) to the muzzle (z = 0.84), top at +Y; the compact one (the bodyguards') ends at 0.66. */
+function rifle(kind: 'assault' | 'compact'): ModelPart[] {
+  if (kind === 'compact') {
+    return [
+      b([0, -0.02, 0.07], [0.036, 0.07, 0.14], 0.012, 'polymer', FURNITURE), // folding stock
+      b([0, 0, 0.27], [0.05, 0.085, 0.22], 0.01, 'metal', STEEL), // receiver
+      b([0, 0.055, 0.27], [0.024, 0.02, 0.22], 0.006, 'metal', STEEL), // top rail
+      t([0, 0.085, 0.24], [0, 0.085, 0.31], 0.019, 0.019, 'polymer', 0x1a1c1d, { sides: 8 }), // red dot
+      t([0, -0.035, 0.24], [0, -0.115, 0.225], 0.019, 0.017, 'polymer', FURNITURE, { sides: 8 }), // pistol grip
+      b([0, -0.1, 0.31], [0.032, 0.11, 0.055], 0.006, 'metal', STEEL, [-0.18, 0, 0]), // magazine
+      t([0, 0, 0.38], [0, 0, 0.55], 0.032, 0.032, 'polymer', FURNITURE, { sides: 8 }), // short handguard
+      t([0, 0, 0.55], [0, 0, 0.66], 0.016, 0.016, 'metal', STEEL, { sides: 8 }), // barrel and flash hider
+    ];
+  }
   return [
     b([0, -0.02, 0.095], [0.04, 0.085, 0.19], 0.012, 'polymer', FURNITURE), // stock
     b([0, -0.02, 0.005], [0.042, 0.1, 0.018], 0.006, 'polymer', 0x1c1b18), // butt pad
@@ -203,10 +330,10 @@ function rifle(): ModelPart[] {
   ];
 }
 
-/** The whole soldier as groups of parts (the rifle in its own frame, laid along its direction). */
-export function soldierModel(): ModelGroup[] {
-  return [
-    { parts: [...lowerBody(), ...upperBody(), ...head(), ...arms()] },
-    { frame: frameAlong(SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR), parts: skinned(rifle(), 'rifle') },
-  ];
+/** The whole soldier as groups of parts (the rifle in its own frame, laid along its direction); `variant` picks who he is (see `SoldierVariant`). */
+export function soldierModel(variant: SoldierVariant = 'rifleman'): ModelGroup[] {
+  const look = LOOKS[variant];
+  const groups: ModelGroup[] = [{ parts: [...lowerBody(look), ...upperBody(look), ...head(look), ...arms(look)] }];
+  if (look.rifle) groups.push({ frame: frameAlong(SOLDIER_RIFLE_BUTT, SOLDIER_RIFLE_DIR), parts: skinned(rifle(look.rifle), 'rifle') });
+  return groups;
 }

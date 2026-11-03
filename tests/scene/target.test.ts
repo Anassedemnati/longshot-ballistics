@@ -343,3 +343,26 @@ describe('dummy fall and reset', () => {
     });
   });
 });
+
+describe('the HVT officer and his bodyguards are the same body', () => {
+  for (const variant of ['officer', 'guard'] as const) {
+    it(`a ${variant}: drawn with his own geometry on the soldier's skeleton, the same hit spheres, and he goes down as a ragdoll`, () => {
+      const plain = createTargetDummy({ x: 0, y: 0, z: -300 }, 0, 'plain');
+      const dummy = createTargetDummy({ x: 0, y: 0, z: -300 }, 0, variant, { autoReset: false, variant });
+      const mesh = (d: typeof dummy) => {
+        let found: THREE.SkinnedMesh | null = null;
+        d.group.traverse((o) => {
+          if (o instanceof THREE.SkinnedMesh) found = o;
+        });
+        return found as unknown as THREE.SkinnedMesh;
+      };
+      expect(mesh(dummy).geometry).not.toBe(mesh(plain).geometry);
+      expect(dummy.hitTarget.zones.map((z) => [z.name, z.radius])).toEqual(plain.hitTarget.zones.map((z) => [z.name, z.radius]));
+      dummy.knockDown();
+      advance(dummy, FALL_DURATION + 0.5);
+      expect(dummy.down).toBe(true);
+      expect(neck(dummy).y).toBeLessThan(0.5);
+      expect(neck(dummy).y).toBeGreaterThan(0.02);
+    });
+  }
+});

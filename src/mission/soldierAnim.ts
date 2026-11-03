@@ -12,8 +12,11 @@ import type { PoseParams } from './soldierPose';
 // The gait is tied to the DISTANCE he covers, not to the clock (a stride is a length of ground), so a foot on the ground is carried back
 // exactly as fast as he moves forward and does not skate.
 
-/** How he moves when he moves: a sprint (upright, long strides, port arms) or a crouch-run (low, short strides, the rifle up). */
-export type Gait = 'none' | 'sprint' | 'crouchRun';
+/**
+ * How he moves when he moves: a sprint (upright, long strides, port arms), a crouch-run (low, short strides, the rifle up) or a walk
+ * (upright, unhurried: the HVT's party before the alarm).
+ */
+export type Gait = 'none' | 'sprint' | 'crouchRun' | 'walk';
 /** How he holds himself when he stands still. */
 export type Stance = 'stand' | 'crouch' | 'kneel';
 
@@ -30,6 +33,8 @@ export interface AnimIntent {
   /** Where the target is, relative to the way his body faces: yaw (positive: toward his left) and pitch, rad. */
   aimYaw: number;
   aimPitch: number;
+  /** His hands are clasped behind his back (an officer with no rifle, at ease). Default: on the rifle. */
+  handsBehind?: boolean;
 }
 
 /** Ground height at a point of the body's frame (x to his left, z in front), relative to the ground at his feet, m. */
@@ -58,6 +63,8 @@ const STANCES: Record<Stance, Posture> = {
 const GAITS = {
   sprint: { pelvisY: 0.88, pitch: 0.25, duty: 0.3, lift: 0.26, width: 0.1, bob: 0.032, cycleBase: 0.4, cycleRate: 0.49 },
   crouchRun: { pelvisY: 0.7, pitch: 0.5, duty: 0.5, lift: 0.1, width: 0.13, bob: 0.02, cycleBase: 0.5, cycleRate: 0.45 },
+  // A walk: nearly upright, more than half the stride on the ground, the foot barely lifted; 1.4 m/s gives a 1.4 m stride (two steps).
+  walk: { pelvisY: 0.965, pitch: 0.05, duty: 0.62, lift: 0.07, width: 0.09, bob: 0.014, cycleBase: 0.7, cycleRate: 0.5 },
 } as const;
 
 /** Time constants, s: posture (height, lean, feet), the rifle coming up or down, the blend into and out of the gait. */
@@ -79,7 +86,7 @@ const chase = (value: number, target: number, dt: number, tau: number): number =
 const fract = (v: number): number => v - Math.floor(v);
 
 /** Stride of a gait at a speed: the ground one full cycle (two steps) covers, m. */
-export function cycleLength(gait: 'sprint' | 'crouchRun', speed: number): number {
+export function cycleLength(gait: Exclude<Gait, 'none'>, speed: number): number {
   const g = GAITS[gait];
   return g.cycleBase + g.cycleRate * Math.max(0, speed);
 }
@@ -102,7 +109,9 @@ export class SoldierAnimator {
   private aim = 0;
   private recoil = 0;
   private bank = 0;
-  private gait: 'sprint' | 'crouchRun' = 'sprint';
+  private gait: Exclude<Gait, 'none'> = 'sprint';
+  /** 0..1: how far his hands are behind his back. */
+  private behind = 0;
   // Where the head looks when he idles, and when it changes his mind.
   private look = 0;
   private lookTarget = 0;
@@ -165,6 +174,7 @@ export class SoldierAnimator {
 
     // The rifle comes up to the shoulder and down again; the torso turns toward what he aims at.
     this.aim = chase(this.aim, intent.aim ? 1 : 0, dt, AIM_TAU);
+    this.behind = chase(this.behind, intent.handsBehind ? 1 : 0, dt, 0.25);
     this.recoil *= Math.exp(-dt / RECOIL_TAU);
     const aimYaw = clamp(intent.aimYaw, -0.9, 0.9);
 
@@ -199,6 +209,7 @@ export class SoldierAnimator {
     p.aim = this.aim;
     p.aimPitch = clamp(intent.aimPitch, -0.5, 0.5);
     p.recoil = this.recoil;
+    p.behind = this.behind;
     this.headYaw = this.look - p.twist;
 
     // Feet: planted at the stance's spot, or striding; a foot on higher ground rides higher, and the pelvis drops with the lower one.

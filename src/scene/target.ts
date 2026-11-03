@@ -16,6 +16,7 @@ import {
 import { JOINT_FLOATS } from '../mission/soldierPose';
 import { S, SOLDIER_RIG, soldierFall } from '../mission/soldierRig';
 import type { FallHit } from '../mission/soldierRig';
+import type { SoldierVariant } from '../mission/soldierModel';
 import { HEAD_BONE, attachSpheres, placeSpheres } from '../mission/soldierSpheres';
 import { enemyMaterial } from './enemyMaterial';
 import { createRagdollBody, seedOf } from './ragdollBody';
@@ -234,10 +235,10 @@ const BOUNDS_MARGIN = 0.05;
 
 let bodyMaterial: THREE.MeshStandardMaterial | null = null;
 
-/** The soldier's geometry and material (shared by every dummy). */
-function dummyBody(): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial } {
+/** The soldier's geometry (one per variant) and material (shared by every dummy). */
+function dummyBody(variant: SoldierVariant): { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial } {
   bodyMaterial ??= enemyMaterial();
-  return { geometry: soldierGeometry(), material: bodyMaterial };
+  return { geometry: soldierGeometry(variant), material: bodyMaterial };
 }
 
 /**
@@ -247,13 +248,14 @@ function dummyBody(): { geometry: THREE.BufferGeometry; material: THREE.MeshStan
  * `id` is the HitTarget id the bullets report. `autoReset` (default true, the stage-1 practice range)
  * makes the dummy stand up again RESET_DELAY s after its fall; a mission passes false so a downed
  * soldier stays down (reset() still works). `ground` is the world's ground height (x, z), where his body comes to rest
- * when it falls; without it the ground is flat at his feet.
+ * when it falls; without it the ground is flat at his feet. `variant` draws the HVT officer or one of his bodyguards on the same
+ * skeleton and hit spheres (mission/soldierModel.ts).
  */
 export function createTargetDummy(
   position: Vec3,
   yaw: number,
   id = 'dummy',
-  opts: { autoReset?: boolean; ground?: (x: number, z: number) => number } = {},
+  opts: { autoReset?: boolean; ground?: (x: number, z: number) => number; variant?: SoldierVariant } = {},
 ): SoldierDummy {
   const autoReset = opts.autoReset ?? true;
   const groundY = position.y;
@@ -273,7 +275,7 @@ export function createTargetDummy(
   };
 
   // The whole body is one mesh (see `dummyBody`): the helmet, rifle, pouches and boots are too small to be worth a draw of their own, so they ride along.
-  const shared = dummyBody();
+  const shared = dummyBody(opts.variant ?? 'rifleman');
   const ragdoll = createRagdollBody<FallHit>({
     rig: SOLDIER_RIG,
     geometry: shared.geometry,

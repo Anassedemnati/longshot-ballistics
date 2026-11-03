@@ -28,6 +28,8 @@ const POSES: Record<string, Partial<PoseParams>> = {
   crouched: { pelvisY: 0.52, pitch: 0.65, footL: [0.2, 0.16, 0.15], footR: [-0.2, 0.16, -0.12] },
   'kneeling, aimed': { pelvisY: 0.62, pitch: 0.12, aim: 1, footL: [0.17, 0.16, 0.4], footR: [-0.12, 0.2, -0.36] },
   'sprinting': { pelvisY: 0.88, pitch: 0.25, twist: 0.07, roll: 0.03, footL: [0.1, 0.16, 0.38], footR: [-0.1, 0.4, -0.3] },
+  'hands behind his back (the officer)': { behind: 1, twist: 0.2 },
+  'walking, hands half way back': { pelvisY: 0.965, pitch: 0.05, behind: 0.5, footL: [0.09, 0.2, 0.3], footR: [-0.09, 0.16, -0.25] },
 };
 
 describe('poseJoints', () => {
@@ -78,5 +80,15 @@ describe('poseJoints', () => {
     expect(crouch[S.pelvis * 3 + 1]).toBeLessThan(stand[S.pelvis * 3 + 1] - 0.4);
     expect(crouch[S.head * 3 + 1]).toBeLessThan(1.25);
     expect(crouch[S.head * 3 + 2]).toBeGreaterThan(stand[S.head * 3 + 2] + 0.2);
+  });
+});
+
+describe('the officer at ease', () => {
+  it('clasps his hands at the small of his back, close together, his elbows out', () => {
+    const j = pose({ behind: 1 });
+    for (const hand of [S.handL, S.handR]) expect(at(j, hand)[2], `hand ${hand}`).toBeLessThan(-0.1);
+    expect(dist(at(j, S.handL), at(j, S.handR))).toBeLessThan(0.15);
+    expect(at(j, S.elbL)[0]).toBeGreaterThan(0.2);
+    expect(at(j, S.elbR)[0]).toBeLessThan(-0.2);
   });
 });

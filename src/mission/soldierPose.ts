@@ -40,6 +40,11 @@ export interface PoseParams {
   aimPitch: number;
   /** 0..1: how far the rifle has kicked back (it decays on its own). */
   recoil: number;
+  /**
+   * 0..1: how far his hands have left the rifle's grips for the small of his back, clasped there (the HVT officer, who carries no rifle,
+   * at ease). Default 0. The arms keep their bone lengths: the hands are a target for the same two-bone solve.
+   */
+  behind?: number;
   /** Ankle targets (the ankle joint stands this high above the sole: 0.16 m). x sideways, y up from the ground at his feet, z forward. */
   footL: [number, number, number];
   footR: [number, number, number];
@@ -98,6 +103,12 @@ const LOW_DIR: V = (() => {
  * right shoulder, a little in front of it. Its direction is not here: aimed, it is "straight ahead of the chest, pitched by `aimPitch`".
  */
 const AIM_BUTT: V = [-0.17, 1.44, 0.09];
+
+/** Where the hands rest clasped at the small of his back, in the chest's bind frame (right, left), m. */
+const BEHIND_R: V = [-0.045, 1.03, -0.19];
+const BEHIND_L: V = [0.05, 1.05, -0.2];
+/** Scratch for the clasped hands' place. */
+const behindScratch = new Float64Array(3);
 
 /** The rifle's frame for the direction `d` with its up as close to the world's as it gets (as the rifle bone: scene's `rifle` bone side is up). Columns x, y, z. */
 function rifleFrame(d: V, out: Float64Array): void {
@@ -322,12 +333,21 @@ export function poseJoints(out: Float64Array, p: PoseParams): void {
     o[2] = bz + f[2] * g[0] + f[5] * g[1] + f[8] * g[2];
   };
   const hand = new Float64Array(3);
+  const behind = Math.min(1, Math.max(0, p.behind ?? 0));
   for (const [sh, elbow, hd, low, shouldered, arm, side] of [
     [S.shR, S.elbR, S.handR, GRIP_R, GRIP_AIM_R, ARM_R, -1],
     [S.shL, S.elbL, S.handL, GRIP_L, GRIP_AIM_L, ARM_L, 1],
   ] as const) {
     gripAt(gripFor(low, shouldered, aim, gripScratch), hand);
-    turn(t1, side * 0.6, -1, -0.25, p.roll, p.pitch, p.twist);
+    if (behind > 0) {
+      // Hands off the grips to the small of the back, turning with the torso; the elbows go out and back.
+      const at = side < 0 ? BEHIND_R : BEHIND_L;
+      turn(behindScratch, at[0] - PELVIS[0], at[1] - PELVIS[1], at[2] - PELVIS[2], p.roll, p.pitch, p.twist);
+      hand[0] += (px + behindScratch[0] - hand[0]) * behind;
+      hand[1] += (py + behindScratch[1] + rise - hand[1]) * behind;
+      hand[2] += (pz + behindScratch[2] - hand[2]) * behind;
+    }
+    turn(t1, side * (0.6 + 0.4 * behind), -1, -0.25 - 0.6 * behind, p.roll, p.pitch, p.twist);
     solveTwoBone(out[sh * 3], out[sh * 3 + 1], out[sh * 3 + 2], hand[0], hand[1], hand[2], arm[0], arm[1], t1[0], t1[1], t1[2]);
     put(out, elbow, mid[0], mid[1], mid[2]);
     put(out, hd, end[0], end[1], end[2]);

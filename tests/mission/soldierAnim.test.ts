@@ -40,6 +40,17 @@ describe('SoldierAnimator', () => {
     expect(worst).toBeLessThan(0.03); // and does not move 3 cm in a frame over the ground (that is 1.8 m/s of skating)
   });
 
+  it('walks upright with a stride of about 1.4 m at 1.4 m/s, and takes his hands behind his back when told', () => {
+    expect(cycleLength('walk', 1.4)).toBeCloseTo(1.4, 1);
+    const a = new SoldierAnimator(3);
+    const walk: AnimIntent = { speed: 1.4, gait: 'walk', stance: 'stand', aim: false, turnRate: 0, aimYaw: 0, aimPitch: 0, handsBehind: true };
+    step(a, walk, 2);
+    expect(a.joints[S.pelvis * 3 + 1]).toBeGreaterThan(0.9); // upright, not the sprint's 0.88 crouch
+    expect(a.joints[S.handL * 3 + 2]).toBeLessThan(-0.05);
+    step(a, { ...walk, handsBehind: false }, 1.5);
+    expect(a.joints[S.handL * 3 + 2]).toBeGreaterThan(0.2); // back on the (absent) rifle's grip
+  });
+
   it('covers a cycle of ground in a cycle: a longer stride at a higher speed, and a crouch-run shorter than a sprint', () => {
     expect(cycleLength('sprint', 4.3)).toBeGreaterThan(cycleLength('sprint', 3));
     expect(cycleLength('crouchRun', 2.5)).toBeLessThan(cycleLength('sprint', 4.3));
