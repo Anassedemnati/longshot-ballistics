@@ -317,11 +317,12 @@ function ringArc(parts: PartSet, radius: number, tube: number, y: number, z: num
 /**
  * Build the rifle model (no WebGL needed), after public/references/rifle-concept.png: a bolt action on a chassis with
  * a slotted handguard, moulded pistol grip and a stock with a cheek riser (solid on the .308, skeleton on the .338),
- * a 30 mm scope on a rail, the gloved hands holding grip and handguard (unless `hands` is false), the bolt handle as its
- * own small group, and - only when `suppressed` - a suppressor group on the muzzle. The camera looks down -z; +x is to
- * the right. One mesh per surface: stock (polymer / cerakote), metal, rubber, glass, glove.
+ * a 30 mm scope on a rail, the gloved hands holding grip and handguard (unless `hands` is false; `ghillie`, an sRGB hex from
+ * GHILLIE_TINT, dresses their sleeves in a ghillie suit), the bolt handle as its own small group, and - only when `suppressed` -
+ * a suppressor group on the muzzle. The camera looks down -z; +x is to the right. One mesh per surface: stock (polymer /
+ * cerakote), metal, rubber, glass, glove.
  */
-export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = true): RifleModel {
+export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = true, ghillie: number | null = null): RifleModel {
   const materials = makeMaterials(id);
   const group = new THREE.Group();
   const body = new PartSet();
@@ -562,7 +563,7 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
     for (const side of [-1, 1]) body.tube('metal', 0.0035, 0.0035, 0.002, side * 0.0255, -0.005, z, Math.PI / 2, Math.PI / 2, bare); // chassis screws
   }
 
-  if (hands) addHands(body);
+  if (hands) addHands(body, ghillie);
   for (const mesh of body.toMeshes(materials)) group.add(mesh);
 
   // The bolt handle: a bent rod out of the receiver's right side and its round knob, local to the pivot.
@@ -695,7 +696,8 @@ class MuzzleFlash {
  * after a shot that leaves a round to chamber, and a dip on `reload()`. Its own scene, camera and lights keep it
  * apart from the world: `render` draws it on top of what the world pass drew. Pure state plus three.js objects:
  * it builds and animates without WebGL (only `render` needs a renderer).
- * A suppressed rifle has the suppressor fitted and never flashes.
+ * A suppressed rifle has the suppressor fitted and never flashes. `ghillie` (an sRGB hex from GHILLIE_TINT) puts the
+ * player's sleeves in a ghillie suit; null leaves the plain ones.
  */
 export class FirstPersonRifle {
   readonly scene = new THREE.Scene();
@@ -729,8 +731,9 @@ export class FirstPersonRifle {
   constructor(
     id: Rifle['id'],
     readonly suppressed = false,
+    ghillie: number | null = null,
   ) {
-    const built = buildRifleModel(id, suppressed);
+    const built = buildRifleModel(id, suppressed, true, ghillie);
     this.model = built.group;
     this.bolt = built.bolt;
     this.flash = suppressed ? null : new MuzzleFlash(built.muzzleZ);

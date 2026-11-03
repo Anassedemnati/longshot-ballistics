@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { ThemeId } from '../mission/themes';
 import type { MaterialKey, PartSet, PartStyle } from './rifleParts';
 
 // The shooter's gloved hands and sleeves, sculpted from capsules and ellipsoids (camo-tan cloth, rubber cuffs):
@@ -19,6 +20,18 @@ const HANDGUARD_HAND = new THREE.Matrix4().compose(new THREE.Vector3(0, 0.05, 0)
 /** The sleeve tint over the glove's camo cloth: darker, greyer. */
 const SLEEVE: PartStyle = { color: 0xb4ae98 };
 const GLOVE: PartStyle = {};
+
+/**
+ * The tint of the ghillie suit's sleeves (and the glove cuffs they run into) per theme, sRGB hex, in place of SLEEVE's grey: dry
+ * sand-and-straw in the desert, snow-white in the arctic, moss green in the valley. It multiplies the glove's camo cloth, like SLEEVE does.
+ */
+export const GHILLIE_TINT: Readonly<Record<ThemeId, number>> = { desert: 0xa08a5e, arctic: 0xd8dcd6, valley: 0x5f6b3c };
+
+/** How the forearms are dressed: the sleeve tube and the cuff tube beside the glove (a ghillie suit tints both, else the plain sleeve and glove). */
+interface Cloth {
+  sleeve: PartStyle;
+  cuff: PartStyle;
+}
 
 interface Segment {
   /** Joint-to-joint length, m. */
@@ -74,7 +87,7 @@ function v(x: number, y: number, z: number): THREE.Vector3 {
 }
 
 /** The right hand on the pistol grip, built in the grip's own frame, and its sleeve. */
-function rightHand(parts: PartSet): void {
+function rightHand(parts: PartSet, cloth: Cloth): void {
   const frame = new THREE.Matrix4().compose(GRIP_CENTER, new THREE.Quaternion().setFromEuler(new THREE.Euler(GRIP_LEAN_RAD, 0, 0)), GRIP_HAND_SCALE);
   parts.setFrame(frame);
 
@@ -116,9 +129,9 @@ function rightHand(parts: PartSet): void {
   const wrist = v(0.045, -0.109, 0.1);
   const cuffEnd = v(0.095, -0.138, 0.172);
   const elbow = v(0.3, -0.33, 0.62);
-  sleeve(parts, 'glove', wrist, cuffEnd, 0.03, 0.036, GLOVE);
+  sleeve(parts, 'glove', wrist, cuffEnd, 0.03, 0.036, cloth.cuff);
   parts.place('rubber', new THREE.TorusGeometry(0.0375, 0.0045, 8, 24), ringMatrix(cuffEnd, cuffEnd.clone().sub(wrist)));
-  sleeve(parts, 'glove', cuffEnd, elbow, 0.05, 0.07, SLEEVE);
+  sleeve(parts, 'glove', cuffEnd, elbow, 0.05, 0.07, cloth.sleeve);
 }
 
 /** A matrix that puts a torus (lying in xy, axis z) round `axis` at `at`. */
@@ -128,7 +141,7 @@ function ringMatrix(at: THREE.Vector3, axis: THREE.Vector3): THREE.Matrix4 {
 }
 
 /** The left hand cupping the underside of the fore-end, thumb along its left side, and its sleeve. */
-function leftHand(parts: PartSet): void {
+function leftHand(parts: PartSet, cloth: Cloth): void {
   parts.setFrame(HANDGUARD_HAND);
   parts.ellipsoid('glove', 0.04, 0.017, 0.052, 0, -0.06, -0.335);
   parts.ellipsoid('glove', 0.016, 0.02, 0.034, -0.036, -0.058, -0.3);
@@ -157,14 +170,18 @@ function leftHand(parts: PartSet): void {
   const away = v(0.0, -0.6, 0.8).normalize();
   const cuffEnd = wrist.clone().addScaledVector(away, 0.075);
   const elbow = wrist.clone().addScaledVector(away, 0.3);
-  sleeve(parts, 'glove', wrist, cuffEnd, 0.029, 0.035, GLOVE);
+  sleeve(parts, 'glove', wrist, cuffEnd, 0.029, 0.035, cloth.cuff);
   parts.place('rubber', new THREE.TorusGeometry(0.0365, 0.0045, 8, 24), ringMatrix(cuffEnd, cuffEnd.clone().sub(wrist)));
-  sleeve(parts, 'glove', cuffEnd, elbow, 0.049, 0.069, SLEEVE);
+  sleeve(parts, 'glove', cuffEnd, elbow, 0.049, 0.069, cloth.sleeve);
   parts.setFrame(null);
 }
 
-/** Add both gloved hands and their sleeves to `parts` (the glove and rubber meshes of the rifle). */
-export function addHands(parts: PartSet): void {
-  rightHand(parts);
-  leftHand(parts);
+/**
+ * Add both gloved hands and their sleeves to `parts` (the glove and rubber meshes of the rifle). `ghillie` is the sRGB hex of a ghillie
+ * suit (see GHILLIE_TINT) and recolours the sleeves and the cuffs; null (the default) leaves the plain camo-tan ones.
+ */
+export function addHands(parts: PartSet, ghillie: number | null = null): void {
+  const cloth: Cloth = ghillie === null ? { sleeve: SLEEVE, cuff: GLOVE } : { sleeve: { color: ghillie }, cuff: { color: ghillie } };
+  rightHand(parts, cloth);
+  leftHand(parts, cloth);
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { BOLT_TIME_S, RELOAD_TIME_S } from '../../src/game/weapon';
+import { GHILLIE_TINT } from '../../src/player/rifleHands';
 import {
   BARREL_LENGTH_M,
   FirstPersonRifle,
@@ -92,6 +93,43 @@ describe('rifle model', () => {
       return ((stock as THREE.Mesh).material as THREE.MeshStandardMaterial).color.getHex();
     };
     expect(stockColour('308')).not.toBe(stockColour('338'));
+  });
+});
+
+describe('ghillie suit sleeves', () => {
+  /** The glove mesh's per-vertex albedo, summed: the plain model and a ghillie one differ only here (the sleeves and cuffs are glove parts). */
+  const gloveColour = (ghillie: number | null): { sum: number[]; vertices: number } => {
+    const glove = meshes(buildRifleModel('308', false, true, ghillie).group).find((m) => m.name === 'glove') as THREE.Mesh;
+    const color = glove.geometry.getAttribute('color');
+    const sum = [0, 0, 0];
+    for (let i = 0; i < color.count; i++) for (let c = 0; c < 3; c++) sum[c] += color.getComponent(i, c);
+    return { sum, vertices: color.count };
+  };
+
+  it('a ghillie tint recolours the glove mesh and changes no geometry', () => {
+    const plain = gloveColour(null);
+    const same = gloveColour(null);
+    expect(same).toEqual(plain);
+    for (const theme of ['desert', 'arctic', 'valley'] as const) {
+      const suit = gloveColour(GHILLIE_TINT[theme]);
+      expect(suit.vertices).toBe(plain.vertices);
+      expect(suit.sum).not.toEqual(plain.sum);
+    }
+  });
+
+  it('the arctic suit is the lightest and the valley suit the greenest', () => {
+    const lum = (hex: number): number => gloveColour(hex).sum.reduce((a, b) => a + b, 0);
+    expect(lum(GHILLIE_TINT.arctic)).toBeGreaterThan(lum(GHILLIE_TINT.desert));
+    expect(lum(GHILLIE_TINT.arctic)).toBeGreaterThan(lum(GHILLIE_TINT.valley));
+    const valley = gloveColour(GHILLIE_TINT.valley).sum;
+    expect(valley[1]).toBeGreaterThan(valley[0]);
+    expect(valley[1]).toBeGreaterThan(valley[2]);
+  });
+
+  it('leaves the model alone without hands, and FirstPersonRifle takes the tint as an optional third argument', () => {
+    expect(meshes(buildRifleModel('308', false, false, GHILLIE_TINT.desert).group).find((m) => m.name === 'glove')).toBeUndefined();
+    expect(new FirstPersonRifle('308', false, GHILLIE_TINT.valley).model).toBeDefined();
+    expect(new FirstPersonRifle('338', true).model).toBeDefined();
   });
 });
 

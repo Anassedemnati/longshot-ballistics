@@ -79,6 +79,8 @@ export function snipersLabel(count: number): string {
 export const SNIPERS_NOTE = '0 = training, no incoming fire';
 /** Under the suppressor switch (spec B.3: quieter, no flash, slower detection). */
 export const SUPPRESSOR_NOTE = 'Reduced noise / flash, slower detection';
+/** Under the ghillie suit switch (one line: the gear panel has no room for a third two-line note): hidden until the first shot. */
+export const GHILLIE_NOTE = 'Hard to spot until you fire.';
 /** Under the aim assists switch (spec B.5). */
 export const ASSISTS_NOTE = 'Trajectory, aim marker and spotter — training aid';
 

@@ -5,6 +5,8 @@ import { THEMES } from '../../src/mission/themes';
 import type { ThemeId } from '../../src/mission/themes';
 import type { FiringPosition } from '../../src/mission/config';
 import {
+  GHILLIE_NOTE,
+  SUPPRESSOR_NOTE,
   clockPoint,
   densityNote,
   linkRange,
@@ -178,7 +180,7 @@ describe('starting a mission', () => {
 
   it('startSearch gives a ?m= URL the router reads back as that mission with the new seed', () => {
     const search = startSearch({ ...DEFAULT_MISSION, theme: 'arctic', soldiers: 7 }, 424242, false);
-    expect(search.startsWith('?m=v2.')).toBe(true);
+    expect(search.startsWith('?m=v3.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('mission');
@@ -186,6 +188,13 @@ describe('starting a mission', () => {
     expect(route.config).toEqual({ ...DEFAULT_MISSION, theme: 'arctic', soldiers: 7, seed: 424242 });
     expect(route.debug).toBe(false);
     expect(route.legacy).toBe(false);
+  });
+
+  it('startSearch carries the ghillie suit through to the mission', () => {
+    const route = routeFromSearch(startSearch({ ...DEFAULT_MISSION, camo: true }, 5, false));
+    expect(route.kind === 'mission' && route.config.camo).toBe(true);
+    const plain = routeFromSearch(startSearch(DEFAULT_MISSION, 5, false));
+    expect(plain.kind === 'mission' && plain.config.camo).toBe(false);
   });
 
   it('startSearch keeps debug=1 when asked', () => {
@@ -214,7 +223,7 @@ describe('starting a mission', () => {
   it('menuSearch gives a ?last= URL the router reads back as the menu holding that mission', () => {
     const cfg = { ...DEFAULT_MISSION, theme: 'valley' as const, soldiers: 8, rangeMin: 250, rangeMax: 250, seed: 777 };
     const search = menuSearch(cfg, false);
-    expect(search.startsWith('?last=v2.')).toBe(true);
+    expect(search.startsWith('?last=v3.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('menu');
@@ -265,6 +274,13 @@ describe('firing position, enemy snipers and rifle art labels', () => {
     expect(snipersLabel(1)).toBe('1 sniper');
     expect(snipersLabel(2)).toBe('2 snipers');
     expect(snipersLabel(MISSION_LIMITS.enemySnipers.max)).toBe('3 snipers');
+  });
+
+  it('the ghillie suit note says what the suit does and when it stops, in one line of the gear panel (about 33 characters)', () => {
+    expect(GHILLIE_NOTE).toMatch(/hard to spot/i);
+    expect(GHILLIE_NOTE).toMatch(/until you fire/i);
+    expect(GHILLIE_NOTE.length).toBeLessThanOrEqual(33);
+    expect(GHILLIE_NOTE).not.toBe(SUPPRESSOR_NOTE);
   });
 
   it('rifleTitle names each rifle as the concept art does', () => {

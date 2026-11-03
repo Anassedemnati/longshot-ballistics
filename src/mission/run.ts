@@ -21,6 +21,7 @@ import { rangeUnderCrosshair } from '../game/rangefinder';
 import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
+import { GHILLIE_TINT } from '../player/rifleHands';
 import { PlayerView } from '../player/view';
 import { createPostFx } from '../scene/postfx';
 import type { PostFx } from '../scene/postfx';
@@ -146,8 +147,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // Player
   const view = new PlayerView(document.body, shooter, window.innerWidth, window.innerHeight);
   const input = new InputState();
-  // The visible rifle: drawn over the world when not scoped, no flash when suppressed.
-  const rifleModel = new FirstPersonRifle(config.rifle, config.suppressed);
+  // The visible rifle: drawn over the world when not scoped, no flash when suppressed, sleeves in the theme's ghillie tint when the suit is on.
+  const rifleModel = new FirstPersonRifle(config.rifle, config.suppressed, config.camo ? GHILLIE_TINT[config.theme] : null);
   rifleModel.resize(window.innerWidth, window.innerHeight);
 
   // Sky and post-processing: with the HDRI (background, image-based light, matched fog, exposure) the world is drawn

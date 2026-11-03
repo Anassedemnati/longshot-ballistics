@@ -41,6 +41,7 @@ describe('DEFAULT_MISSION', () => {
       suppressed: false,
       enemySnipers: 1,
       assists: false,
+      camo: false,
     });
   });
 
@@ -143,15 +144,18 @@ describe('clampMission', () => {
     expect(Object.is(clampMission({ enemySnipers: -0.3 }).enemySnipers, 0)).toBe(true);
   });
 
-  it('keeps the position, suppressor and assists, and falls back to their defaults for bad values', () => {
-    const c = clampMission({ position: 'mountain', suppressed: true, assists: true });
+  it('keeps the position, suppressor, ghillie suit and assists, and falls back to their defaults for bad values', () => {
+    const c = clampMission({ position: 'mountain', suppressed: true, assists: true, camo: true });
     expect(c.position).toBe('mountain');
     expect(c.suppressed).toBe(true);
     expect(c.assists).toBe(true);
-    const bad = clampMission({ position: 'moon', suppressed: 'yes', assists: 1 } as unknown as Partial<MissionConfig>);
+    expect(c.camo).toBe(true);
+    const bad = clampMission({ position: 'moon', suppressed: 'yes', assists: 1, camo: 'yes' } as unknown as Partial<MissionConfig>);
     expect(bad.position).toBe('ridge');
     expect(bad.suppressed).toBe(false);
     expect(bad.assists).toBe(false);
+    expect(bad.camo).toBe(false);
+    expect(clampMission({}).camo).toBe(false);
   });
 
   it('makes the seed an unsigned 32-bit integer', () => {
@@ -211,8 +215,8 @@ describe('encodeMission / decodeMission', () => {
     expect(decodeMission(encodeMission(DEFAULT_MISSION))).toEqual(DEFAULT_MISSION);
   });
 
-  it('writes the v2 code: the v1 fields, then position, suppressor, snipers and assists', () => {
-    expect(encodeMission(DEFAULT_MISSION)).toBe('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0');
+  it('writes the v3 code: the v1 fields, then position, suppressor, snipers, assists and the ghillie suit', () => {
+    expect(encodeMission(DEFAULT_MISSION)).toBe('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0');
     const c: MissionConfig = {
       ...DEFAULT_MISSION,
       theme: 'arctic',
@@ -220,15 +224,42 @@ describe('encodeMission / decodeMission', () => {
       suppressed: true,
       enemySnipers: 3,
       assists: true,
+      camo: true,
       seed: 77,
     };
-    expect(encodeMission(c)).toBe('v2.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1');
-    expect(decodeMission('v2.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1')).toEqual(c);
-    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.v.0.0.0')).toEqual({
+    expect(encodeMission(c)).toBe('v3.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1.1');
+    expect(decodeMission('v3.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1.1')).toEqual(c);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.v.0.0.0.0')).toEqual({
       ...DEFAULT_MISSION,
       position: 'valley',
       enemySnipers: 0,
     });
+    // The ghillie flag is the last field and nothing else.
+    expect(encodeMission({ ...DEFAULT_MISSION, camo: true })).toBe('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.1');
+  });
+
+  it('still decodes a v2 link (fifteen fields) with no ghillie suit', () => {
+    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0')).toEqual(DEFAULT_MISSION);
+    expect(decodeMission('v2.a.600.1000.3.0.45.9.308.f.f.77.m.1.3.1')).toEqual({
+      ...DEFAULT_MISSION,
+      theme: 'arctic',
+      position: 'mountain',
+      suppressed: true,
+      enemySnipers: 3,
+      assists: true,
+      seed: 77,
+      camo: false,
+    });
+    // A v2 code does not become a v3 one by accident: the encoder always writes the new version.
+    const c = decodeMission('v2.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0');
+    expect(encodeMission(c as MissionConfig)).toBe('v3.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0');
+  });
+
+  it('reads the ghillie flag of a v3 link, and defaults a flag that is not 0/1 to off', () => {
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.1')?.camo).toBe(true);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0')?.camo).toBe(false);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.x')?.camo).toBe(false);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.')?.camo).toBe(false);
   });
 
   it('round-trips 50 random missions', () => {
@@ -256,6 +287,7 @@ describe('encodeMission / decodeMission', () => {
       suppressed: true,
       enemySnipers: 3,
       assists: true,
+      camo: true,
     };
     expect(decodeMission(encodeMission(c))).toEqual(c);
   });
@@ -264,9 +296,9 @@ describe('encodeMission / decodeMission', () => {
     const rng = createRng(5);
     for (let i = 0; i < 50; i++) {
       const s = encodeMission(randomMission(rng));
-      expect(s.startsWith('v2.')).toBe(true);
+      expect(s.startsWith('v3.')).toBe(true);
       expect(s).toMatch(/^[A-Za-z0-9._-]+$/);
-      expect(s.length).toBeLessThan(60);
+      expect(s.length).toBeLessThan(64);
     }
   });
 
@@ -285,9 +317,12 @@ describe('encodeMission / decodeMission', () => {
       'v2.d.600.1000.3.0.45.9.308.f.f.1', // v2 needs the four new fields too
       'v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1', // one short
       'v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.extra',
+      'v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0', // v2 never had the ghillie field
       'v1.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0', // v1 never had the new fields
       'v1.d.600.1000.3.0.45.9.308.f.f.1.extra',
-      'v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0',
+      'v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0', // v3 needs the ghillie field too
+      'v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0.extra',
+      'v4.d.600.1000.3.0.45.9.308.f.f.1.r.0.1.0.0',
       '%%%',
       '....',
       'null',
@@ -316,13 +351,14 @@ describe('encodeMission / decodeMission', () => {
       suppressed: false,
       enemySnipers: 0,
       assists: false,
+      camo: false,
     });
   });
 
-  it('clamps the enemy snipers of a v2 code (-1 to 0, 9 to 3)', () => {
-    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.-1.0')?.enemySnipers).toBe(0);
-    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.9.0')?.enemySnipers).toBe(3);
-    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1.r.0.2.0')?.enemySnipers).toBe(2);
+  it('clamps the enemy snipers of a v3 code (-1 to 0, 9 to 3)', () => {
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.-1.0.0')?.enemySnipers).toBe(0);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.9.0.0')?.enemySnipers).toBe(3);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.r.0.2.0.0')?.enemySnipers).toBe(2);
   });
 
   it('decodes a known v1 link with the new options off (ridge, unsuppressed, no snipers, no assists)', () => {
@@ -343,13 +379,14 @@ describe('encodeMission / decodeMission', () => {
       suppressed: false,
       enemySnipers: 0,
       assists: false,
+      camo: false,
     });
   });
 
-  it('turns a v1 link into a v2 code', () => {
+  it('turns a v1 link into a v3 code', () => {
     const c = decodeMission('v1.d.300.300.3.0.0.9.308.n.n.1');
     expect(c).not.toBeNull();
-    expect(encodeMission(c as MissionConfig)).toBe('v2.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0');
+    expect(encodeMission(c as MissionConfig)).toBe('v3.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0');
   });
 
   it('uses the default for a missing or unrecognised field', () => {
@@ -357,11 +394,11 @@ describe('encodeMission / decodeMission', () => {
     // A v1 code has no snipers: its new options are off, not the menu defaults.
     const c = decodeMission('v1.x..900..0.abc.9.999.q.z.');
     expect(c).toEqual({ ...DEFAULT_MISSION, rangeMax: 900, enemySnipers: 0 });
-    // The same for a v2 code, with an unknown position, flags that are not 0/1 and a sniper count out of range.
-    const d = decodeMission('v2.x..900..0.abc.9.999.q.z..q.x.9.2');
+    // The same for a v3 code, with an unknown position, flags that are not 0/1 and a sniper count out of range.
+    const d = decodeMission('v3.x..900..0.abc.9.999.q.z..q.x.9.2.y');
     expect(d).toEqual({ ...DEFAULT_MISSION, rangeMax: 900, enemySnipers: 3 });
     // Empty new fields fall back to the defaults.
-    expect(decodeMission('v2.d.600.1000.3.0.45.9.308.f.f.1....')).toEqual(DEFAULT_MISSION);
+    expect(decodeMission('v3.d.600.1000.3.0.45.9.308.f.f.1.....')).toEqual(DEFAULT_MISSION);
   });
 });
 
@@ -384,6 +421,7 @@ describe('randomMission', () => {
     const suppressed = new Set<boolean>();
     const snipers = new Set<number>();
     const assists = new Set<boolean>();
+    const camo = new Set<boolean>();
     for (let i = 0; i < 1000; i++) {
       const c = randomMission(rng);
       themes.add(c.theme);
@@ -398,6 +436,7 @@ describe('randomMission', () => {
       suppressed.add(c.suppressed);
       snipers.add(c.enemySnipers);
       assists.add(c.assists);
+      camo.add(c.camo);
 
       expect(c.enemySnipers).toBeGreaterThanOrEqual(0);
       expect(c.enemySnipers).toBeLessThanOrEqual(3);
@@ -424,6 +463,30 @@ describe('randomMission', () => {
     expect([...suppressed].sort()).toEqual([false, true]);
     expect([...snipers].sort()).toEqual([0, 1, 2, 3]);
     expect([...assists].sort()).toEqual([false, true]);
+    expect([...camo].sort()).toEqual([false, true]);
+  });
+
+  it('draws the ghillie flag last: the first fifteen fields are what they were before the flag existed', () => {
+    // Golden values from before the flag: its draw comes after every other one, so a fresh rng still yields them.
+    const { camo, ...earlier } = randomMission(createRng(31));
+    expect(earlier).toEqual({
+      theme: 'valley',
+      rangeMin: 1041,
+      rangeMax: 1271,
+      soldiers: 1,
+      vehicleTargets: 1,
+      windSpeedMps: 4.1,
+      windClock: 1,
+      rifle: '338',
+      buildings: 'many',
+      vehicles: 'few',
+      seed: 1376210325,
+      position: 'mountain',
+      suppressed: true,
+      enemySnipers: 1,
+      assists: true,
+    });
+    expect(typeof camo).toBe('boolean');
   });
 
   it('draws a fresh seed each time', () => {
@@ -500,6 +563,7 @@ describe('routeFromSearch', () => {
       suppressed: false,
       enemySnipers: 0,
       assists: false,
+      camo: false,
     });
   });
 

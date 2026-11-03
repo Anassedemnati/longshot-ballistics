@@ -23,6 +23,7 @@ Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bul
   - .308 Win: G7 BC 0.243 at 790 m/s.
   - .338 Lapua: G7 BC 0.322 at 900 m/s.
   - Each has an optional suppressor: no muzzle flash, a quieter report and slower detection.
+- **Optional ghillie suit** (a switch in the menu): hard for the enemy to spot while you hold fire, and your sleeves wear the map's camouflage. Your shots still give you away.
 - **Variable-power scope** with a mil reticle, mouse-wheel zoom and a moving bolt.
   - Sound travels at the speed of sound: at long range you hear the impact well after the shot.
 - **Enemy counter-snipers**
@@ -80,7 +81,7 @@ Open the URL Vite prints (usually http://localhost:5173), set up a mission and p
 
 | Parameter | Effect |
 |---|---|
-| `?m=v2.…` | A full mission, as written by the menu. Copy it to share a mission. |
+| `?m=v3.…` | A full mission, as written by the menu (the last field is the ghillie-suit flag). Copy it to share a mission. Older `v2.…` and `v1.…` links still open, with the newer options off. |
 | `?quality=auto\|high\|medium\|low` | Render quality. `auto` (the default) is `medium` plus dynamic resolution. |
 | `?post=low` | The cheapest post-processing: no bloom, no MSAA. |
 | `?debug=1` | Exposes `window.__game`: `aimAt`, `fire`, `toggleScope`, `zoom`, `state()` and more. Used by the tests. |

@@ -6,6 +6,7 @@ import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 import {
   ASSISTS_NOTE,
+  GHILLIE_NOTE,
   RANGE_STEP_M,
   RIFLE_ART,
   RIFLE_ART_IMAGE,
@@ -473,7 +474,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     });
   });
 
-  // --- Rifle panel: the rifle (with its concept art), suppressor and aim assists ---
+  // --- Rifle panel: the rifle (with its concept art), suppressor, ghillie suit and aim assists ---
   const gear = el(columns, 'section', 'menu-panel');
   el(gear, 'h2', 'menu-panel-title', 'Rifle and aids');
   const art = el(gear, 'figure', 'menu-rifle-art');
@@ -487,6 +488,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   const artCaption = el(art, 'figcaption', 'menu-rifle-caption');
   const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) => apply({ rifle: v }), rifleNote);
   const syncSuppressor = toggle(gear, 'suppressed', 'Suppressor', SUPPRESSOR_NOTE, (on) => apply({ suppressed: on }));
+  const syncCamo = toggle(gear, 'camo', 'Ghillie suit', GHILLIE_NOTE, (on) => apply({ camo: on }));
   const syncAssists = toggle(gear, 'assists', 'Aim assists', ASSISTS_NOTE, (on) => apply({ assists: on }));
   syncers.push(
     () => {
@@ -500,6 +502,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     },
     () => syncRifle(cfg.rifle),
     () => syncSuppressor(cfg.suppressed),
+    () => syncCamo(cfg.camo),
     () => syncAssists(cfg.assists),
   );
 

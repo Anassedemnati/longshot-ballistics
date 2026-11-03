@@ -239,7 +239,7 @@
 .menu-sr:checked + .menu-switch { background: var(--accent); border-color: var(--accent); }
 .menu-sr:checked + .menu-switch::after { transform: translateX(18px); background: #17130a; }
 .menu-sr:focus-visible + .menu-switch { outline: 2px solid #fff; outline-offset: 2px; }
-.menu-toggle-note { margin-top: 4px; font: 12px/1.2 var(--mono); min-height: 2.4em; }
+.menu-toggle-note { margin-top: 4px; font: 12px/1.2 var(--mono); }
 
 /* Rifle concept art: the picture is cut to one rifle by an overflow-hidden box (the percentages come from menuModel). */
 .menu-rifle-art {
