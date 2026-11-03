@@ -1,9 +1,10 @@
 import * as THREE from 'three';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Rifle } from '../ballistics/types';
 import { BOLT_TIME_S, RELOAD_TIME_S } from '../game/weapon';
 import { SKY_OBJECT_NAMES } from '../scene/sky';
 import { rifleEnvironment } from './rifleEnvironment';
-import { addHands } from './rifleHands';
+import { GRIP_CENTER, GRIP_LEAN_RAD, addHands } from './rifleHands';
 import { type MaterialKey, PartSet, type PartStyle } from './rifleParts';
 import { rifleTextures } from './rifleTextures';
 
@@ -18,7 +19,9 @@ import { rifleTextures } from './rifleTextures';
 /** Barrel length by rifle, m: the .338 is the longer rifle. */
 export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47 };
 /** Stock colour by rifle: .308 olive polymer, .338 sand chassis. */
-const STOCK_COLOR: Readonly<Record<Rifle['id'], number>> = { '308': 0x62654a, '338': 0xb39a72 };
+const STOCK_COLOR: Readonly<Record<Rifle['id'], number>> = { '308': 0x535c3d, '338': 0x957f5c };
+/** The grip's rubber overmould by rifle: a darker shade of the stock. */
+const GRIP_COLOR: Readonly<Record<Rifle['id'], number>> = { '308': 0x3d4430, '338': 0x8a7656 };
 
 /** Where the barrel starts (the receiver's front), m along the model's z axis (negative = forward). */
 const BARREL_START_Z = -0.5;
@@ -27,8 +30,25 @@ const BARREL_Y = 0.04;
 /** The suppressor is this long, m, and sits on the muzzle. */
 export const SUPPRESSOR_LENGTH_M = 0.19;
 
-/** Scope axis height, m, and the rear lens' radius: the eyepiece faces the shooter. */
-const SCOPE_Y = 0.17;
+/** Scope axis height, m: a 30 mm tube on medium rings, its 56 mm objective just clearing the rail. */
+const SCOPE_Y = 0.106;
+/** Where the handguard ends, m along z; the barrel runs on alone from here. */
+const HANDGUARD_FRONT_Z = -0.49;
+/** Smooth normals across bevels and curves, hard at creases sharper than this, rad. */
+const CREASE_RAD = (40 * Math.PI) / 180;
+/** Cross-sections (x, y) of the dark slots: an M-LOK slot or the ejection port on a side face, a muzzle brake port. */
+const SLOT: readonly OutlinePoint[] = [
+  [-0.0008, -0.0045],
+  [0.0008, -0.0045],
+  [0.0008, 0.0045],
+  [-0.0008, 0.0045],
+];
+const BRAKE_PORT: readonly OutlinePoint[] = [
+  [-0.002, -0.006],
+  [0.002, -0.006],
+  [0.002, 0.006],
+  [-0.002, 0.006],
+];
 
 /** Bolt handle pivot (on the bolt axis, in model space), m. */
 const BOLT_PIVOT = { x: 0, y: BARREL_Y, z: 0.02 } as const;
@@ -151,7 +171,7 @@ function makeMaterials(id: Rifle['id']): Record<MaterialKey, THREE.Material> {
       metalness: 0.02,
       roughness: 0.6,
       normalMap: maps.stipple,
-      normalScale: new THREE.Vector2(0.6, 0.6),
+      normalScale: new THREE.Vector2(0.3, 0.3),
     }),
     rubber: new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -197,139 +217,373 @@ function lens(parts: PartSet, radius: number, bulge: number, facing: 1 | -1, y: 
   parts.add('glass', dome, 0, y, rimZ, (facing * Math.PI) / 2);
 }
 
+/** A point of an outline: [u, v] and, optionally, how far its corner is rounded off (else the outline's own radius), m. */
+type OutlinePoint = readonly [number, number, number?];
+
+/** A closed outline through `points` (in order) with each corner rounded off by up to `radius` m. */
+function roundedOutline(points: readonly OutlinePoint[], radius: number): THREE.Shape {
+  const shape = new THREE.Shape();
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const [px, py] = points[(i + n - 1) % n];
+    const [cx, cy, own] = points[i];
+    const [nx, ny] = points[(i + 1) % n];
+    const inLength = Math.hypot(cx - px, cy - py);
+    const outLength = Math.hypot(nx - cx, ny - cy);
+    const r = Math.min(own ?? radius, inLength / 2, outLength / 2);
+    const ax = cx + ((px - cx) / inLength) * r;
+    const ay = cy + ((py - cy) / inLength) * r;
+    if (i === 0) shape.moveTo(ax, ay);
+    else shape.lineTo(ax, ay);
+    shape.quadraticCurveTo(cx, cy, cx + ((nx - cx) / outLength) * r, cy + ((ny - cy) / outLength) * r);
+  }
+  shape.closePath();
+  return shape;
+}
+
 /**
- * Build the rifle model (no WebGL needed): the body parts (butt, cheek rest, receiver, fore-end, grip,
- * magazine, rails, scope), the gloved hands holding grip and fore-end (unless `hands` is false), the bolt handle as
- * its own small group, and - only when `suppressed` - a suppressor group on the muzzle. The camera looks down -z;
- * +x is to the right. One mesh per surface: stock (polymer), metal, rubber, glass, glove.
+ * `shape` extruded `depth` m along z (centred on z = 0) with a rounded bevel of `bevel` m all round its outline, and
+ * smooth normals across the bevel and the curves (hard only at the sharper creases): a moulded or machined part.
+ */
+function extruded(shape: THREE.Shape, depth: number, bevel: number): THREE.BufferGeometry {
+  const core = Math.max(0.001, depth - 2 * bevel);
+  const raw = new THREE.ExtrudeGeometry(shape, {
+    depth: core,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelOffset: -bevel, // the bevel ends on the outline: the part is exactly as big as drawn
+    bevelSegments: 3,
+    curveSegments: 6,
+  });
+  raw.translate(0, 0, -core / 2);
+  const smooth = toCreasedNormals(raw, CREASE_RAD);
+  if (smooth !== raw) raw.dispose();
+  return smooth;
+}
+
+/**
+ * A part cut from a side profile: `outline` is (z, y) points in model space, `holes` are cut through it, and the
+ * part is `width` m across, centred on x = 0. Stock, grip, chassis, cheek rest.
+ */
+interface SidePartOptions {
+  /** Corner rounding, m. */
+  radius?: number;
+  /** Edge bevel, m. */
+  bevel?: number;
+  /** Outlines cut through the part. */
+  holes?: readonly (readonly OutlinePoint[])[];
+  /** The outline is drawn about `at` and turned `lean` rad about x there (the pistol grip). */
+  lean?: number;
+  at?: THREE.Vector3;
+}
+
+/**
+ * A part cut from a side profile: `outline` is (z, y) points in model space (or about `at`), and the part is `width` m
+ * across, centred on x = 0. Chassis, stock, grip, cheek riser.
+ */
+function sidePart(parts: PartSet, material: MaterialKey, outline: readonly OutlinePoint[], width: number, style: PartStyle, options: SidePartOptions = {}): void {
+  const { radius = 0.006, bevel = 0.004, holes = [], lean = 0, at } = options;
+  const shape = roundedOutline(outline, radius);
+  for (const hole of holes) shape.holes.push(roundedOutline(hole, radius));
+  // The shape is drawn in (z, y): a quarter turn about y lays it on the model's side (shape x -> model z).
+  parts.add(material, extruded(shape, width, bevel), at?.x ?? 0, at?.y ?? 0, at?.z ?? 0, lean, -Math.PI / 2, 0, style);
+}
+
+/** A part with the cross-section `outline` ((x, y) points about its axis) running from `zFront` to `zBack`. */
+function lengthPart(
+  parts: PartSet,
+  material: MaterialKey,
+  outline: readonly OutlinePoint[],
+  zFront: number,
+  zBack: number,
+  x: number,
+  y: number,
+  style: PartStyle,
+  { radius = 0.004, bevel = 0.003 } = {},
+): void {
+  parts.add(material, extruded(roundedOutline(outline, radius), zBack - zFront, bevel), x, y, (zFront + zBack) / 2, 0, 0, 0, style);
+}
+
+/** An arc of a ring of `radius` (tube `tube`) in the model's yz plane, centred at (y, z), from angle `from` sweeping `arc` (0 = forward). */
+function ringArc(parts: PartSet, radius: number, tube: number, y: number, z: number, from: number, arc: number, style: PartStyle, squash = 1): void {
+  const geometry = new THREE.TorusGeometry(radius, tube, 8, 24, arc);
+  geometry.rotateZ(from);
+  geometry.scale(1, squash, 1);
+  // The torus lies in xy: a quarter turn about y puts its x (forward at angle 0) on the model's -z.
+  parts.add('metal', geometry, 0, y, z, 0, Math.PI / 2, 0, style);
+}
+
+/**
+ * Build the rifle model (no WebGL needed), after public/references/rifle-concept.png: a bolt action on a chassis with
+ * a slotted handguard, moulded pistol grip and a stock with a cheek riser (solid on the .308, skeleton on the .338),
+ * a 30 mm scope on a rail, the gloved hands holding grip and handguard (unless `hands` is false), the bolt handle as its
+ * own small group, and - only when `suppressed` - a suppressor group on the muzzle. The camera looks down -z; +x is to
+ * the right. One mesh per surface: stock (polymer / cerakote), metal, rubber, glass, glove.
  */
 export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = true): RifleModel {
   const materials = makeMaterials(id);
   const group = new THREE.Group();
   const body = new PartSet();
   const length = BARREL_LENGTH_M[id];
-  const coat: PartStyle = { color: CERAKOTE, wear: 0.8 };
+  const shell: PartStyle = { wear: 0.35 };
+  const black: PartStyle = { color: ANODISED, wear: 0.5 };
+  const dark: PartStyle = { color: BORE };
   const bare: PartStyle = { color: STEEL };
 
-  // Butt, neck, cheek rest on its posts, receiver and fore-end.
-  body.box('stock', 0.105, 0.16, 0.2, 0, -0.05, 0.27, 0, { wear: 0.7, round: 0.3 }); // butt
-  body.box('stock', 0.064, 0.1, 0.1, 0, -0.03, 0.135, 0, { wear: 0.7 }); // neck, behind the grip
-  body.box('rubber', 0.11, 0.175, 0.035, 0, -0.055, 0.385, 0, { wear: 0.4, round: 0.3 }); // butt pad
-  body.box('rubber', 0.08, 0.045, 0.2, 0, 0.07, 0.24, 0, { wear: 0.5, round: 0.45 }); // cheek rest
-  for (const z of [0.18, 0.3]) body.tube('metal', 0.007, 0.007, 0.03, 0, 0.04, z, 0, 0, { color: ANODISED }); // its posts
-  body.box('stock', 0.08, 0.105, 0.26, 0, 0, -0.06, 0, { wear: 0.7 }); // receiver housing
-  body.tube('metal', 0.039, 0.039, 0.25, 0, 0.055, -0.065, Math.PI / 2, 0, { color: BLUED });
-  body.box('stock', 0.075, 0.075, 0.34, 0, -0.005, -0.34, 0, { wear: 0.7 }); // fore-end
-  body.box('stock', 0.065, 0.15, 0.085, 0, -0.12, 0.02, -0.25, { wear: 0.6 }); // pistol grip
-  body.box('metal', 0.065, 0.135, 0.095, 0, -0.12, -0.14, 0, { color: ANODISED, wear: 0.9 }); // magazine
-  body.box('metal', 0.065, 0.014, 0.12, 0, -0.145, -0.035, 0, { color: ANODISED, wear: 0.5 }); // trigger guard
-  body.box('metal', 0.012, 0.085, 0.013, 0.025, -0.08, -0.085, 0, bare); // safety / release
-  body.box('metal', 0.009, 0.05, 0.012, 0, -0.06, -0.035, 0.3, bare); // trigger
+  // Chassis: the receiver bedding, the magazine well below it and the trigger area; the handguard runs forward from it.
+  sidePart(
+    body,
+    'stock',
+    [
+      [-0.2, 0.034],
+      [0.08, 0.034],
+      [0.08, -0.03],
+      [0.01, -0.044],
+      [-0.085, -0.044],
+      [-0.092, -0.082, 0.004],
+      [-0.205, -0.082, 0.004],
+      [-0.205, 0.006],
+    ],
+    0.05,
+    shell,
+  );
+  // Handguard: a long chamfered tube round the barrel with rows of M-LOK slots, a rail on top.
+  const guardY = 0.032;
+  const guard: OutlinePoint[] = [
+    [-0.026, -0.014],
+    [-0.015, -0.026],
+    [0.015, -0.026],
+    [0.026, -0.014],
+    [0.026, 0.017],
+    [0.017, 0.026],
+    [-0.017, 0.026],
+    [-0.026, 0.017],
+  ];
+  lengthPart(body, 'stock', guard, HANDGUARD_FRONT_Z, -0.19, 0, guardY, shell);
+  for (let i = 0; i < 6; i++) {
+    const z = -0.235 - i * 0.043;
+    for (const side of [-1, 1]) {
+      lengthPart(body, 'metal', SLOT, z - 0.014, z + 0.014, side * 0.0262, guardY + 0.002, dark, { radius: 0.003, bevel: 0.0004 });
+    }
+  }
 
-  // Barrel, muzzle brake (with its side ports) and the dark bore.
-  body.tube('metal', 0.015, 0.021, length, 0, BARREL_Y, BARREL_START_Z - length / 2, Math.PI / 2, 0, { color: BLUED }); // tapers toward the muzzle
-  body.tube('metal', 0.024, 0.024, 0.065, 0, BARREL_Y, BARREL_START_Z - 0.01 - length, Math.PI / 2, 0, { color: ANODISED });
-  for (let i = 0; i < 3; i++) {
-    for (const side of [-1, 1]) body.box('rubber', 0.006, 0.02, 0.008, side * 0.0245, BARREL_Y, BARREL_START_Z - 0.006 - length - i * 0.014);
-  }
-  body.tube('metal', 0.013, 0.013, 0.001, 0, BARREL_Y, BARREL_START_Z - 0.044 - length, Math.PI / 2, 0, { color: BORE });
+  // Pistol grip: moulded, finger grooves down the front, a palm swell behind, a flared heel.
+  sidePart(
+    body,
+    'rubber',
+    [
+      [-0.022, 0.07],
+      [0.03, 0.07],
+      [0.031, 0.02, 0.02],
+      [0.034, -0.035, 0.02],
+      [0.03, -0.07],
+      [0.02, -0.08],
+      [-0.027, -0.08],
+      [-0.025, -0.055],
+      [-0.019, -0.042, 0.008],
+      [-0.025, -0.026, 0.008],
+      [-0.019, -0.01, 0.008],
+      [-0.025, 0.006, 0.008],
+      [-0.02, 0.026],
+    ],
+    0.036,
+    { color: GRIP_COLOR[id], wear: 0.2 },
+    { radius: 0.005, bevel: 0.006, lean: GRIP_LEAN_RAD, at: GRIP_CENTER },
+  );
+  ringArc(body, 0.03, 0.0035, -0.044, -0.045, Math.PI, Math.PI, black, 0.9); // trigger guard, a loop under the chassis
+  ringArc(body, 0.015, 0.0028, -0.056, -0.012, -Math.PI * 0.3, Math.PI * 0.5, bare); // the trigger blade, curved back
+  body.box('metal', 0.008, 0.012, 0.01, 0, -0.05, -0.09, 0, bare); // magazine release, ahead of the guard
 
-  // Top rail with its teeth, handguard recesses, magazine fluting.
-  body.box('metal', 0.055, 0.016, 0.44, 0, 0.09, -0.19, 0, { color: ANODISED, wear: 0.8 });
-  for (let i = 0; i < 24; i++) body.box('metal', 0.062, 0.009, 0.008, 0, 0.102, -0.395 + i * 0.018, 0, { color: LIGHT_COAT });
-  for (let i = 0; i < 7; i++) {
-    for (const side of [-1, 1]) body.box('rubber', 0.003, 0.018, 0.028, side * 0.038, 0.005, -0.23 - i * 0.038);
-  }
-  for (let i = 0; i < 4; i++) {
-    for (const side of [-1, 1]) body.box('metal', 0.003, 0.095, 0.006, side * 0.033, -0.13, -0.17 + i * 0.02, 0, { color: LIGHT_COAT });
+  // Buttstock: a straight comb back to the butt, a toe hook below; skeletonised on the .338.
+  const butt = 0.385;
+  const stockWidth = id === '338' ? 0.04 : 0.048;
+  sidePart(
+    body,
+    'stock',
+    [
+      [0.07, 0.034],
+      [butt, 0.034, 0.008],
+      [butt, -0.126, 0.012],
+      [0.335, -0.124, 0.01],
+      [0.318, -0.1, 0.012],
+      [0.27, -0.094],
+      [0.19, -0.072],
+      [0.11, -0.046],
+      [0.07, -0.032],
+    ],
+    stockWidth,
+    shell,
+    {
+      holes:
+        id === '338'
+          ? [
+              [
+                [0.12, 0.012],
+                [0.31, 0.012],
+                [0.31, -0.07],
+                [0.27, -0.074],
+                [0.19, -0.054],
+                [0.13, -0.034],
+              ],
+            ]
+          : [],
+      radius: 0.008,
+    },
+  );
+  // The seam where the stock meets the chassis, and a sling cup in the butt.
+  body.box('metal', 0.0505, 0.064, 0.0015, 0, 0.001, 0.0745, 0, dark);
+  body.tube('metal', 0.0078, 0.0078, stockWidth + 0.0012, 0, -0.075, 0.36, Math.PI / 2, Math.PI / 2, bare);
+  body.tube('metal', 0.0055, 0.0055, stockWidth + 0.0016, 0, -0.075, 0.36, Math.PI / 2, Math.PI / 2, dark);
+  // Cheek riser on two posts, and the butt pad with its ribs.
+  sidePart(
+    body,
+    id === '338' ? 'rubber' : 'stock',
+    [
+      [0.13, 0.064, 0.012],
+      [0.33, 0.064, 0.012],
+      [0.33, 0.042, 0.004],
+      [0.13, 0.042, 0.004],
+    ],
+    0.042,
+    id === '338' ? { wear: 0.3 } : shell,
+    { bevel: 0.004 },
+  );
+  for (const z of [0.17, 0.29]) body.tube('metal', 0.0045, 0.0045, 0.012, 0, 0.038, z, 0, 0, bare);
+  body.tube('metal', 0.007, 0.007, 0.0525, 0, 0, 0.35, Math.PI / 2, Math.PI / 2, black); // the riser's adjuster knob, through the stock
+  body.box('rubber', 0.052, 0.166, 0.022, 0, -0.046, butt + 0.012, 0, { wear: 0.4, round: 0.35 });
+  for (let i = 0; i < 6; i++) body.box('rubber', 0.054, 0.004, 0.018, 0, -0.105 + i * 0.024, butt + 0.013, 0, { wear: 0.2 });
+  for (const [y, z] of [
+    [-0.1, 0.3],
+    [guardY - 0.027, -0.45],
+  ]) {
+    body.tube('metal', 0.0065, 0.0065, 0.004, 0, y, z, 0, 0, bare); // sling studs
   }
 
-  // Scope: rings, tube, eyepiece with its eyecup and rear lens, objective bell with its coated ring and front lens, turrets.
-  for (const z of [-0.04, -0.23]) {
-    body.box('metal', 0.07, 0.04, 0.035, 0, 0.125, z, 0, coat);
-    body.tube('metal', 0.036, 0.036, 0.028, 0, SCOPE_Y, z, Math.PI / 2, 0, { color: ANODISED });
-  }
-  body.tube('metal', 0.028, 0.028, 0.32, 0, SCOPE_Y, -0.14, Math.PI / 2, 0, { color: ANODISED });
-  // Eyepiece: z 0.0025 .. 0.086, flaring to the eyecup lip, hollow at the rear for the lens.
+  // Receiver (a round action bedded in the chassis), its ejection port and the bolt shroud behind.
+  body.tube('metal', 0.0175, 0.0175, 0.25, 0, BARREL_Y, -0.06, Math.PI / 2, 0, { color: BLUED, wear: 0.3 });
+  lengthPart(body, 'metal', SLOT, -0.1, -0.03, 0.0168, BARREL_Y + 0.006, dark, { radius: 0.002, bevel: 0.0004 });
   body.lathe(
     'metal',
     [
-      [0.0405, 0],
-      [0.0405, 0.066],
-      [0.0405, 0.066],
-      [0.0445, 0.07],
-      [0.0445, 0.0835],
-      [0.0445, 0.0835],
-      [0.0375, 0.0835],
-      [0.0375, 0.0835],
-      [0.0375, 0.0745],
+      [0.0165, 0],
+      [0.016, 0.02],
+      [0.012, 0.035],
+      [0.006, 0.04],
+    ],
+    0,
+    BARREL_Y,
+    0.065,
+    { color: BLUED, wear: 0.3 },
+  );
+
+  // Barrel (tapering toward the muzzle), the muzzle brake with three ports a side, and the dark bore.
+  body.tube('metal', 0.0105, 0.0125, length + 0.32, 0, BARREL_Y, BARREL_START_Z + 0.32 - (length + 0.32) / 2, Math.PI / 2, 0, { color: BLUED, wear: 0.2 });
+  body.tube('metal', 0.0145, 0.0145, 0.065, 0, BARREL_Y, BARREL_START_Z - 0.01 - length, Math.PI / 2, 0, { color: BLUED, wear: 0.6 });
+  for (let i = 0; i < 3; i++) {
+    const back = BARREL_START_Z + 0.016 - length - i * 0.016; // the brake spans 0.0225 m behind to 0.0425 m ahead of the barrel's end
+    for (const side of [-1, 1]) {
+      lengthPart(body, 'metal', BRAKE_PORT, back - 0.011, back, side * 0.0128, BARREL_Y, dark, { radius: 0.002, bevel: 0.0005 });
+    }
+  }
+  body.tube('metal', 0.0062, 0.0062, 0.001, 0, BARREL_Y, BARREL_START_Z - 0.0425 - length, Math.PI / 2, 0, dark);
+
+  // Picatinny rail from the receiver over the handguard, with its cross slots.
+  const railTop = BARREL_Y + 0.027;
+  body.box('metal', 0.021, 0.009, 0.5, 0, railTop - 0.0045, -0.2, 0, black);
+  for (let i = 0; i < 50; i++) body.box('metal', 0.0215, 0.0028, 0.0052, 0, railTop + 0.0014, -0.445 + i * 0.01, 0, black);
+
+  // Scope (30 mm tube, 56 mm objective): rings on the rail, tube, eyepiece and its rear lens, the turret saddle and
+  // turrets, the objective bell with its gold ring and front lens.
+  for (const z of [-0.035, -0.225]) {
+    body.box('metal', 0.026, 0.03, 0.02, 0, railTop + 0.012, z, 0, black);
+    body.tube('metal', 0.0182, 0.0182, 0.02, 0, SCOPE_Y, z, Math.PI / 2, 0, black);
+    body.tube('metal', 0.005, 0.005, 0.034, 0, railTop + 0.006, z, Math.PI / 2, Math.PI / 2, bare); // the cross bolt
+  }
+  body.tube('metal', 0.015, 0.015, 0.32, 0, SCOPE_Y, -0.14, Math.PI / 2, 0, { color: ANODISED, wear: 0.4 });
+  // Eyepiece: z 0.0025 .. 0.0875, the power ring, then the eyecup, hollow at the rear for the lens.
+  body.lathe(
+    'metal',
+    [
+      [0.0155, 0],
+      [0.0195, 0.012],
+      [0.0195, 0.05],
+      [0.0215, 0.06],
+      [0.0215, 0.085],
+      [0.0215, 0.085],
+      [0.0178, 0.085],
+      [0.0178, 0.085],
+      [0.0178, 0.077],
     ],
     0,
     SCOPE_Y,
     0.0025,
-    { color: ANODISED },
+    { color: ANODISED, wear: 0.4 },
   );
-  lens(body, 0.0375, 0.0065, 1, SCOPE_Y, 0.0025 + 0.0745);
-  body.tube('metal', 0.0375, 0.0375, 0.002, 0, SCOPE_Y, 0.0025 + 0.0735, Math.PI / 2, 0, { color: BORE }); // the dark inside behind it
-  for (let i = 0; i < 36; i++) {
-    const a = (i * Math.PI) / 18;
-    body.box('metal', 0.0035, 0.0035, 0.024, Math.cos(a) * 0.0425, SCOPE_Y + Math.sin(a) * 0.0425, 0.04, 0, { color: LIGHT_COAT }); // magnification ring knurling
+  lens(body, 0.0178, 0.003, 1, SCOPE_Y, 0.0025 + 0.077);
+  body.tube('metal', 0.0178, 0.0178, 0.002, 0, SCOPE_Y, 0.0025 + 0.076, Math.PI / 2, 0, dark); // the dark inside behind it
+  for (let i = 0; i < 40; i++) {
+    const a = (i * Math.PI) / 20;
+    body.box('metal', 0.0022, 0.0022, 0.022, Math.cos(a) * 0.0197, SCOPE_Y + Math.sin(a) * 0.0197, 0.034, 0, { color: LIGHT_COAT }); // power ring knurling
   }
-  // Objective bell: z -0.44 (front) .. -0.29, flaring from the tube, recessed at the front for the lens.
+  // Turret saddle and turrets: elevation on top, windage on the right, parallax on the left.
+  body.box('metal', 0.034, 0.034, 0.046, 0, SCOPE_Y, -0.13, 0, { color: ANODISED, wear: 0.6, round: 0.3 });
+  body.tube('metal', 0.0135, 0.0135, 0.026, 0, SCOPE_Y + 0.03, -0.13, 0, 0, { color: ANODISED, wear: 0.5 });
+  body.tube('metal', 0.0115, 0.0115, 0.003, 0, SCOPE_Y + 0.0445, -0.13, 0, 0, { color: LIGHT_COAT });
+  for (let i = 0; i < 30; i++) {
+    const a = (i * Math.PI) / 15;
+    body.box('metal', 0.0024, 0.018, 0.0024, Math.cos(a) * 0.0137, SCOPE_Y + 0.033, -0.13 + Math.sin(a) * 0.0137, 0, { color: LIGHT_COAT }); // its ridges
+  }
+  body.tube('metal', 0.0125, 0.0125, 0.022, 0.026, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
+  body.tube('metal', 0.012, 0.012, 0.02, -0.025, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
+  for (const x of [0.0375, -0.0355]) body.tube('metal', 0.0105, 0.0105, 0.002, x, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: LIGHT_COAT });
+  // Objective bell: z -0.44 (front) .. -0.30, flaring from the tube, recessed at the front for the lens.
   body.lathe(
     'metal',
     [
-      [0.0415, 0.016],
-      [0.0415, 0],
-      [0.0415, 0],
-      [0.0455, 0],
-      [0.0455, 0],
-      [0.0455, 0.04],
-      [0.0455, 0.04],
-      [0.029, 0.15],
+      [0.0275, 0.013],
+      [0.0275, 0],
+      [0.0275, 0],
+      [0.0305, 0],
+      [0.0305, 0],
+      [0.0305, 0.045],
+      [0.0305, 0.045],
+      [0.015, 0.14],
     ],
     0,
     SCOPE_Y,
     -0.44,
-    { color: ANODISED },
+    { color: ANODISED, wear: 0.4 },
   );
-  lens(body, 0.0415, 0.0075, -1, SCOPE_Y, -0.44 + 0.015);
-  body.tube('metal', 0.0415, 0.0415, 0.002, 0, SCOPE_Y, -0.44 + 0.016, Math.PI / 2, 0, { color: BORE });
-  body.tube('metal', 0.0458, 0.0458, 0.003, 0, SCOPE_Y, -0.4, Math.PI / 2, 0, { color: BRASS }); // the gold coating ring
-  for (const z of [0.012]) body.tube('metal', 0.0435, 0.0435, 0.006, 0, SCOPE_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT });
-  body.tube('metal', 0.024, 0.024, 0.04, 0, 0.215, -0.12, 0, 0, { color: ANODISED }); // elevation turret (axis up)
-  body.tube('metal', 0.022, 0.022, 0.035, 0.04, SCOPE_Y, -0.12, Math.PI / 2, Math.PI / 2, { color: ANODISED }); // windage turret (axis sideways)
-  body.tube('metal', 0.02, 0.02, 0.03, -0.04, SCOPE_Y, -0.12, Math.PI / 2, Math.PI / 2, { color: ANODISED }); // parallax knob
-  for (let i = 0; i < 24; i++) {
-    const a = (i * Math.PI) / 12;
-    body.box('metal', 0.004, 0.027, 0.004, Math.cos(a) * 0.024, 0.22, -0.12 + Math.sin(a) * 0.024, 0, { color: 0x6a6e73 }); // turret ridges
-  }
-  for (const z of [-0.25, -0.12, 0.1]) {
-    for (const side of [-1, 1]) body.tube('metal', 0.006, 0.006, 0.003, side * 0.052, 0.015, z, Math.PI / 2, Math.PI / 2, bare); // screws
+  lens(body, 0.0275, 0.004, -1, SCOPE_Y, -0.44 + 0.012);
+  body.tube('metal', 0.0275, 0.0275, 0.002, 0, SCOPE_Y, -0.44 + 0.013, Math.PI / 2, 0, dark);
+  body.tube('metal', 0.0308, 0.0308, 0.0025, 0, SCOPE_Y, -0.398, Math.PI / 2, 0, { color: BRASS }); // the gold coating ring
+  for (const z of [-0.15, -0.06, 0.05]) {
+    for (const side of [-1, 1]) body.tube('metal', 0.0035, 0.0035, 0.002, side * 0.0255, -0.005, z, Math.PI / 2, Math.PI / 2, bare); // chassis screws
   }
 
   if (hands) addHands(body);
   for (const mesh of body.toMeshes(materials)) group.add(mesh);
 
-  // The bolt handle: a rod out of the receiver's right side and its knob, local to the pivot.
+  // The bolt handle: a bent rod out of the receiver's right side and its round knob, local to the pivot.
   const boltParts = new PartSet();
-  boltParts.tube('metal', 0.008, 0.008, 0.07, 0.06, 0, 0, Math.PI / 2, Math.PI / 2, bare);
-  boltParts.sphere('metal', 0.018, 0.1, -0.004, 0, { color: ANODISED });
+  boltParts.tube('metal', 0.0055, 0.0055, 0.055, 0.042, -0.006, 0, Math.PI / 2, Math.PI / 2 - 0.22, { color: BLUED });
+  boltParts.sphere('metal', 0.0115, 0.07, -0.013, 0, { color: ANODISED, wear: 0.5 });
   const bolt = new THREE.Group();
   bolt.name = 'bolt';
   bolt.position.set(BOLT_PIVOT.x, BOLT_PIVOT.y, BOLT_PIVOT.z);
   for (const mesh of boltParts.toMeshes(materials)) bolt.add(mesh);
   group.add(bolt);
 
-  // The suppressor: a fat tube on the muzzle and its dark front opening.
+  // The suppressor: a can on the muzzle with machined end caps and its dark front opening.
   let muzzleZ = BARREL_START_Z - 0.0425 - length;
   if (suppressed) {
     const can = new PartSet();
     const centre = BARREL_START_Z - 0.12 - length;
-    can.tube('metal', 0.032, 0.032, SUPPRESSOR_LENGTH_M, 0, BARREL_Y, centre, Math.PI / 2, 0, { color: CERAKOTE, wear: 0 });
+    can.tube('metal', 0.022, 0.022, SUPPRESSOR_LENGTH_M, 0, BARREL_Y, centre, Math.PI / 2, 0, { color: CERAKOTE, wear: 0 });
     muzzleZ = centre - SUPPRESSOR_LENGTH_M / 2;
-    can.tube('metal', 0.016, 0.016, 0.002, 0, BARREL_Y, muzzleZ - 0.001, Math.PI / 2, 0, { color: BORE });
-    for (const z of [centre + 0.09, centre - 0.09]) can.tube('metal', 0.0335, 0.0335, 0.008, 0, BARREL_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT });
+    can.tube('metal', 0.0075, 0.0075, 0.002, 0, BARREL_Y, muzzleZ - 0.001, Math.PI / 2, 0, dark);
+    for (const z of [centre + 0.088, centre - 0.088]) can.tube('metal', 0.0228, 0.0228, 0.014, 0, BARREL_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT, wear: 0.6 });
     const suppressor = new THREE.Group();
     suppressor.name = 'suppressor';
     for (const mesh of can.toMeshes(materials)) suppressor.add(mesh);

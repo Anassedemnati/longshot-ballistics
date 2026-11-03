@@ -6,8 +6,15 @@ import type { MaterialKey, PartSet, PartStyle } from './rifleParts';
 // Everything is in the rifle model's space (camera looks down -z, +x right) and baked into the glove/rubber meshes.
 
 /** The pistol grip's frame in model space: its centre and its lean (the grip box is turned about x). */
-const GRIP_CENTER = new THREE.Vector3(0, -0.12, 0.02);
-const GRIP_LEAN_RAD = -0.25;
+export const GRIP_CENTER = new THREE.Vector3(0, -0.12, 0.02);
+export const GRIP_LEAN_RAD = -0.25;
+
+/**
+ * The hands were sculpted round a chunkier grip and fore-end: they are fitted to the slim ones by squeezing them
+ * across (x) and, on the grip, front to back, and by raising the left hand to the handguard's underside.
+ */
+const GRIP_HAND_SCALE = new THREE.Vector3(0.68, 1, 0.74);
+const HANDGUARD_HAND = new THREE.Matrix4().compose(new THREE.Vector3(0, 0.05, 0), new THREE.Quaternion(), new THREE.Vector3(0.76, 1, 1));
 
 /** The sleeve tint over the glove's camo cloth: darker, greyer. */
 const SLEEVE: PartStyle = { color: 0xb4ae98 };
@@ -68,7 +75,7 @@ function v(x: number, y: number, z: number): THREE.Vector3 {
 
 /** The right hand on the pistol grip, built in the grip's own frame, and its sleeve. */
 function rightHand(parts: PartSet): void {
-  const frame = new THREE.Matrix4().compose(GRIP_CENTER, new THREE.Quaternion().setFromEuler(new THREE.Euler(GRIP_LEAN_RAD, 0, 0)), UNIT);
+  const frame = new THREE.Matrix4().compose(GRIP_CENTER, new THREE.Quaternion().setFromEuler(new THREE.Euler(GRIP_LEAN_RAD, 0, 0)), GRIP_HAND_SCALE);
   parts.setFrame(frame);
 
   // Palm: the heel on the back strap, the pad up the right side, the web over the top of the grip, the back of the hand.
@@ -106,7 +113,7 @@ function rightHand(parts: PartSet): void {
   parts.setFrame(null);
 
   // Wrist cuff and the sleeve running back, to the right and down, out of the picture.
-  const wrist = v(0.06, -0.109, 0.105);
+  const wrist = v(0.045, -0.109, 0.1);
   const cuffEnd = v(0.095, -0.138, 0.172);
   const elbow = v(0.3, -0.33, 0.62);
   sleeve(parts, 'glove', wrist, cuffEnd, 0.03, 0.036, GLOVE);
@@ -122,6 +129,7 @@ function ringMatrix(at: THREE.Vector3, axis: THREE.Vector3): THREE.Matrix4 {
 
 /** The left hand cupping the underside of the fore-end, thumb along its left side, and its sleeve. */
 function leftHand(parts: PartSet): void {
+  parts.setFrame(HANDGUARD_HAND);
   parts.ellipsoid('glove', 0.04, 0.017, 0.052, 0, -0.06, -0.335);
   parts.ellipsoid('glove', 0.016, 0.02, 0.034, -0.036, -0.058, -0.3);
   parts.ellipsoid('rubber', 0.026, 0.006, 0.03, -0.004, -0.076, -0.335); // palm pad
@@ -152,6 +160,7 @@ function leftHand(parts: PartSet): void {
   sleeve(parts, 'glove', wrist, cuffEnd, 0.029, 0.035, GLOVE);
   parts.place('rubber', new THREE.TorusGeometry(0.0365, 0.0045, 8, 24), ringMatrix(cuffEnd, cuffEnd.clone().sub(wrist)));
   sleeve(parts, 'glove', cuffEnd, elbow, 0.049, 0.069, SLEEVE);
+  parts.setFrame(null);
 }
 
 /** Add both gloved hands and their sleeves to `parts` (the glove and rubber meshes of the rifle). */

@@ -90,8 +90,8 @@ export function metalPixels(size = 256, seed = 11): Uint8Array {
       const streak = valueNoise(u * 6, v * 96, 6, 96, seed + 5) - 0.5;
       const grain = hash2(x, y, seed + 9) - 0.5;
       const chipField = fbm(u, v, 16, 3, seed + 31);
-      const chip = smoothstep(0.64, 0.7, chipField);
-      let r = 0.46 + 0.34 * drift + 0.16 * streak + 0.07 * grain;
+      const chip = smoothstep(0.7, 0.75, chipField);
+      let r = 0.5 + 0.22 * drift + 0.16 * streak + 0.07 * grain;
       let m = 0.8 + 0.1 * drift;
       r = r * (1 - chip) + 0.3 * chip;
       m = m * (1 - chip) + 1 * chip;

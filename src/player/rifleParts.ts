@@ -33,9 +33,9 @@ const WEAR_COLOR: Readonly<Record<MaterialKey, THREE.Color | null>> = {
 
 /** How big one repeat of the texture is on the model, m (texel size and the visible detail follow from it). */
 const UV_TILE_M: Readonly<Record<MaterialKey, number>> = {
-  metal: 0.12,
-  stock: 0.1,
-  rubber: 0.08,
+  metal: 0.06,
+  stock: 0.04,
+  rubber: 0.05,
   glass: 1,
   glove: 0.06,
 };
