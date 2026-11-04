@@ -13,7 +13,10 @@ import type { Rng } from './random';
 //      spots), or treat base.props as existing props when placing them. Store `base` on the layout (e.g. `layout.base`),
 //      NOT in `layout.props`: `PropPlacement.kind` is the narrow `PropKind` that the layout's own tables
 //      (`KEEP_PRIORITY`, cover predicates) are keyed by. If the base props must join `layout.props` instead, widen
-//      `PropPlacement.kind` to `SceneryKind` and give KEEP_PRIORITY entries for the base kinds.
+//      `PropPlacement.kind` to `SceneryKind` and give KEEP_PRIORITY entries for the base kinds. Note too that a base
+//      prop's `LocalBox` may carry its own `yaw` (sandbag rings, howitzer trails): code that reads a box's `center`
+//      and `halfSize` as axis-aligned (coverSpots `footprintOf`, the layout's low-cover tests) must then go through
+//      `boxFootprintCorners` / `toWorldBox` instead.
 //   2. world.ts:   `scene.add(freeze(createBaseMesh(base.props, field.height, config.theme)))` (scene/baseMesh.ts:
 //      the whole base in at most six meshes; do NOT run base props through the per-prop `createPropMesh` loop:
 //      that is several hundred draw calls), and

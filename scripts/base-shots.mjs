@@ -52,7 +52,7 @@ try {
       calls[mode] = await page.evaluate(() => window.__preview.calls());
     }
     await page.evaluate(() => window.__preview.setMode('merged'));
-    console.log(`${theme}: base of ${info.props} props, ${info.colliders} colliders; draw calls (overview, shadows included): no base ${calls.none.calls}, merged ${calls.merged.calls}, prop by prop ${calls.single.calls}`);
+    console.log(`${theme}: base of ${info.props} props, ${info.colliders} colliders; draw calls (overview, shadows included): no base ${calls.none.calls}, merged ${calls.merged.calls}, prop by prop ${calls.single.calls}; triangles: no base ${calls.none.triangles}, merged ${calls.merged.triangles}`);
     const kinds = only === 'all' ? await page.evaluate(() => window.__preview.kinds) : only.split(',');
     for (const kind of kinds) {
       await page.evaluate((k) => window.__preview.focus(k), kind);

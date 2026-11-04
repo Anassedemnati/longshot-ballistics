@@ -761,10 +761,12 @@ function booth(theme: ThemeId): Parts {
   const P = new Parts(boxes);
   const pal = PALETTES[theme];
   const wallColour = theme === 'arctic' ? 0x5a5f55 : pal.concrete;
-  P.collider(0, 'wall', wallColour, false);
-  P.collider(1, 'roof', theme === 'arctic' ? 0xdde3ea : scaled(pal.concrete, 0.8), false);
+  // Flat colours (the plain class), not the village wall and roof classes: in a merged base those would be two
+  // more meshes and two more shadow passes for this one hut.
+  P.collider(0, 'plain', wallColour, false);
+  P.collider(1, 'plain', theme === 'arctic' ? 0xdde3ea : scaled(pal.concrete, 0.8), false);
   const [w, roof] = boxes;
-  skirt(P, w, 'wall', wallColour);
+  skirt(P, w, 'plain', wallColour);
   // Windows on three sides (the guard sees the road both ways), the door at the back.
   glazed(P, w, '+z', -0.65, 0.65, 1.1, 1.9);
   glazed(P, w, '+x', -0.6, 0.6, 1.1, 1.9);
@@ -773,7 +775,7 @@ function booth(theme: ThemeId): Parts {
   P.plate('door handle', 'plain', CHROME, w, '-z', 0.25, 0.35, 1.0, 1.06, DECOR_PROUD);
   for (const face of ['+z', '-z', '+x', '-x'] as const) {
     const [a0, a1] = faceRange(w, face);
-    P.plate('plinth', 'wall', scaled(wallColour, 0.7), w, face, a0, a1, 0, 0.25, 0.012);
+    P.plate('plinth', 'plain', scaled(wallColour, 0.7), w, face, a0, a1, 0, 0.25, 0.012);
     const [r0, r1, rb0, rb1] = faceRange(roof, face);
     P.plate('fascia', 'plain', DARK, roof, face, r0, r1, rb0, rb1, 0.012);
   }
