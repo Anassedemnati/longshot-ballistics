@@ -376,7 +376,7 @@ function cargoTruck(theme: ThemeId): Parts {
   colliders(P, boxes, (b) => {
     if (b.part === 'wheel') return ['plain', RUBBER];
     if (b.part === 'frame') return ['plain', 0x262624];
-    if (b.part === 'fabric') return ['trim', pal.canvas];
+    if (b.part === 'fabric') return ['plain', pal.canvas];
     return ['paint', pal.paint];
   });
   truckChassis(P, boxes, pal);
@@ -389,14 +389,14 @@ function cargoTruck(theme: ThemeId): Parts {
     P.plate('mudguard', 'plain', 0x1c1c1a, bed, face, -3.45, -0.8, 1.1, 1.2, DECOR_PROUD);
     // Canvas: tie-down rope along the bottom, the bows showing through, a side window flap.
     P.plate('tie-down rope', 'plain', 0x2b2820, tilt, face, -4.0, 1.5, 1.79, 1.83, 0.016);
-    for (let z = -3.4; z < 1.4; z += 1.2) P.plate('bow', 'trim', scaled(pal.canvas, 0.82), tilt, face, z - 0.05, z + 0.05, 1.75, 2.75, 0.014);
+    for (let z = -3.4; z < 1.4; z += 1.2) P.plate('bow', 'plain', scaled(pal.canvas, 0.82), tilt, face, z - 0.05, z + 0.05, 1.75, 2.75, 0.014);
     for (let z = -3.6; z < 1.3; z += 0.45) P.plate('rope loop', 'plain', 0x2b2820, tilt, face, z - 0.015, z + 0.015, 1.75, 1.95, 0.02);
   }
   P.plate('tailgate', 'paint', scaled(pal.paint, 0.9), bed, '-z', -1.28, 1.28, 1.1, 1.75, 0.012);
   for (const s of [-1, 1]) P.plate('tail lamp', 'plain', TAIL, bed, '-z', s * 1.0 - 0.1, s * 1.0 + 0.1, 1.2, 1.32, DECOR_PROUD);
-  P.plate('rear flap', 'trim', scaled(pal.canvas, 0.85), tilt, '-z', -1.2, 1.2, 1.9, 2.75, 0.014);
-  P.plate('rolled flap', 'trim', scaled(pal.canvas, 0.7), tilt, '-z', -1.2, 1.2, 2.55, 2.72, DECOR_PROUD);
-  P.plate('front panel', 'trim', scaled(pal.canvas, 0.9), tilt, '+z', -1.28, 1.28, 1.75, 2.75, 0.012);
+  P.plate('rear flap', 'plain', scaled(pal.canvas, 0.85), tilt, '-z', -1.2, 1.2, 1.9, 2.75, 0.014);
+  P.plate('rolled flap', 'plain', scaled(pal.canvas, 0.7), tilt, '-z', -1.2, 1.2, 2.55, 2.72, DECOR_PROUD);
+  P.plate('front panel', 'plain', scaled(pal.canvas, 0.9), tilt, '+z', -1.28, 1.28, 1.75, 2.75, 0.012);
   return P;
 }
 
@@ -681,15 +681,17 @@ function hesco(theme: ThemeId): Parts {
   // Five cells: wire-mesh posts at the cell joints, a grid of mesh lines, the geotextile bulging a little between
   // the posts, and the earth fill showing on top.
   for (const face of ['+z', '-z'] as const) {
+    for (let i = 0; i < 5; i++) {
+      const xa = x0 + i * cell;
+      // The geotextile sags a little between the posts: a slightly darker panel inside each cell.
+      P.plate('liner', 'plain', scaled(pal.hesco, 0.93), b, face, xa + 0.08, xa + cell - 0.08, 0.06, top - 0.06, 0.008);
+      for (let k = 1; k < 4; k++) P.plate('mesh wire', 'plain', wire, b, face, xa + (k * cell) / 4 - 0.008, xa + (k * cell) / 4 + 0.008, 0, top, 0.016);
+    }
     for (let i = 0; i <= 5; i++) {
       const x = x0 + i * cell;
-      P.plate('mesh post', 'plain', wire, b, face, Math.max(x0, x - 0.035), Math.min(x1, x + 0.035), 0, top, DECOR_PROUD);
+      P.plate('mesh post', 'plain', scaled(wire, 0.8), b, face, Math.max(x0, x - 0.03), Math.min(x1, x + 0.03), 0, top, DECOR_PROUD);
     }
-    for (let y = 0.35; y < top - 0.05; y += 0.35) P.plate('mesh line', 'plain', wire, b, face, x0, x1, y - 0.01, y + 0.01, 0.02);
-    for (let i = 0; i < 5; i++) {
-      const xa = x0 + i * cell + 0.06;
-      P.plate('bulge', 'plain', scaled(pal.hesco, 1.05), b, face, xa, xa + cell - 0.12, 0.05, top - 0.05, 0.01);
-    }
+    for (let y = 0.28; y < top - 0.05; y += 0.28) P.plate('mesh wire', 'plain', wire, b, face, x0, x1, y - 0.008, y + 0.008, 0.02);
   }
   for (const face of ['+x', '-x'] as const) {
     P.plate('end post', 'plain', wire, b, face, z0, z1, 0, top, 0.012);
@@ -783,21 +785,21 @@ function tent(theme: ThemeId): Parts {
   const boxes = BASE_BOXES.tent;
   const P = new Parts(boxes);
   const pal = PALETTES[theme];
-  colliders(P, boxes, (b) => (b.part === 'fabric' ? ['trim', b.look === 'arch' ? scaled(pal.canvas, 0.95) : pal.canvas] : ['plain', DARK]));
+  colliders(P, boxes, (b) => (b.part === 'fabric' ? ['plain', b.look === 'arch' ? scaled(pal.canvas, 0.95) : pal.canvas] : ['plain', DARK]));
   const w = boxes[0];
-  skirt(P, w, 'trim', scaled(pal.canvas, 0.8));
+  skirt(P, w, 'plain', scaled(pal.canvas, 0.8));
   const flap = scaled(pal.canvas, 0.78);
   for (const face of ['+z', '-z'] as const) {
-    P.plate('door flap', 'trim', flap, w, face, -0.65, 0.65, 0, 1.58, 0.014);
+    P.plate('door flap', 'plain', flap, w, face, -0.65, 0.65, 0, 1.58, 0.014);
     P.plate('door seam', 'plain', scaled(pal.canvas, 0.5), w, face, -0.02, 0.02, 0, 1.58, 0.02);
-    P.plate('rolled flap', 'trim', scaled(pal.canvas, 0.65), w, face, -0.7, 0.7, 1.42, 1.58, DECOR_PROUD);
+    P.plate('rolled flap', 'plain', scaled(pal.canvas, 0.65), w, face, -0.7, 0.7, 1.42, 1.58, DECOR_PROUD);
   }
   for (const face of ['+x', '-x'] as const) {
     for (const z of [-2.6, 0, 2.6]) {
       P.plate('window', 'plain', 0x2c2b25, w, face, z - 0.45, z + 0.45, 0.85, 1.3, 0.012);
-      P.plate('window roll', 'trim', scaled(pal.canvas, 0.65), w, face, z - 0.5, z + 0.5, 1.3, 1.4, 0.02);
+      P.plate('window roll', 'plain', scaled(pal.canvas, 0.65), w, face, z - 0.5, z + 0.5, 1.3, 1.4, 0.02);
     }
-    for (let z = -4; z <= 4.01; z += 1.33) P.plate('pole seam', 'trim', scaled(pal.canvas, 0.82), w, face, Math.max(-4, z - 0.04), Math.min(4, z + 0.04), 0, 1.6, 0.016);
+    for (let z = -4; z <= 4.01; z += 1.33) P.plate('pole seam', 'plain', scaled(pal.canvas, 0.82), w, face, Math.max(-4, z - 0.04), Math.min(4, z + 0.04), 0, 1.6, 0.016);
     P.plate('mud line', 'plain', theme === 'arctic' ? 0xb8bdb9 : scaled(pal.canvas, 0.6), w, face, -4, 4, 0, 0.18, 0.01);
   }
   return P;
@@ -893,19 +895,26 @@ function camoNet(theme: ThemeId): Parts {
   const boxes = BASE_BOXES.camoNet;
   const P = new Parts(boxes);
   const pal = PALETTES[theme];
-  colliders(P, boxes, (b) => (b.part === 'net' ? ['trim', pal.net] : ['plain', scaled(pal.wood, 0.7)]));
+  colliders(P, boxes, (b) => (b.part === 'net' ? ['plain', pal.net] : ['plain', scaled(pal.wood, 0.7)]));
   const net = boxes[4];
-  // Garnish: patches of a second and third colour and darker holes, so the net reads as a net, not a roof.
-  camo(P, net, ['+y'], [pal.netCamo, scaled(pal.net, 0.75), pal.camo2], 14, 81, 0.016);
-  const rnd = lcg(82);
-  for (let i = 0; i < 40; i++) {
+  // Garnish: many small scrim patches in three colours and dark holes, so the net reads as a net, not a roof.
+  const rnd = lcg(81);
+  const cols = [pal.netCamo, scaled(pal.net, 1.25), pal.camo2, scaled(pal.net, 0.7)];
+  for (let i = 0; i < 70; i++) {
+    const x = -3.6 + 7.2 * rnd();
+    const z = -4.9 + 9.8 * rnd();
+    const hx = 0.2 + 0.5 * rnd();
+    const hz = 0.2 + 0.5 * rnd();
+    P.plate('scrim', 'plain', cols[i % cols.length], net, '+y', Math.max(-3.7, x - hx), Math.min(3.7, x + hx), Math.max(-5, z - hz), Math.min(5, z + hz), 0.006 + 0.004 * (i % 4));
+  }
+  for (let i = 0; i < 50; i++) {
     const x = -3.5 + 7 * rnd();
     const z = -4.8 + 9.6 * rnd();
-    P.plate('net hole', 'plain', scaled(pal.net, 0.4), net, '+y', x - 0.12, x + 0.12, z - 0.12, z + 0.12, 0.008);
+    P.plate('net hole', 'plain', scaled(pal.net, 0.35), net, '+y', x - 0.1, x + 0.1, z - 0.1, z + 0.1, DECOR_PROUD);
   }
   for (const face of ['+x', '-x', '+z', '-z'] as const) {
     const [a0, a1, b0, b1] = faceRange(net, face);
-    P.plate('net edge', 'trim', pal.netCamo, net, face, a0, a1, b0, b1, 0.02);
+    P.plate('net edge', 'plain', pal.netCamo, net, face, a0, a1, b0, b1, 0.02);
   }
   return P;
 }
