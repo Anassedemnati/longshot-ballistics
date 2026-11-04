@@ -2,7 +2,7 @@
 
 **A long-range sniper simulator that runs in the browser. Every shot is a real ballistic solution.**
 
-Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bullet is flown through a G7 drag model and the air of the map you're on. It is not a hitscan ray. And the other side shoots back: a squad that runs for cover, returns fire and calls in mortars, and enemy snipers who spot you for them.
+Read the wind, hold over for drop and make the shot at 300 to 1,500 m. Every bullet is flown through a G7 drag model and the air of the map you're on. It is not a hitscan ray. And the other side shoots back: a squad that runs for cover, returns fire and calls in mortars, and enemy snipers who spot you for them. Hunt a colonel through his bodyguards, take on a guarded military base, and pick from seven calibres up to .50 BMG.
 
 ![Desert ridge, first-person view](docs/screenshots/desert-open.jpg)
 
@@ -39,6 +39,56 @@ Through your scope you see the muzzle flash of the man who is shooting at you:
 Bodies are not planks that tip over. A hit soldier goes limp: a Verlet ragdoll on his skeleton, pushed by the bullet, folds at the knees and waist and settles on the real terrain. Where you hit him decides how he falls (a head shot drops him on the spot, a chest shot staggers him back, a leg shot drops him onto that side), and a man hit at a sprint tumbles forward. The bullet goes through: a puff at the entry, a mist out of the far side, and the round flies on, slower, to kick up dust behind him.
 
 ![A chest hit at 140 m: entry and exit, the bullet passes through, the legs give way, down](docs/screenshots/hit-sequence.jpg)
+
+## High-value target
+
+A mission type of its own: take down one officer before he gets away. The colonel wears a red beret and no helmet, so you can pick him out through the scope. He walks his compound with his hands behind his back, stops to talk to his men and heads for his jeep, so you have to lead him. Two to four bodyguards in black keep close to him, and his squad stands around.
+
+Once they are alarmed, the guards close around him and rush him, crouching, to the jeep or a building. If they know which side the shot came from, they form a wall on that side. You have 15 to 30 s, depending on range, before he is gone.
+- A head or chest hit kills him.
+- A leg hit drops him to a limp at half speed, and a second hit finishes him.
+
+![The colonel in the red beret walking with a guard (left); alarmed, his bodyguards close round him and run him to the jeep (right)](docs/screenshots/hvt-alarm.jpg)
+
+| Inside a military base | Down |
+|---|---|
+| ![The HVT behind the sandbags of a base, a radar on its mast behind him](docs/screenshots/hvt-base.jpg) | ![HVT DOWN: upper torso at 355 m](docs/screenshots/hvt-down.jpg) |
+
+## The bullet outruns its sound
+
+Nobody reacts to a shot before it reaches them: the enemy hears your shot only when the sound gets there.
+- **The muzzle report** travels at the speed of sound in the map's air (about 1 s per 340 m) and tells them which side you are on. With a suppressor it is not heard at all beyond 200 m.
+- **The crack** of a bullet that passes within 25 m tells them they are under fire, but not from where. A bullet only cracks while it is still faster than sound: a .308 is subsonic by about 1,200 m, and the 12.7x55 subsonic never cracks.
+- **A man going down** near them is seen at once.
+
+So a first supersonic shot can never be dodged. An unsuppressed subsonic round is the exception: its own report arrives before it does.
+
+## Military base
+
+An optional setting in the menu: none, an outpost (about 40 m across) or a full base (about 80 m).
+
+What the base is built from:
+- **The perimeter:** HESCO barriers, sandbag walls, a gate with a barrier arm, a guard booth and a chicane.
+- **The base itself:** watch towers, machine-gun nests, tanks under camouflage nets, a howitzer line, cargo and fuel trucks, a helicopter on its pad, a radar, an anti-aircraft gun, ammo crates, tents, a generator, fuel drums, floodlights, a radio mast and a flag.
+
+It is all procedural low-poly, coloured for each map, and a whole base costs 9 draw calls. What you see is what stops a bullet: sandbags and crates are soft cover, vehicles and guns are metal.
+
+Guards stand at every post: on each tower deck, behind each machine gun, two at the gate, and patrols walking the inside of the perimeter. They are targets, and when the soldiers fight back they join the squad. In a high-value-target mission the colonel's walk runs through the base.
+
+![A full base from the firing position, 400 m out](docs/screenshots/base-open.jpg)
+
+| The gate and its guards | Guards on the towers |
+|---|---|
+| ![The gate through the scope: the barrier arm, the booth and its guards](docs/screenshots/base-gate.jpg) | ![Two watch towers, a guard on each deck and two behind the sandbags](docs/screenshots/base-towers.jpg) |
+
+## Seven rifles
+
+| | |
+|---|---|
+| ![.300 Win Mag](public/references/rifle-300.webp) **.300 Win Mag** | ![.408](public/references/rifle-408.webp) **.408**: a big brake, a long, high scope |
+| ![.50 BMG](public/references/rifle-50.webp) **.50 BMG**: semi-automatic, 10 rounds | ![12.7x108 mm](public/references/rifle-127.webp) **12.7x108 mm**: a heavy bolt action |
+
+Each rifle has its own model, report (the .50's is a deep boom with a long tail), bolt time, reload and recoil. The scope picture kicks with the shot, harder for the heavy calibres. Along with the original .308 and .338, the 12.7x55 mm subsonic is built round its suppressor: no crack, no flash, just a dull thump.
 
 ## Features
 
@@ -79,6 +129,8 @@ Bodies are not planks that tip over. A hit soldier goes limp: a Verlet ragdoll o
   - Wind speed and clock direction.
   - Firing position: valley floor, ridge or mountain top.
   - Density of buildings and scenery vehicles.
+  - The objective: clear the area, or a high-value target.
+  - A military base: none, an outpost or a full base.
   - Every mission is a shareable URL.
 - **Optional training aids** (toggled with T, A and P): a live trajectory arc, an aim-point marker, and a spotter who calls the hold in mils.
 - **Realistic rendering**
@@ -125,7 +177,7 @@ Open the URL Vite prints (usually http://localhost:5173), set up a mission and p
 
 | Parameter | Effect |
 |---|---|
-| `?m=v4.…` | A full mission, as written by the menu (the last two fields are the ghillie-suit flag and the soldiers-fight-back flag). Copy it to share a mission. Older `v3.…`, `v2.…` and `v1.…` links still open, with the newer options off (their soldiers stand still). |
+| `?m=v6.…` | A full mission, as written by the menu. The last two fields are the objective (`c` clear, `h` high-value target) and the military base (`n`, `o` outpost, `b` base). Copy it to share a mission. Older `v5.…` to `v1.…` links still open, with the newer options off. |
 | `?quality=auto\|high\|medium\|low` | Render quality. `auto` (the default) is `medium` plus dynamic resolution. |
 | `?post=low` | The cheapest post-processing: no bloom, no MSAA. |
 | `?debug=1` | Exposes `window.__game`: `aimAt`, `fire`, `toggleScope`, `zoom`, `state()` and more. Used by the tests. |
@@ -145,8 +197,8 @@ npm run smoke    # build, then drive the game in headless Chrome and check it en
 | Folder | What lives there |
 |---|---|
 | `src/ballistics/` | G7 drag table, atmosphere, RK4 integrator, rifle data and trajectory solver. Pure TypeScript, no three.js. |
-| `src/game/` | Weapon state, bullets in flight, hit tests, rangefinder, aim assists, the enemy-sniper encounter, the soldiers' squad brain (`squad.ts`). |
-| `src/mission/` | Mission config and URL codec, seeded layout of targets and props, the game loop (`run.ts`). |
+| `src/game/` | Weapon state, bullets in flight, hit tests, penetration, rangefinder, aim assists, the enemy-sniper encounter, the soldiers' squad brain (`squad.ts`), the HVT party (`hvt.ts`) and when a shot is heard (`hearing.ts`). |
+| `src/mission/` | Mission config and URL codec, seeded layout of targets and props, the HVT compound and the military base planner (`basePlan.ts`), the game loop (`run.ts`). |
 | `src/scene/` | Terrain and its material, HDRI sky, post-processing, vegetation, buildings, vehicles, soldiers. |
 | `src/player/` | First-person view, input, scope reticle and the procedural rifle model. |
 | `src/audio/` | Web Audio engine, recorded clips and sound-delay maths. |
