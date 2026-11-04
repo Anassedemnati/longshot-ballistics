@@ -2,7 +2,7 @@ import type { Vec3 } from '../ballistics/types';
 import { pointSegmentDistanceSq } from '../game/bullets';
 import type { ImpactEvent } from '../game/bullets';
 import { SQUAD, Squad, SoldierBrain, SpotBook, bearing, burstHitChance, wrapAngle } from '../game/squad';
-import type { BrainListener, SoldierMode, SquadMap } from '../game/squad';
+import type { BrainListener, GuardDuty, SoldierMode, SquadMap } from '../game/squad';
 import type { TerrainField } from '../scene/terrainField';
 import { createRng, randInt } from './random';
 import type { Rng } from './random';
@@ -70,6 +70,8 @@ interface Member {
   intent: AnimIntent;
   speeds: Float64Array;
   probe: (x: number, z: number) => number;
+  /** Height of what he stands on, m: a tower guard's deck, else undefined (the terrain under him). */
+  floorY?: number;
 }
 
 /** What the debug hook reads of a soldier. */
@@ -84,6 +86,8 @@ export interface MemberState {
   stance: string;
   aiming: boolean;
   spot: number;
+  /** A base guard's post (see mission/basePlan.ts), absent for the mission's own soldiers. */
+  post?: string;
 }
 
 export class SquadDirector implements BrainListener {
@@ -106,7 +110,7 @@ export class SquadDirector implements BrainListener {
     let i = 0;
     for (const soldier of deps.soldiers.values()) {
       const p = soldier.placement;
-      const brain = new SoldierBrain(i, { x: p.x, z: p.z, yaw: p.yaw }, deps.map, book, deps.squad, this, deps.seed * 31 + i * 7919 + 1, deps.map.startSpots[i] ?? -1);
+      const brain = new SoldierBrain(i, { x: p.x, z: p.z, yaw: p.yaw }, deps.map, book, deps.squad, this, deps.seed * 31 + i * 7919 + 1, deps.map.startSpots[i] ?? -1, guardDuty(p));
       const member: Member = {
         id: p.id,
         soldier,
@@ -114,7 +118,10 @@ export class SquadDirector implements BrainListener {
         anim: new SoldierAnimator(deps.seed * 131 + i * 104729 + 5),
         intent: { speed: 0, gait: 'none', stance: 'stand', aim: false, turnRate: 0, aimYaw: 0, aimPitch: 0 },
         speeds: new Float64Array(JOINT_FLOATS),
+        floorY: p.y,
+        // A deck is flat: the feet need no reach for the terrain under the tower.
         probe: (lx, lz) => {
+          if (p.y !== undefined) return 0;
           const c = Math.cos(brain.heading);
           const s = Math.sin(brain.heading);
           return deps.field.height(brain.x + c * lx + s * lz, brain.z - s * lx + c * lz) - deps.field.height(brain.x, brain.z);
@@ -146,6 +153,7 @@ export class SquadDirector implements BrainListener {
       stance: m.brain.stance,
       aiming: m.brain.aiming,
       spot: m.brain.spot,
+      ...(m.soldier.placement.post ? { post: m.soldier.placement.post } : {}),
     }));
   }
 
@@ -217,7 +225,7 @@ export class SquadDirector implements BrainListener {
       brain.intentInto(intent);
       if (brain.aiming) {
         intent.aimYaw = wrapAngle(bearing(brain.x, brain.z, brain.aimX, brain.aimZ) - brain.heading);
-        const g = deps.field.height(brain.x, brain.z);
+        const g = m.floorY ?? deps.field.height(brain.x, brain.z);
         intent.aimPitch = Math.atan2(deps.shooter.y - (g + AIM_HEIGHT_M), Math.max(1, Math.hypot(brain.aimX - brain.x, brain.aimZ - brain.z)));
       } else {
         intent.aimYaw = 0;
@@ -293,6 +301,18 @@ export class SquadDirector implements BrainListener {
     const range = Math.hypot(brain.x - deps.shooter.x, brain.z - deps.shooter.z);
     if (this.rng() < burstHitChance(range, this.squad.knowledge)) deps.hurt(randInt(this.rng, SQUAD.damage[0], SQUAD.damage[1]));
   }
+}
+
+/**
+ * A base guard's duty (game/squad.ts `GuardDuty`): a tower guard holds his deck (he crouches behind the parapet and stands to fire over it), a
+ * machine-gun guard his nest (he kneels behind the gun to fire), a patrol walks his beat; a gate guard, and every other soldier, has none.
+ */
+function guardDuty(p: Soldier['placement']): GuardDuty {
+  if (p.post === 'tower' || p.post === 'mg') {
+    return { hold: { x: p.x, z: p.z, yaw: p.yaw, hidden: true, peekX: 0, peekZ: 0, peekStance: p.post === 'tower' ? 'stand' : 'kneel' } };
+  }
+  if (p.post === 'patrol' && p.route) return { route: p.route };
+  return {};
 }
 
 function copyInto(out: Vec3, from: Vec3): void {

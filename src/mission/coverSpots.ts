@@ -1,17 +1,19 @@
 import type { Vec3 } from '../ballistics/types';
-import { segmentBox } from '../game/hit';
+import { segmentHitsAny } from '../game/hit';
 import type { Obstacle } from '../game/hit';
 import type { Spot, SquadMap } from '../game/squad';
 import type { TerrainField } from '../scene/terrainField';
 import { layoutColliders } from './layout';
 import type { MissionLayout } from './layout';
-import { propBoxes, vehicleEngineObstacle } from './props';
-import type { PropKind, PropPlacement } from './props';
+import { propFootprintRect, vehicleEngineObstacle } from './props';
+import type { SceneryKind, SceneryPlacement } from './props';
 
 // Where the soldiers can take cover, and how they get there (pure, no three.js). From the layout's props (walls, sheds, houses, parked and target
 // vehicles) it works out crouch spots on the far side of each prop from the shooter, with the prop between the spot and him, on the terrain and
 // outside every collider; for every spot also where the soldier stands to shoot (over a low cover, or a step round a corner of a tall one). The
 // soldiers' own start places are spots too. A route between two points goes round the props' footprints by simple corner steering.
+// A military base's props count like any others (its HESCO, sandbags, vehicles and tents are cover), but for the small kinds a man walks
+// round without a plan (drums, a flag pole, a floodlight...): they would only crowd the route search.
 
 /** A crouched soldier's head is about this high, m: a spot is cover when a collider is between it and the shooter at that height. */
 const CROUCH_HEAD_M = 1.0;
@@ -29,8 +31,8 @@ const WALK_MARGIN_M = 0.55;
 /** The step round a corner is tried up to this far, m, in these steps. */
 const PEEK_MAX_M = 3;
 const PEEK_STEP_M = 0.3;
-/** Footprints farther than this from the walk (beyond its half length), m, are left out of the route search. */
-const WALK_NEAR_M = 30;
+/** Two corners farther apart than this, m, are not linked in the route graph (a soldier picks cover within 70 m: a route never needs such a hop). */
+const EDGE_MAX_M = 90;
 
 /** A prop's footprint in the world: an oriented rectangle (centre, half sizes, yaw as a collider's), the tallest top of its boxes. */
 interface Footprint {
@@ -41,23 +43,15 @@ interface Footprint {
   yaw: number;
 }
 
-/** The footprint of a prop of `kind` at (x, z) turned by `yaw`: the rectangle that holds every one of its boxes. */
-function footprintOf(kind: PropKind, x: number, z: number, yaw: number): Footprint {
-  let x0 = Infinity;
-  let x1 = -Infinity;
-  let z0 = Infinity;
-  let z1 = -Infinity;
-  for (const b of propBoxes(kind)) {
-    x0 = Math.min(x0, b.center.x - b.halfSize.x);
-    x1 = Math.max(x1, b.center.x + b.halfSize.x);
-    z0 = Math.min(z0, b.center.z - b.halfSize.z);
-    z1 = Math.max(z1, b.center.z + b.halfSize.z);
-  }
-  const lx = (x0 + x1) / 2;
-  const lz = (z0 + z1) / 2;
+/** Base kinds left out of the footprints: small things a walker steps round, which only crowd the route search (and give no cover). */
+const MINOR_KINDS: ReadonlySet<SceneryKind> = new Set<SceneryKind>(['fuelDrums', 'flagPole', 'floodlight', 'ammoCrates', 'commsMast', 'helipad', 'camoNet']);
+
+/** The footprint of a prop of `kind` at (x, z) turned by `yaw`: the rectangle that holds every one of its boxes (a box's own yaw included). */
+function footprintOf(kind: SceneryKind, x: number, z: number, yaw: number): Footprint {
+  const f = propFootprintRect(kind);
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  return { x: x + c * lx + s * lz, z: z - s * lx + c * lz, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2, yaw };
+  return { x: x + c * f.cx + s * f.cz, z: z - s * f.cx + c * f.cz, hx: f.hx, hz: f.hz, yaw };
 }
 
 /** World (x, z) to the footprint's frame, and back (the collider convention: local +X is (cos yaw, -sin yaw)). */
@@ -72,6 +66,46 @@ function toWorld(f: Footprint, lx: number, lz: number): [number, number] {
   const c = Math.cos(f.yaw);
   const s = Math.sin(f.yaw);
   return [f.x + c * lx + s * lz, f.z - s * lx + c * lz];
+}
+
+/** Barrier kinds laid end to end along a base's perimeter: an abutting run of them is one footprint (a wall), not a row of short ones. */
+const RUN_KINDS: ReadonlySet<SceneryKind> = new Set<SceneryKind>(['hesco', 'sandbags']);
+/** Two barriers merge when they lie on one line (centres this far off it, m) with at most this gap between their ends, m. */
+const RUN_OFFSET_M = 0.35;
+const RUN_GAP_M = 0.3;
+
+/** The footprint holding both `f` and `g` when they are two barriers of one run (same axis, in line, end to end), else null. */
+function mergeRun(f: Footprint, g: Footprint): Footprint | null {
+  const turn = g.yaw - f.yaw;
+  if (Math.abs(Math.sin(turn)) > 0.02) return null;
+  const [lx, lz] = toLocal(f, g.x, g.z);
+  if (Math.abs(lz) > RUN_OFFSET_M || Math.abs(lx) - f.hx - g.hx > RUN_GAP_M) return null;
+  // g turned by 0 or pi in f's frame: its half sizes lie along f's axes.
+  const x0 = Math.min(-f.hx, lx - g.hx);
+  const x1 = Math.max(f.hx, lx + g.hx);
+  const z0 = Math.min(-f.hz, lz - g.hz);
+  const z1 = Math.max(f.hz, lz + g.hz);
+  const [x, z] = toWorld(f, (x0 + x1) / 2, (z0 + z1) / 2);
+  return { x, z, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2, yaw: f.yaw };
+}
+
+/** The footprints with every run of barriers merged into one (the route search then has a wall's four corners, not four per barrier). */
+function mergeRuns(feet: Footprint[], run: boolean[]): Footprint[] {
+  const out = feet.slice();
+  const isRun = run.slice();
+  for (let i = 0; i < out.length; i++) {
+    if (!isRun[i]) continue;
+    for (let j = i + 1; j < out.length; j++) {
+      if (!isRun[j]) continue;
+      const m = mergeRun(out[i], out[j]);
+      if (!m) continue;
+      out[i] = m;
+      out.splice(j, 1);
+      isRun.splice(j, 1);
+      j = i; // the grown footprint may now meet one already passed over
+    }
+  }
+  return out;
 }
 
 /** True when (x, z) is inside the footprint grown by `margin`. */
@@ -108,29 +142,36 @@ function enters(f: Footprint, ax: number, az: number, bx: number, bz: number, ma
 
 /** True when any obstacle blocks the straight line from `a` to `b`. */
 function blocked(a: Vec3, b: Vec3, obstacles: readonly Obstacle[]): boolean {
-  for (const o of obstacles) if (segmentBox(a, b, o.box) !== null) return true;
-  return false;
+  return segmentHitsAny(a, b, obstacles);
 }
 
 export class CoverMap implements SquadMap {
   readonly spots: Spot[] = [];
   /** The spot of each soldier's start place, in layout order. */
   readonly startSpots: number[] = [];
-  private readonly feet: Footprint[] = [];
+  private readonly feet: Footprint[];
+  /** The route graph (`graph`), once it is built. */
+  private corners: { x: number[]; z: number[]; adj: number[][] } | null = null;
 
   constructor(layout: MissionLayout, field: TerrainField) {
     const eye = field.shooter;
     const obstacles = layoutColliders(layout, field);
-    const props: PropPlacement[] = [...layout.props, ...layout.vehicleTargets.map((v) => ({ id: v.id, kind: v.kind, x: v.x, z: v.z, yaw: v.yaw }))];
+    const props: SceneryPlacement[] = [
+      ...layout.props,
+      ...layout.vehicleTargets.map((v) => ({ id: v.id, kind: v.kind, x: v.x, z: v.z, yaw: v.yaw })),
+      ...(layout.base ? layout.base.props.filter((p) => !MINOR_KINDS.has(p.kind)) : []),
+    ];
     for (const v of layout.vehicleTargets) obstacles.push(vehicleEngineObstacle(v, field.height(v.x, v.z)));
-    for (const p of props) this.feet.push(footprintOf(p.kind, p.x, p.z, p.yaw));
+    this.feet = mergeRuns(
+      props.map((p) => footprintOf(p.kind, p.x, p.z, p.yaw)),
+      props.map((p) => RUN_KINDS.has(p.kind)),
+    );
 
     const facing = (x: number, z: number): number => Math.atan2(eye.x - x, eye.z - z);
     const free = (x: number, z: number, margin: number): boolean => !this.feet.some((f) => inside(f, x, z, margin));
 
     // Spots on the far side of every prop: tried round its footprint, kept where a collider hides a crouched soldier from the shooter.
-    for (let k = 0; k < props.length; k++) {
-      const f = this.feet[k];
+    for (const f of this.feet) {
       const m = SPOT_MARGIN_M;
       // The four sides: [the fixed local coordinate, the along-coordinate from and to, which axis is fixed (0: x, 1: z)].
       const sides: Array<[number, number, number, number]> = [
@@ -211,62 +252,106 @@ export class CoverMap implements SquadMap {
 
   /**
    * Waypoints (x, z, x, z, ...) of the shortest walk from one point to another that goes round every footprint; the last pair is `to`.
-   * A visibility graph over the footprints' corners (grown a little) near the walk, searched with Dijkstra's algorithm: a clear line is the
-   * straight one, and a route that is boxed in falls back to the straight line.
+   * A visibility graph over the footprints' corners (grown a little): the corner-to-corner edges are worked out once (`graph`), so a walk
+   * only links its two ends to the corners they see and runs A* (the straight distance to the goal never overestimates, so the route is
+   * still the shortest). A military base's dozens of footprints made a search from scratch cost tens of milliseconds, mid-frame. A clear
+   * line is the straight one, and a route that is boxed in falls back to the straight line.
    */
   path(fromX: number, fromZ: number, toX: number, toZ: number): number[] {
-    // Only the footprints near the walk matter.
-    const mx = (fromX + toX) / 2;
-    const mz = (fromZ + toZ) / 2;
-    const reach = Math.hypot(toX - fromX, toZ - fromZ) / 2 + WALK_NEAR_M;
-    const near = this.feet.filter((f) => Math.hypot(f.x - mx, f.z - mz) <= reach + Math.hypot(f.hx, f.hz));
-    const around = WALK_MARGIN_M + 0.12;
-
-    // Nodes: 0 is the start, 1 the goal, then every corner that is not inside another footprint.
-    const nx: number[] = [fromX, toX];
-    const nz: number[] = [fromZ, toZ];
-    for (const f of near) {
-      for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
-        const [wx, wz] = toWorld(f, sx * (f.hx + around), sz * (f.hz + around));
-        if (near.some((o) => inside(o, wx, wz, WALK_MARGIN_M))) continue;
-        nx.push(wx);
-        nz.push(wz);
-      }
-    }
+    const g = this.graph();
     // A footprint that holds the start or the goal is no obstacle to the legs that touch that end (he is walking out of it, or into it).
-    const startIn = near.map((f) => inside(f, fromX, fromZ, WALK_MARGIN_M));
-    const goalIn = near.map((f) => inside(f, toX, toZ, WALK_MARGIN_M));
-    const clear = (a: number, b: number): boolean => {
-      for (let i = 0; i < near.length; i++) {
-        if ((a === 0 && startIn[i]) || (b === 1 && goalIn[i]) || (a === 1 && goalIn[i]) || (b === 0 && startIn[i])) continue;
-        if (enters(near[i], nx[a], nz[a], nx[b], nz[b], WALK_MARGIN_M) !== null) return false;
-      }
-      return true;
-    };
-    if (clear(0, 1)) return [toX, toZ];
+    const startIn = this.feet.map((f) => inside(f, fromX, fromZ, WALK_MARGIN_M));
+    const goalIn = this.feet.map((f) => inside(f, toX, toZ, WALK_MARGIN_M));
+    if (this.legClear(fromX, fromZ, toX, toZ, startIn, goalIn)) return [toX, toZ];
 
-    const n = nx.length;
-    const dist = new Array<number>(n).fill(Infinity);
-    const prev = new Array<number>(n).fill(-1);
-    const done = new Array<boolean>(n).fill(false);
-    dist[0] = 0;
+    // Nodes: the corners (0..m-1), then the start (m) and the goal (m + 1).
+    const m = g.x.length;
+    const S = m;
+    const G = m + 1;
+    const nx = [...g.x, fromX, toX];
+    const nz = [...g.z, fromZ, toZ];
+    const none: boolean[] = [];
+    const fromStart: number[] = [];
+    const toGoal = new Uint8Array(m);
+    for (let i = 0; i < m; i++) {
+      if (this.legClear(fromX, fromZ, g.x[i], g.z[i], startIn, none)) fromStart.push(i);
+      if (this.legClear(g.x[i], g.z[i], toX, toZ, none, goalIn)) toGoal[i] = 1;
+    }
+    const n = m + 2;
+    const h = nx.map((x, i) => Math.hypot(toX - x, toZ - nz[i]));
+    const dist = new Float64Array(n).fill(Infinity);
+    const prev = new Int32Array(n).fill(-1);
+    const done = new Uint8Array(n);
+    dist[S] = 0;
+    const relax = (u: number, v: number): void => {
+      const d = dist[u] + Math.hypot(nx[v] - nx[u], nz[v] - nz[u]);
+      if (d < dist[v]) {
+        dist[v] = d;
+        prev[v] = u;
+      }
+    };
     for (let step = 0; step < n; step++) {
       let u = -1;
-      for (let i = 0; i < n; i++) if (!done[i] && (u < 0 || dist[i] < dist[u])) u = i;
-      if (u < 0 || dist[u] === Infinity || u === 1) break;
-      done[u] = true;
-      for (let v = 0; v < n; v++) {
-        if (done[v] || v === u) continue;
-        const d = dist[u] + Math.hypot(nx[v] - nx[u], nz[v] - nz[u]);
-        if (d < dist[v] && clear(u, v)) {
-          dist[v] = d;
-          prev[v] = u;
-        }
+      for (let i = 0; i < n; i++) if (!done[i] && dist[i] < Infinity && (u < 0 || dist[i] + h[i] < dist[u] + h[u])) u = i;
+      if (u < 0 || u === G) break;
+      done[u] = 1;
+      if (u === S) {
+        for (const v of fromStart) relax(u, v);
+        continue;
+      }
+      for (const v of g.adj[u]) if (!done[v]) relax(u, v);
+      if (toGoal[u]) relax(u, G);
+    }
+    if (prev[G] < 0) return [toX, toZ]; // boxed in: the straight line will have to do
+    const out: number[] = [];
+    for (let v = G; v !== S; v = prev[v]) out.unshift(nx[v], nz[v]);
+    return out;
+  }
+
+  /** The corners of the footprints (grown a little) that lie outside every other one, and which of them see each other; built on first use. */
+  private graph(): { x: number[]; z: number[]; adj: number[][] } {
+    if (this.corners) return this.corners;
+    const around = WALK_MARGIN_M + 0.12;
+    const x: number[] = [];
+    const z: number[] = [];
+    for (const f of this.feet) {
+      for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+        const [wx, wz] = toWorld(f, sx * (f.hx + around), sz * (f.hz + around));
+        if (this.feet.some((o) => inside(o, wx, wz, WALK_MARGIN_M))) continue;
+        x.push(wx);
+        z.push(wz);
       }
     }
-    if (prev[1] < 0) return [toX, toZ]; // boxed in: the straight line will have to do
-    const out: number[] = [];
-    for (let v = 1; v > 0; v = prev[v]) out.unshift(nx[v], nz[v]);
-    return out;
+    const adj: number[][] = x.map(() => []);
+    const none: boolean[] = [];
+    for (let i = 0; i < x.length; i++) {
+      for (let j = i + 1; j < x.length; j++) {
+        if (Math.hypot(x[j] - x[i], z[j] - z[i]) > EDGE_MAX_M) continue;
+        if (!this.legClear(x[i], z[i], x[j], z[j], none, none)) continue;
+        adj[i].push(j);
+        adj[j].push(i);
+      }
+    }
+    this.corners = { x, z, adj };
+    return this.corners;
+  }
+
+  /** True when the straight leg (ax, az) -> (bx, bz) enters no footprint (grown by the walk margin), but those flagged in `skipA` / `skipB`. */
+  private legClear(ax: number, az: number, bx: number, bz: number, skipA: readonly boolean[], skipB: readonly boolean[]): boolean {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const len = Math.hypot(dx, dz);
+    for (let i = 0; i < this.feet.length; i++) {
+      if (skipA[i] || skipB[i]) continue;
+      const f = this.feet[i];
+      // Broad phase: the footprint's circle (half diagonal plus the margin) beyond either end of the leg or wholly to one side of it.
+      const rl = (f.hx + f.hz + WALK_MARGIN_M) * len;
+      const ex = f.x - ax;
+      const ez = f.z - az;
+      const along = ex * dx + ez * dz;
+      if (len > 0 && (along < -rl || along > len * len + rl || Math.abs(ex * dz - ez * dx) > rl)) continue;
+      if (enters(f, ax, az, bx, bz, WALK_MARGIN_M) !== null) return false;
+    }
+    return true;
   }
 }

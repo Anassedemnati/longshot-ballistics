@@ -176,3 +176,31 @@ export function obstacleBoundingRadius(obstacle: Obstacle): number {
   }
   return radius;
 }
+
+/**
+ * True when the segment a -> b meets any obstacle's box. The same answer as calling `segmentBox` on each, with a cheap broad phase in the
+ * ground plane first: a box whose footprint circle (radius hx + hz, more than its half diagonal) lies beyond either end of the segment or
+ * wholly to one side of it is skipped. It matters for the line-of-sight loops of the layout and the cover map, which run over a military
+ * base's several hundred colliders thousands of times.
+ */
+export function segmentHitsAny(a: Vec3, b: Vec3, obstacles: readonly Obstacle[]): boolean {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len = Math.hypot(dx, dz);
+  const l2 = len * len;
+  for (let i = 0; i < obstacles.length; i++) {
+    const box = obstacles[i].box;
+    if (len > 0) {
+      // In units of the segment's length: `along` is the projection of the centre on it, `across` its distance from the line.
+      const rl = (box.halfSize.x + box.halfSize.z) * len;
+      const ex = box.center.x - a.x;
+      const ez = box.center.z - a.z;
+      const along = ex * dx + ez * dz;
+      if (along < -rl || along > l2 + rl) continue;
+      const across = ex * dz - ez * dx;
+      if (across > rl || across < -rl) continue;
+    }
+    if (segmentBox(a, b, box) !== null) return true;
+  }
+  return false;
+}

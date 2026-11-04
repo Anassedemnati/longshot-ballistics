@@ -101,6 +101,8 @@ export function detailExclusions(
     lanes.push({ x: t.x, z: t.z });
   }
   for (const p of layout.props) circles.push({ x: p.x, z: p.z, r: propFootprintRadius(p.kind) + PROP_MARGIN });
+  // A military base: no pebbles or tufts inside its disc (they would poke through its props).
+  if (layout.base) circles.push({ x: layout.base.center.x, z: layout.base.center.z, r: layout.base.radius + PROP_MARGIN });
   return { circles, lanes, shooter: { x: shooter.x, z: shooter.z } };
 }
 

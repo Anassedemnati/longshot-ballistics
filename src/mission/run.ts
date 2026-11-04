@@ -737,6 +737,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         complete: missionDone,
         resultsShown: () => resultsShown,
         soldiers,
+        base: plan.layout.base
+          ? { size: plan.layout.base.size, center: { ...plan.layout.base.center }, guards: [...soldiers.values()].filter((s) => s.placement.post).length }
+          : null,
         vehicles,
         snipers,
         combat: combat && {

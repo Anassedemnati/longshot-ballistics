@@ -195,9 +195,11 @@ export class HvtDirector {
   private drive(dt: number): void {
     const { world, field } = this.deps;
     const v = world.vehicle;
-    if (!v || this.driven >= DRIVE_M) return;
+    // In a base the jeep only gets as far as the gate (`HvtPlacement.driveM`): he is gone all the same.
+    const far = world.placement.driveM ?? DRIVE_M;
+    if (!v || this.driven >= far) return;
     this.driveSpeed = Math.min(DRIVE_MPS, this.driveSpeed + DRIVE_ACCEL * dt);
-    const step = Math.min(this.driveSpeed * dt, DRIVE_M - this.driven);
+    const step = Math.min(this.driveSpeed * dt, far - this.driven);
     this.driven += step;
     const dx = world.placement.road.x * step;
     const dz = world.placement.road.z * step;

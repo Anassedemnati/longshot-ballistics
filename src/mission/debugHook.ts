@@ -14,7 +14,10 @@ export interface GameDebugState {
   complete: boolean;
   /** True once the results overlay is on screen. */
   resultsShown: boolean;
-  soldiers: Array<{ id: string; head: Vec3; upperTorso: Vec3; lowerTorso: Vec3; behindCover: boolean; down: boolean }>;
+  /** Every soldier, the military base's guards included (they carry their `post`; `floor` is a tower guard's deck height, m). */
+  soldiers: Array<{ id: string; head: Vec3; upperTorso: Vec3; lowerTorso: Vec3; behindCover: boolean; down: boolean; post?: string; floor?: number }>;
+  /** The military base (null without one): its size, centre and how many guards it was manned with. */
+  base: { size: string; center: { x: number; z: number }; guards: number } | null;
   vehicles: Array<{ id: string; engine: Vec3; disabled: boolean }>;
   /** Enemy snipers: where to aim, whether the scope glint is on screen, whether he is down. */
   snipers: Array<{ id: string; site: string; head: Vec3; upperTorso: Vec3; glint: boolean; down: boolean }>;
@@ -85,6 +88,8 @@ export interface DebugSources {
   complete(): boolean;
   resultsShown(): boolean;
   soldiers: ReadonlyMap<string, Soldier>;
+  /** The military base, else null. */
+  base: { size: string; center: { x: number; z: number }; guards: number } | null;
   vehicles: ReadonlyMap<string, Vehicle>;
   snipers: ReadonlyMap<string, EnemySniper>;
   /** The fight with the snipers; null in a mission without any. */
@@ -119,7 +124,10 @@ export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources:
         lowerTorso: s.lowerTorso,
         behindCover: s.placement.behindCover,
         down: s.dummy.down,
+        ...(s.placement.post ? { post: s.placement.post } : {}),
+        ...(s.placement.y !== undefined ? { floor: s.placement.y } : {}),
       })),
+      base: sources.base,
       vehicles: [...sources.vehicles.values()].map((v) => ({
         id: v.placement.id,
         engine: v.engineCenter,

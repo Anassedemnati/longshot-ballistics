@@ -1,14 +1,16 @@
 import { RIFLES } from '../ballistics/rifles';
 import type { Vec3 } from '../ballistics/types';
-import { segmentBox } from '../game/hit';
+import { segmentBox, segmentHitsAny } from '../game/hit';
 import type { Box, Obstacle } from '../game/hit';
 import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import { MISSION_LIMITS } from './config';
 import type { Density, MissionConfig } from './config';
 import { DUMMY_HEAD, DUMMY_UPRIGHT, LOWER_TORSO_CY, UPPER_TORSO_CY } from './dummyDims';
+import { BASE_RADIUS, planBase } from './basePlan';
+import type { BasePlan, BaseSize, GuardPost } from './basePlan';
 import { backdropScore, nearestCoverGap, pickHide, scoreHide } from './hide';
-import { COMPOUND_AREA_M, COMPOUND_CLEAR_M, ROUTE_KEEP_OFF_M, finishHvt, planCompound, routeLegs } from './hvtLayout';
+import { COMPOUND_AREA_M, COMPOUND_CLEAR_M, ROUTE_KEEP_OFF_M, finishHvt, planBaseCompound, planCompound, routeLegs } from './hvtLayout';
 import type { CompoundDraft, HvtPlacement } from './hvtLayout';
 import {
   propBoxes,
@@ -43,6 +45,12 @@ export interface SoldierPlacement {
   range: number;
   /** True when the cover predicate holds: lower torso hidden by a wall or vehicle, head and upper torso in view. */
   behindCover: boolean;
+  /** A guard of the military base (see `guardPlacements`): the post he holds. Absent for the mission's own soldiers. */
+  post?: GuardPost['post'];
+  /** Height of what he stands on when it is not the terrain (a watch-tower deck), m (world). Absent: the terrain under him. */
+  y?: number;
+  /** A patrol guard's beat: a closed loop of world points, m, starting where he stands. */
+  route?: ReadonlyArray<{ x: number; z: number }>;
 }
 
 export interface VehicleTargetPlacement {
@@ -77,8 +85,14 @@ export interface MissionLayout {
   snipers: SniperPlacement[];
   /** Scenery: houses, sheds, walls and parked vehicles (the vehicle targets are not in here). */
   props: PropPlacement[];
-  /** An `hvt` mission: the officer's compound (its house and jeep are the first two props), his walk and his ways out. */
+  /** An `hvt` mission: the officer's compound (its own props come first: the house, if it has one, then the jeep), his walk and his ways out. */
   hvt?: HvtPlacement;
+  /**
+   * A military base (`config.base` other than 'none'): its props (drawn as one merged mesh, NOT in `props`: their kinds are base kinds),
+   * its guard posts (see `guardPlacements`) and its open yard. Nothing else of the layout stands within `base.radius` of its centre but
+   * the mission's soldiers (some in its yard) and, in an `hvt` mission, the officer's jeep.
+   */
+  base?: BasePlan;
 }
 
 const DEG = Math.PI / 180;
@@ -104,10 +118,7 @@ const TERRAIN_CLEARANCE = 0.1;
 const TARGET_PATCH = 2;
 
 function hitsAny(a: Vec3, b: Vec3, obstacles: readonly Obstacle[]): boolean {
-  for (let i = 0; i < obstacles.length; i++) {
-    if (segmentBox(a, b, obstacles[i].box) !== null) return true;
-  }
-  return false;
+  return segmentHitsAny(a, b, obstacles);
 }
 
 /** True when the ground (sampled every 2 m, skipping the last 2 m) stays below the straight line from -> to. */
@@ -142,7 +153,7 @@ export function soldierAimPoints(
   s: SoldierPlacement,
   field: TerrainField,
 ): { head: Vec3; upperTorso: Vec3; lowerTorso: Vec3 } {
-  const g = field.height(s.x, s.z);
+  const g = s.y ?? field.height(s.x, s.z);
   return {
     head: { x: s.x, y: g + DUMMY_HEAD.cy, z: s.z },
     upperTorso: { x: s.x, y: g + UPPER_TORSO_CY, z: s.z },
@@ -160,7 +171,7 @@ export function soldierUprightBounds(s: SoldierPlacement, field: TerrainField): 
     id: `${s.id}:bounds`,
     material: 'metal',
     box: {
-      center: { x: s.x, y: field.height(s.x, s.z) + DUMMY_UPRIGHT.halfHeight, z: s.z },
+      center: { x: s.x, y: (s.y ?? field.height(s.x, s.z)) + DUMMY_UPRIGHT.halfHeight, z: s.z },
       halfSize: { x: DUMMY_UPRIGHT.halfWidth, y: DUMMY_UPRIGHT.halfHeight, z: DUMMY_UPRIGHT.halfDepth },
       yaw: s.yaw,
     },
@@ -174,8 +185,32 @@ export function soldierUprightBounds(s: SoldierPlacement, field: TerrainField): 
 export function layoutColliders(layout: MissionLayout, field: TerrainField): Obstacle[] {
   const out: Obstacle[] = [];
   for (const p of layout.props) out.push(...propColliders(p, field.height(p.x, p.z)));
+  if (layout.base) out.push(...baseColliders(layout.base, field));
   for (const v of layout.vehicleTargets) out.push(...vehicleTargetColliders(v, field.height(v.x, v.z)).body);
   return out;
+}
+
+/** Every collider of a military base, each prop on the terrain at its footprint centre (as world.ts registers them). */
+export function baseColliders(base: BasePlan, field: TerrainField): Obstacle[] {
+  const out: Obstacle[] = [];
+  for (const p of base.props) out.push(...propColliders(p, field.height(p.x, p.z)));
+  return out;
+}
+
+/**
+ * The base's guards as soldiers (ids `base-guard-N`, after the mission's own soldiers): a tower guard stands on its deck (`y` is the deck's world
+ * height: the terrain under the tower's centre plus the post's `y`), a patrol carries his beat. Empty without a base.
+ */
+export function guardPlacements(layout: Pick<MissionLayout, 'base'>, field: TerrainField): SoldierPlacement[] {
+  const base = layout.base;
+  if (!base) return [];
+  return base.guards.map((g) => {
+    const on = g.post === 'tower' && g.on !== undefined ? base.props.find((p) => p.id === g.on) : undefined;
+    const placement: SoldierPlacement = { id: g.id, x: g.x, z: g.z, yaw: g.yaw, range: Math.hypot(g.x, g.z), behindCover: false, post: g.post };
+    if (on && g.y !== undefined) placement.y = field.height(on.x, on.z) + g.y;
+    if (g.route) placement.route = g.route.map((q) => ({ x: q.x, z: q.z }));
+    return placement;
+  });
 }
 
 /**
@@ -319,6 +354,67 @@ function planProps(config: MissionConfig, rng: Rng): PropPlacement[] {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The military base
+
+/** Seeded centres tried for the base (up to four times as many draws, for the ones that do not fit the sector or sit on an outcrop). */
+const BASE_CANDIDATES = 12;
+/** A centre whose yard the shooter sees this share of (a standing man's head) is taken at once; otherwise the best of the candidates. */
+const BASE_YARD_SEEN = 0.6;
+/** The base keeps this far off a rock outcrop (beyond both radii), m: the outcrops carry boulders. */
+const BASE_OUTCROP_GAP = 4;
+
+/** Share of the base's yard spots where the shooter sees a standing man's head past the terrain and the base's own colliders, 0..1. */
+export function baseYardSeen(base: BasePlan, field: TerrainField, colliders: readonly Obstacle[]): number {
+  if (base.yard.length === 0) return 0;
+  let seen = 0;
+  for (const p of base.yard) {
+    const head = { x: p.x, y: field.height(p.x, p.z) + DUMMY_HEAD.cy, z: p.z };
+    if (!hitsAny(field.shooter, head, colliders) && terrainClear(field.shooter, head, field)) seen++;
+  }
+  return seen / base.yard.length;
+}
+
+/**
+ * Where the base goes: seeded centres inside the range band (pushed out to where a disc of the base's radius fits the sector: about 200 m for a
+ * full base, 100 m for an outpost, so a band that ends nearer puts it just beyond), within the props' site bearing, off the rock outcrops, its
+ * front (the gate) facing the shooter. The first whose yard the shooter sees `BASE_YARD_SEEN` of wins, else the one he sees most of. Its own
+ * rng (`rng`): a mission without a base is not touched.
+ */
+function placeBase(config: MissionConfig, field: TerrainField, rng: Rng): BasePlan {
+  const size: BaseSize = config.base === 'outpost' ? 'outpost' : 'base';
+  const radius = BASE_RADIUS[size];
+  // A disc of radius r fits the sector straight downrange from r / sin(half angle) on (`propFitsSector`'s rule).
+  const minFit = (radius + 1) / Math.sin(SECTOR_HALF_ANGLE_RAD) + 1;
+  const lo = Math.max(config.rangeMin, MIN_PROP_RANGE + radius, minFit);
+  const hi = Math.max(lo, Math.min(config.rangeMax, SECTOR_MAX_RANGE - radius - 1));
+  let best: BasePlan | null = null;
+  let bestSeen = -1;
+  let tried = 0;
+  for (let i = 0; i < BASE_CANDIDATES * 4 && tried < BASE_CANDIDATES && bestSeen < BASE_YARD_SEEN; i++) {
+    const range = lo + rng() * (hi - lo);
+    // The widest bearing at which the disc still fits the sector at this range (0 right at `minFit`).
+    const room = Math.max(0, SECTOR_HALF_ANGLE_RAD - Math.asin(Math.min(1, (radius + 1.5) / range)));
+    const bearing = (rng() * 2 - 1) * Math.min(SITE_BEARING, room);
+    const x = range * Math.sin(bearing);
+    const z = -range * Math.cos(bearing);
+    if (!propFitsSector(x, z, radius)) continue;
+    if (field.outcrops.some((o) => Math.hypot(o.x - x, o.z - z) < o.radius + radius + BASE_OUTCROP_GAP)) continue;
+    tried++;
+    const plan = planBase({ x, z }, facingYaw(x, z), size, rng, field);
+    const seen = baseYardSeen(plan, field, baseColliders(plan, field));
+    if (seen > bestSeen) {
+      bestSeen = seen;
+      best = plan;
+    }
+  }
+  if (best) return best;
+  // Every draw sat on an outcrop: straight downrange at the band's near end, outcrops or not.
+  const x = 0;
+  const z = -lo;
+  return planBase({ x, z }, facingYaw(x, z), size, rng, field);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Placement of vehicle targets and soldiers
 
 interface Stage {
@@ -446,6 +542,8 @@ interface Ctx {
   usedRoofs: Set<string>;
   /** An `hvt` mission: the soldiers stand round the compound (`x`, `z`, within `r`), and off the officer's walk (legs x0, z0, x1, z1...). */
   area?: { x: number; z: number; r: number; legs: number[] };
+  /** The military base's disc (centre and radius, m) and its colliders: a vehicle target inside the disc keeps clear of them. */
+  keepOut?: { x: number; z: number; r: number; colliders: Obstacle[] };
 }
 
 interface PlacedSniper {
@@ -472,6 +570,14 @@ function evaluateVehicle(
   const { body, engineCenter } = vehicleTargetColliders(v, g);
   const engine = vehicleEngineObstacle(v, g);
   const fr = propFootprintRadius(v.kind);
+  const k = ctx.keepOut;
+  if (k && Math.hypot(v.x - k.x, v.z - k.z) < k.r + fr + PROP_GAP) {
+    // In the base: parked in its open ground, every box (grown by half the props' gap) clear of the base's own.
+    for (const b of [...body, engine]) {
+      const grown: Box = { ...b.box, halfSize: { x: b.box.halfSize.x + PROP_GAP / 2, y: b.box.halfSize.y, z: b.box.halfSize.z + PROP_GAP / 2 } };
+      for (const o of k.colliders) if (boxesOverlap(grown, o.box)) return null;
+    }
+  }
   for (const p of ctx.props) {
     if (Math.hypot(p.x - v.x, p.z - v.z) < fr + propFootprintRadius(p.kind) + stage.spacing) return null;
   }
@@ -589,6 +695,30 @@ function placeOpen(ctx: Ctx, stage: Stage): PlacedSoldier | null {
     const yaw = wrapAngle(facingYaw(x, z) + (rng() * 2 - 1) * SOLDIER_YAW_JITTER);
     const placed = evaluateSoldier(ctx, x, z, yaw, stage, false);
     if (placed) return placed;
+  }
+  return null;
+}
+
+/** Tries per yard spot, and how far a soldier may stand off the spot, m. */
+const YARD_TRIES = 3;
+const YARD_JITTER = 0.8;
+
+/**
+ * A soldier in the military base's yard (a `clear` mission puts some of the soldiers there): the yard's open spots in a seeded order, a little off
+ * each, inside the range band and passing every check of `evaluateSoldier` (the shooter sees his head and chest past the base). Null when none does.
+ */
+function placeInYard(ctx: Ctx, yard: ReadonlyArray<{ x: number; z: number }>): PlacedSoldier | null {
+  const { rng, config } = ctx;
+  for (const spot of shuffle([...yard], rng)) {
+    for (let k = 0; k < YARD_TRIES; k++) {
+      const x = spot.x + (rng() * 2 - 1) * YARD_JITTER;
+      const z = spot.z + (rng() * 2 - 1) * YARD_JITTER;
+      const range = Math.hypot(x, z);
+      if (range < config.rangeMin || range > config.rangeMax || Math.abs(Math.atan2(x, -z)) > MAX_BEARING) continue;
+      const yaw = wrapAngle(facingYaw(x, z) + (rng() * 2 - 1) * SOLDIER_YAW_JITTER);
+      const placed = evaluateSoldier(ctx, x, z, yaw, SOLDIER_STAGES[1], false);
+      if (placed) return placed;
+    }
   }
   return null;
 }
@@ -959,7 +1089,15 @@ function describeBand(config: MissionConfig): string {
 }
 
 /** One complete placement attempt with the given props; null when a target cannot be placed (the caller drops props). */
-function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: PropPlacement[], final: boolean, compound?: CompoundDraft): MissionLayout | null {
+function solve(
+  config: MissionConfig,
+  field: TerrainField,
+  rng: Rng,
+  props: PropPlacement[],
+  final: boolean,
+  compound?: CompoundDraft,
+  base?: BasePlan,
+): MissionLayout | null {
   const placedProps = props.map((p, i) => ({ ...p, id: `prop-${i}` }));
   const staticObs: Obstacle[] = [];
   const coverObs: Obstacle[] = [];
@@ -973,6 +1111,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
       candidates.push({ kind: p.kind, x: p.x, z: p.z, yaw: p.yaw });
     }
   }
+  // The base's colliders block sight and stand in the way like any prop's; they are not cover candidates (HESCO and sandbags are low, but the
+  // soldiers that fight back find their cover behind them through the cover map).
+  const baseObs = base ? baseColliders(base, field) : [];
+  staticObs.push(...baseObs);
   const ctx: Ctx = {
     field,
     eye: field.shooter,
@@ -990,7 +1132,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
     sniperBounds: [],
     usedRoofs: new Set(),
     area: compound && { x: compound.x, z: compound.z, r: COMPOUND_AREA_M, legs: routeLegs(compound) },
+    keepOut: base && { x: base.center.x, z: base.center.z, r: base.radius, colliders: baseObs },
   };
+  // The guards stand at their posts before anyone else is placed: their bodies block sight like the soldiers' (no soldier hides behind one).
+  for (const g of guardPlacements({ base }, field)) ctx.bounds.push(soldierUprightBounds(g, field));
 
   for (let i = 0; i < config.vehicleTargets; i++) {
     const v = placeVehicleTarget(ctx, final);
@@ -1011,8 +1156,11 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
   const wantCover = candidates.length === 0 ? 0 : COVER_FRACTION * config.soldiers;
   const coverCount = Math.floor(wantCover) + (rng() < wantCover - Math.floor(wantCover) ? 1 : 0);
   const soldierStages = final ? [...SOLDIER_STAGES, LAST_RESORT] : SOLDIER_STAGES;
+  // A `clear` mission with a base: about half the soldiers are tried in its yard first (an `hvt` one places them round the base already).
+  const yardCount = base && !compound ? Math.min(Math.ceil(config.soldiers / 2), base.yard.length) : 0;
   for (let i = 0; i < config.soldiers; i++) {
-    let placed = i < coverCount ? placeBehindCover(ctx, candidates, SOLDIER_STAGES[0]) : null;
+    let placed = base && i < yardCount ? placeInYard(ctx, base.yard) : null;
+    if (!placed && i >= yardCount && i < yardCount + coverCount) placed = placeBehindCover(ctx, candidates, SOLDIER_STAGES[0]);
     for (const stage of soldierStages) {
       if (placed) break;
       placed = placeOpen(ctx, stage);
@@ -1037,8 +1185,13 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
 
   const soldiers = ctx.soldiers.map((p) => ({ ...p.s, behindCover: isBehindCover(ctx, p) }));
   const layout: MissionLayout = { soldiers, vehicleTargets: ctx.vehicles, snipers: ctx.snipers.map((p) => p.s), props: placedProps };
-  // The compound's house and jeep are the first two props (`generateLayout` puts them there and never drops them).
-  if (compound) layout.hvt = finishHvt(compound, { houseId: placedProps[0].id, vehicleId: placedProps[1].id }, soldiers, field, staticObs);
+  if (base) layout.base = base;
+  // The compound's own props come first (`generateLayout` puts them there and never drops them): its house, when it has one, then the jeep.
+  if (compound) {
+    const own = compound.props.length;
+    const ids = { houseId: own > 1 ? placedProps[0].id : undefined, vehicleId: placedProps[own - 1].id };
+    layout.hvt = finishHvt(compound, ids, soldiers, field, staticObs);
+  }
   return layout;
 }
 
@@ -1052,11 +1205,20 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
 export function generateLayout(config: MissionConfig, field: TerrainField): MissionLayout {
   const rng = createRng((Math.imul(config.seed, 0x9e3779b1) ^ 0x4c41594f) >>> 0);
   let props = planProps(config, rng);
+  // A military base, from its own rng (a mission without one stays exactly as it was): the rest of the scenery keeps out of its disc.
+  let base: BasePlan | undefined;
+  if (config.base !== 'none') {
+    const b = placeBase(config, field, createRng((Math.imul(config.seed, 0xc2b2ae35) ^ 0x42415345) >>> 0));
+    props = props.filter((p) => Math.hypot(p.x - b.center.x, p.z - b.center.z) > b.radius + propFootprintRadius(p.kind) + PROP_GAP);
+    base = b;
+  }
   // An `hvt` mission: the officer's compound, from its own rng (a `clear` mission's layout stays exactly as it was). Its house and jeep go
-  // first and are never dropped; the rest of the scenery keeps out of it.
+  // first and are never dropped; the rest of the scenery keeps out of it. With a base, the compound is the base: his jeep parks in its lane and
+  // he walks its yard (`planBaseCompound`).
   let compound: CompoundDraft | undefined;
   if (config.objective === 'hvt') {
-    compound = planCompound(config, field, createRng((Math.imul(config.seed, 0x85ebca6b) ^ 0x48565421) >>> 0));
+    const hvtRng = createRng((Math.imul(config.seed, 0x85ebca6b) ^ 0x48565421) >>> 0);
+    compound = base ? planBaseCompound(config, field, base, hvtRng) : planCompound(config, field, hvtRng);
     const c = compound;
     props = props.filter((p) => Math.hypot(p.x - c.x, p.z - c.z) > COMPOUND_CLEAR_M + propFootprintRadius(p.kind));
   }
@@ -1066,7 +1228,7 @@ export function generateLayout(config: MissionConfig, field: TerrainField): Miss
   for (const keep of keeps) {
     if (tried.has(keep)) continue;
     tried.add(keep);
-    const layout = solve(config, field, rng, [...own, ...props.slice(0, keep)], keep === 0, compound);
+    const layout = solve(config, field, rng, [...own, ...props.slice(0, keep)], keep === 0, compound, base);
     if (layout) return layout;
   }
   // Unreachable: the last attempt (no props) either returns a layout or throws its own, specific error.

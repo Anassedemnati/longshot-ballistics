@@ -44,7 +44,7 @@ export type BaseSize = 'outpost' | 'base';
 export const BASE_RADIUS: Record<BaseSize, number> = { outpost: 20, base: 40 };
 
 /** Half side of the perimeter square, m: corner towers turned to face out diagonally still end inside the radius. */
-const HALF_SIDE: Record<BaseSize, number> = { outpost: 12, base: 26 };
+export const HALF_SIDE: Record<BaseSize, number> = { outpost: 12, base: 26 };
 /** The patrol's ring road runs this far inside the perimeter line, m. */
 const RING_INSET = 3;
 /** Interior props stay this far inside the perimeter line, m (clear of the ring road). */

@@ -4,6 +4,7 @@ import { BloodSystem } from '../fx/blood';
 import { DustSystem } from '../fx/dust';
 import { SparkSystem } from '../fx/sparks';
 import type { HitTarget, Obstacle } from '../game/hit';
+import { createBaseMesh } from '../scene/baseMesh';
 import { createGroundDetail } from '../scene/detail';
 import { createNest } from '../scene/nest';
 import type { Nest } from '../scene/nest';
@@ -25,7 +26,7 @@ import type { ModelLoader, Vegetation } from '../scene/vegetation';
 import type { MissionConfig } from './config';
 import { routeSamples } from './hvtLayout';
 import type { HvtPlacement } from './hvtLayout';
-import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
+import { baseColliders, generateLayout, guardPlacements, legacyLayout, soldierAimPoints } from './layout';
 import type { MissionLayout, SniperPlacement, SoldierPlacement, VehicleTargetPlacement } from './layout';
 import { propColliders, vehicleEngineObstacle } from './props';
 import { sniperAimPoints } from './sniperDims';
@@ -112,7 +113,7 @@ export interface World extends MissionPlan {
   snipers: Map<string, EnemySniper>;
   /** The HVT and his bodyguards (an `hvt` mission), else null. */
   hvt: HvtWorld | null;
-  /** Soldiers + vehicle targets + enemy snipers (+ the HVT and his bodyguards). */
+  /** Soldiers (the base's guards included) + vehicle targets + enemy snipers (+ the HVT and his bodyguards). */
   targetsTotal: number;
 }
 
@@ -185,12 +186,23 @@ export function buildWorld(
     obstacles.push(...colliders);
   }
 
+  // A military base: the whole of it in one merged mesh (a handful of draw calls; never one mesh per prop, which would be well over a hundred),
+  // its colliders registered like the village props'.
+  if (layout.base) {
+    const mesh = createBaseMesh(layout.base.props, field.height, config.theme);
+    freezeStatic(mesh);
+    scene.add(mesh);
+    obstacles.push(...baseColliders(layout.base, field));
+  }
+
   const liveTargets: HitTarget[] = [];
   const soldiers = new Map<string, Soldier>();
-  for (const p of layout.soldiers) {
-    const groundY = field.height(p.x, p.z);
+  // The mission's soldiers, then the base's guards (the squad's cover map gives the first ones their start spots, in this order).
+  for (const p of [...layout.soldiers, ...guardPlacements(layout, field)]) {
+    const groundY = p.y ?? field.height(p.x, p.z);
+    const ground = p.y !== undefined ? deckGround(p, field) : field.height;
     // Mission soldiers stay down; only the practice range's dummy stands up again.
-    const dummy = createTargetDummy({ x: p.x, y: groundY, z: p.z }, p.yaw, p.id, { autoReset: opts.legacy, ground: field.height });
+    const dummy = createTargetDummy({ x: p.x, y: groundY, z: p.z }, p.yaw, p.id, { autoReset: opts.legacy, ground });
     scene.add(dummy.group);
     const aim = soldierAimPoints(p, field);
     soldiers.set(p.id, {
@@ -242,16 +254,39 @@ export function buildWorld(
     const guards = Array.from({ length: h.guards }, (_, i) => body(`guard-${i}`, start.x + 2 * Math.sin(i * 1.7), start.z + 2 * Math.cos(i * 1.7), 'guard'));
     hvt = { placement: h, officer, guards, vehicle: hvtVehicle, vehicleColliders: hvtVehicleColliders };
   }
-  const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length + (hvt ? 1 + hvt.guards.length : 0);
+  const targetsTotal = soldiers.size + layout.vehicleTargets.length + layout.snipers.length + (hvt ? 1 + hvt.guards.length : 0);
 
   return { ...plan, scene, shadow, dust, sparks, blood, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, hvt, targetsTotal };
+}
+
+/** Half side of a watch tower's deck, m (2.9 m square, see mission/baseProps.ts): a tower guard's ground is the deck within it. */
+const DECK_HALF_M = 1.45;
+
+/**
+ * The ground of a guard who stands on a watch-tower deck at height `p.y`: the deck inside its square (about his start: he stands near its
+ * middle and never leaves it), the terrain outside it, so a body that falls over the parapet comes to rest on the ground.
+ */
+function deckGround(p: SoldierPlacement, field: TerrainField): (x: number, z: number) => number {
+  const deck = p.y as number;
+  const c = Math.cos(p.yaw);
+  const s = Math.sin(p.yaw);
+  // The deck's centre: the guard stands 0.3 m ahead of it, along his facing (basePlan.ts).
+  const cx = p.x - s * 0.3;
+  const cz = p.z - c * 0.3;
+  return (x, z) => {
+    const dx = x - cx;
+    const dz = z - cz;
+    const lx = c * dx - s * dz;
+    const lz = s * dx + c * dz;
+    return Math.abs(lx) <= DECK_HALF_M && Math.abs(lz) <= DECK_HALF_M ? deck : field.height(x, z);
+  };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */
 export function nearestAimPoint(world: World): Vec3 | null {
   let nearest: { range: number; point: Vec3 } | null = null;
   for (const s of world.soldiers.values()) {
-    const g = world.field.height(s.placement.x, s.placement.z);
+    const g = s.placement.y ?? world.field.height(s.placement.x, s.placement.z);
     if (!nearest || s.placement.range < nearest.range) {
       nearest = { range: s.placement.range, point: { x: s.placement.x, y: g + CHEST_HEIGHT, z: s.placement.z } };
     }

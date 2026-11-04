@@ -1,12 +1,14 @@
 import type { Vec3 } from '../ballistics/types';
-import { segmentBox } from '../game/hit';
+import { segmentHitsAny } from '../game/hit';
 import type { Obstacle } from '../game/hit';
 import type { EscapePoint, RoutePoint } from '../game/hvt';
 import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
+import { HALF_SIDE, rectsOverlap } from './basePlan';
+import type { BasePlan } from './basePlan';
 import type { MissionConfig } from './config';
-import { propColliders, propFootprintRadius } from './props';
-import type { PropPlacement } from './props';
+import { propColliders, propFootprintRadius, propFootprintRect } from './props';
+import type { PropPlacement, SceneryKind, SceneryPlacement } from './props';
 import { randInt } from './random';
 import type { Rng } from './random';
 
@@ -16,6 +18,9 @@ import type { Rng } from './random';
 // to the jeep and round behind; it is chosen, among a dozen seeded candidates, so the shooter sees most of it but not all (the house hides
 // a stretch). mission/layout.ts calls it before the soldiers are placed (they are then placed round the compound) and finishes the route
 // once they are.
+//
+// With a military base in the mission the compound IS the base (`planBaseCompound`): no house of his own, his door is a tent's (or the gate
+// booth's), his jeep parks in the base's lane, and his walk runs through the base's yard, chosen the same way for the share the shooter sees.
 
 /** Head height of the walking officer, m: what the shooter has to see. */
 const HEAD_M = 1.62;
@@ -45,14 +50,16 @@ export interface HvtPlacement {
   /** The compound's centre, m. */
   x: number;
   z: number;
-  /** Ids of the house and of the jeep in `layout.props` (the jeep is drawn movable: it drives off). */
-  houseId: string;
+  /** Ids of the house (none when the compound is a military base: his door is a tent's) and of the jeep in `layout.props` (drawn movable: it drives off). */
+  houseId?: string;
   vehicleId: string;
   /** His walk, a closed loop: he starts at the first point (the door). */
   route: RoutePoint[];
   escapes: EscapePoint[];
   /** The way the jeep drives out of the area (unit, x and z). */
   road: { x: number; z: number };
+  /** How far the jeep drives off, m, when something stands in its way (a base's gate); absent: out of the area (mission/hvtDirector.ts). */
+  driveM?: number;
   /** Bodyguards, 2-4. */
   guards: number;
   /** Share of the walk (straight legs, sampled every 2 m) the shooter sees his head on, 0..1. */
@@ -69,6 +76,8 @@ export interface CompoundDraft {
   front: { x: number; z: number };
   back: { x: number; z: number };
   road: { x: number; z: number };
+  /** See `HvtPlacement.driveM`. */
+  driveM?: number;
   guards: number;
   waits: { door: number; car: number; front: number; back: number };
 }
@@ -97,7 +106,7 @@ function corners(d: CompoundDraft): Array<{ x: number; z: number }> {
 
 /** The straight from `a` to `b` is clear of the terrain (sampled every 2 m, the last 2 m skipped) and of every obstacle. */
 function seen(eye: Vec3, to: Vec3, field: TerrainField, obstacles: readonly Obstacle[]): boolean {
-  for (const o of obstacles) if (segmentBox(eye, to, o.box) !== null) return false;
+  if (segmentHitsAny(eye, to, obstacles)) return false;
   const dx = to.x - eye.x;
   const dz = to.z - eye.z;
   const h = Math.hypot(dx, dz);
@@ -203,6 +212,130 @@ export function planCompound(config: MissionConfig, field: TerrainField, rng: Rn
   return best;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The compound inside a military base
+
+/** A footprint rectangle in the world (the shape `rectsOverlap` of basePlan.ts takes: centre, half sizes, yaw as a prop's). */
+interface WorldRect {
+  u: number;
+  w: number;
+  hu: number;
+  hw: number;
+  yaw: number;
+}
+
+function worldRect(kind: SceneryKind, x: number, z: number, yaw: number): WorldRect {
+  const f = propFootprintRect(kind);
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return { u: x + c * f.cx + s * f.cz, w: z - s * f.cx + c * f.cz, hu: f.hx, hw: f.hz, yaw };
+}
+
+/** A walker keeps this far from a base prop's footprint at a point of his walk, m; the jeep keeps this far from every footprint. */
+const BASE_WALK_CLEAR_M = 0.6;
+const BASE_JEEP_CLEAR_M = 0.6;
+/** Candidate compounds drawn in a base (door x jeep spot x the yard points of the walk). */
+const BASE_CANDIDATES = 24;
+/** The jeep stops this far short of the gate line, m (the gate's arm is down). */
+const GATE_STOP_M = 3;
+
+/**
+ * The compound of an `hvt` mission that has a military base: the base itself. His door is a tent's or the gate booth's (a door of the base's
+ * own, so no house of his: the doors are those whose step is open ground), his jeep parks in the lane (a movable prop of the layout, nose to
+ * the gate: when he gets away it drives up to the gate), and his walk goes door, a yard spot toward the gate, the jeep, a yard spot toward the
+ * back. Seeded candidates, the first whose walk the shooter sees 55-92 % of (past the base's colliders and the jeep), else the one nearest 75 %.
+ */
+export function planBaseCompound(config: MissionConfig, field: TerrainField, base: BasePlan, rng: Rng): CompoundDraft {
+  const { center, facingYaw } = base;
+  // The base frame: u to the right, w toward the front (the gate), as basePlan.ts lays it out.
+  const fu = { x: Math.cos(facingYaw), z: -Math.sin(facingYaw) };
+  const fw = { x: Math.sin(facingYaw), z: Math.cos(facingYaw) };
+  const toWorld = (u: number, w: number): { x: number; z: number } => ({ x: center.x + fu.x * u + fw.x * w, z: center.z + fu.z * u + fw.z * w });
+  const toBase = (x: number, z: number): { u: number; w: number } => ({ u: (x - center.x) * fu.x + (z - center.z) * fu.z, w: (x - center.x) * fw.x + (z - center.z) * fw.z });
+  const rects = base.props.map((p) => worldRect(p.kind, p.x, p.z, p.yaw));
+  const open = (x: number, z: number, clear: number): boolean => {
+    const dot: WorldRect = { u: x, w: z, hu: 0.01, hw: 0.01, yaw: 0 };
+    return rects.every((r) => !rectsOverlap(dot, r, clear));
+  };
+  const colliders = base.props.flatMap((p) => propColliders(p, field.height(p.x, p.z)));
+
+  // Doors: either end and either side of every tent, and the booth's four sides, where the step is open ground.
+  const doors: Array<{ x: number; z: number }> = [];
+  for (const p of base.props as SceneryPlacement[]) {
+    if (p.kind !== 'tent' && p.kind !== 'booth') continue;
+    const f = propFootprintRect(p.kind);
+    const c = Math.cos(p.yaw);
+    const s = Math.sin(p.yaw);
+    for (const [lx, lz] of [
+      [0, f.hz + 0.9],
+      [0, -f.hz - 0.9],
+      [f.hx + 0.9, 0],
+      [-f.hx - 0.9, 0],
+    ]) {
+      const x = p.x + c * lx + s * lz;
+      const z = p.z - s * lx + c * lz;
+      if (open(x, z, BASE_WALK_CLEAR_M) && Math.hypot(x - center.x, z - center.z) < base.radius - 3) doors.push({ x, z });
+    }
+  }
+  // Jeep spots: along the lane (u near 0), nose to the gate, its footprint clear of every base prop.
+  const S = HALF_SIDE[base.size];
+  const jeeps: Array<{ x: number; z: number; w: number }> = [];
+  for (let w = S - 8; w >= -S + 6; w -= 1.5) {
+    for (const u of [0, -1.2, 1.2, -2.2, 2.2]) {
+      const q = toWorld(u, w);
+      const r = worldRect('jeep', q.x, q.z, facingYaw);
+      if (rects.every((o) => !rectsOverlap(r, o, BASE_JEEP_CLEAR_M))) {
+        jeeps.push({ ...q, w });
+        break;
+      }
+    }
+  }
+  const yard = base.yard;
+  if (doors.length === 0 || jeeps.length === 0 || yard.length < 2) {
+    throw new Error(`planBaseCompound: no room for the HVT in the ${base.size} (band ${config.rangeMin}-${config.rangeMax} m, seed ${config.seed})`);
+  }
+  // Yard spots by how far forward they are: the front of his walk is drawn from the forward half, the back from the rear half.
+  const byW = [...yard].sort((a, b) => toBase(b.x, b.z).w - toBase(a.x, a.z).w);
+  const half = Math.ceil(byW.length / 2);
+  let best: CompoundDraft | null = null;
+  let bestScore = Infinity;
+  for (let i = 0; i < BASE_CANDIDATES && bestScore > 0; i++) {
+    const door = doors[randInt(rng, 0, doors.length - 1)];
+    const jeepAt = jeeps[randInt(rng, 0, jeeps.length - 1)];
+    const front = byW[randInt(rng, 0, half - 1)];
+    const back = byW[randInt(rng, byW.length - half, byW.length - 1)];
+    const jeep: PropPlacement = { id: '', kind: 'jeep', x: jeepAt.x, z: jeepAt.z, yaw: facingYaw };
+    // The yard spots of his walk must not lie under the jeep.
+    const jr = worldRect('jeep', jeep.x, jeep.z, jeep.yaw);
+    const underJeep = (q: { x: number; z: number }): boolean => rectsOverlap({ u: q.x, w: q.z, hu: 0.01, hw: 0.01, yaw: 0 }, jr, BASE_WALK_CLEAR_M);
+    if (underJeep(front) || underJeep(back)) continue;
+    // He gets in on the driver's side away from the shooter's line (either side of a jeep in the lane is open: the one nearer the door).
+    const left = local(jeep, 1.75, -0.4);
+    const right = local(jeep, -1.75, -0.4);
+    const carDoor = Math.hypot(left.x - door.x, left.z - door.z) < Math.hypot(right.x - door.x, right.z - door.z) ? left : right;
+    const draft: CompoundDraft = {
+      x: center.x,
+      z: center.z,
+      props: [jeep],
+      door,
+      carDoor,
+      front,
+      back,
+      road: { x: fw.x, z: fw.z },
+      driveM: Math.max(0, S - GATE_STOP_M - jeepAt.w - propFootprintRect('jeep').hz),
+      guards: randInt(rng, 2, 4),
+      waits: { door: between(rng, [3, 7]), car: between(rng, [3, 6]), front: rng() < 0.5 ? between(rng, [2.5, 5]) : 0, back: rng() < 0.4 ? between(rng, [2, 4]) : 0 },
+    };
+    const share = visibleShare(corners(draft), field, [...colliders, ...propColliders(jeep, field.height(jeep.x, jeep.z))]);
+    const score = share >= VISIBLE_MIN && share <= VISIBLE_MAX ? 0 : Math.abs(share - 0.75);
+    if (score < bestScore) {
+      bestScore = score;
+      best = draft;
+    }
+  }
+  return best as CompoundDraft;
+}
+
 /** The walk's legs, as (x0, z0, x1, z1) per leg: what the soldiers keep off. */
 export function routeLegs(d: CompoundDraft): number[] {
   const c = corners(d);
@@ -221,7 +354,7 @@ export function routeLegs(d: CompoundDraft): number[] {
  */
 export function finishHvt(
   d: CompoundDraft,
-  ids: { houseId: string; vehicleId: string },
+  ids: { houseId?: string; vehicleId: string },
   soldiers: ReadonlyArray<{ x: number; z: number }>,
   field: TerrainField,
   obstacles: readonly Obstacle[],
@@ -254,11 +387,12 @@ export function finishHvt(
   return {
     x: d.x,
     z: d.z,
-    houseId: ids.houseId,
+    ...(ids.houseId !== undefined ? { houseId: ids.houseId } : {}),
     vehicleId: ids.vehicleId,
     route,
     escapes,
     road: d.road,
+    ...(d.driveM !== undefined ? { driveM: d.driveM } : {}),
     guards: d.guards,
     visibleShare: visibleShare(route, field, obstacles),
   };

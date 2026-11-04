@@ -262,6 +262,8 @@ class Placer {
       this.discs.push({ x: s.x, z: s.z, r: TARGET_MARGIN });
     }
     for (const p of layout.props) this.discs.push({ x: p.x, z: p.z, r: propFootprintRadius(p.kind) + PROP_MARGIN });
+    // A military base: nothing grows inside its disc (its props are not in `layout.props`).
+    if (layout.base) this.discs.push({ x: layout.base.center.x, z: layout.base.center.z, r: layout.base.radius + PROP_MARGIN });
     // The HVT's walk: no tree or bush in the way of the shooter's view of it, nor on it.
     if (layout.hvt) {
       for (const p of routeSamples(layout.hvt.route)) {

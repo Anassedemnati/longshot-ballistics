@@ -15,6 +15,10 @@ import type { Rng } from '../mission/random';
 // Each soldier is a small state machine: idle, alerted (reacts, then runs to cover), inCover (crouched, peeks out every few seconds and fires a
 // burst), relocating (changes position after a while, after a near miss or when a friend nearby goes down) and dead. His position is his own
 // (x, z on the ground; mission/squadDirector.ts puts the body there and animates it).
+//
+// A guard of a military base has a duty (`GuardDuty`) on top: a tower or machine-gun guard HOLDS his post (when the shot is heard he ducks
+// where he stands and fires from there, and never runs for cover), and a patrol walks his beat while all is quiet, stopping now and then to
+// look about; once alerted he runs for cover like any soldier.
 
 /** Every tuning number of the squad and its soldiers. */
 export const SQUAD = {
@@ -59,6 +63,13 @@ export const SQUAD = {
   riseS: 0.35,
   dropS: 0.3,
   lookS: [0.8, 1.6],
+  // --- a patrol ---
+  /** Walking pace on his beat, m/s. */
+  patrolMps: 1.4,
+  /** Chance he stops at a corner of his beat, and for how long, s (he turns to look about every `lookAboutS`). */
+  patrolStopChance: 0.6,
+  patrolStopS: [3, 7],
+  lookAboutS: [1.2, 2.4],
   // --- what his rifle does to the player ---
   /** Chance that a burst hits an exposed player 300 m away or closer, falling to the far one at 900 m or farther (times the squad's knowledge). */
   hitNear: 0.35,
@@ -254,6 +265,14 @@ export class SpotBook {
 }
 
 export type SoldierMode = 'idle' | 'alerted' | 'inCover' | 'relocating' | 'dead';
+
+/** What a base guard does besides what every soldier does (see the file's header). */
+export interface GuardDuty {
+  /** The post he holds (a watch-tower deck, a machine-gun nest): once alerted he takes it as his cover spot and never leaves it. */
+  hold?: Spot;
+  /** His beat while the squad is unaware: a closed loop of points, m, starting where he stands. */
+  route?: ReadonlyArray<{ x: number; z: number }>;
+}
 /** What he is doing in cover: waiting crouched, coming up, firing, going down again, or only looking. */
 export type CoverPhase = 'hold' | 'rise' | 'fire' | 'look' | 'drop';
 export type MoveKind = 'sprint' | 'crouchRun';
@@ -322,6 +341,14 @@ export class SoldierBrain {
   private burstCount = 0;
   private canFire = false;
   private threatYaw = 0;
+  /** A guard's post (`GuardDuty.hold`), or null. */
+  private readonly post: Spot | null;
+  private readonly beat: ReadonlyArray<{ x: number; z: number }> | null;
+  /** The corner of his beat he walks to, how long he still stands at the last one, and when he next turns to look about, s. */
+  private beatAt = 1;
+  private pauseLeft = 0;
+  private lookLeft = 0;
+  private lookYaw = 0;
 
   constructor(
     index: number,
@@ -332,6 +359,7 @@ export class SoldierBrain {
     private readonly listener: BrainListener,
     seed: number,
     startSpot = -1,
+    duty: GuardDuty = {},
   ) {
     this.index = index;
     this.x = start.x;
@@ -342,6 +370,14 @@ export class SoldierBrain {
     this.spot = startSpot;
     if (startSpot >= 0) book.claim(startSpot, index);
     this.threatYaw = start.yaw;
+    this.post = duty.hold ?? null;
+    this.beat = duty.route && duty.route.length >= 2 ? duty.route : null;
+    this.lookYaw = start.yaw;
+  }
+
+  /** True while he walks his beat (a patrol, the squad unaware). */
+  get patrolling(): boolean {
+    return this.mode === 'idle' && this.beat !== null;
   }
 
   get alive(): boolean {
@@ -386,6 +422,7 @@ export class SoldierBrain {
     switch (this.mode) {
       case 'idle':
         if (state !== 'unaware') this.react(playerX, playerZ);
+        else if (this.beat) this.walkBeat(dt);
         break;
       case 'alerted':
       case 'relocating':
@@ -399,8 +436,57 @@ export class SoldierBrain {
 
   // ---- reacting and running ----
 
-  /** A shot was heard: crouch, turn the way it seems to have come from, and (after a moment) run for cover. */
+  /** A patrol's walk round his beat: along a route round the props to each corner in turn, now and then a stop to look about. */
+  private walkBeat(dt: number): void {
+    const beat = this.beat as ReadonlyArray<{ x: number; z: number }>;
+    if (this.pauseLeft > 0) {
+      this.pauseLeft -= dt;
+      this.speed = Math.max(0, this.speed - BRAKE * dt);
+      this.lookLeft -= dt;
+      if (this.lookLeft <= 0) {
+        this.lookLeft = between(this.rng, SQUAD.lookAboutS);
+        this.lookYaw = this.heading + (this.rng() * 2 - 1) * 1.6;
+      }
+      this.turnToward(this.lookYaw, dt);
+      return;
+    }
+    if (this.path.length === 0) {
+      const to = beat[this.beatAt];
+      this.path = this.map.path(this.x, this.z, to.x, to.z);
+      this.pathAt = 0;
+    }
+    const last = this.path.length / 2 - 1;
+    const tx = this.path[this.pathAt * 2];
+    const tz = this.path[this.pathAt * 2 + 1];
+    const dist = Math.hypot(tx - this.x, tz - this.z);
+    if (dist < (this.pathAt >= last ? ARRIVE_M : WAYPOINT_M)) {
+      if (this.pathAt < last) {
+        this.pathAt++;
+        return;
+      }
+      // A corner of the beat: on to the next one, after a look about now and then.
+      this.path = [];
+      this.beatAt = (this.beatAt + 1) % beat.length;
+      if (this.rng() < SQUAD.patrolStopChance) {
+        this.pauseLeft = between(this.rng, SQUAD.patrolStopS);
+        this.lookLeft = 0;
+      }
+      return;
+    }
+    this.speed += Math.min(ACCEL * dt, Math.max(-BRAKE * dt, SQUAD.patrolMps - this.speed));
+    this.turnToward(Math.atan2(tx - this.x, tz - this.z), dt);
+    const step = Math.min(this.speed * dt, dist);
+    this.x += Math.sin(this.heading) * step;
+    this.z += Math.cos(this.heading) * step;
+  }
+
+  /** A shot was heard: crouch, turn the way it seems to have come from, and (after a moment) run for cover. A guard who holds a post ducks where he is. */
   private react(playerX: number, playerZ: number): void {
+    if (this.post) {
+      this.threatYaw = bearing(this.x, this.z, playerX, playerZ);
+      this.arrive();
+      return;
+    }
     this.mode = 'alerted';
     this.reactLeft = between(this.rng, SQUAD.reactS);
     this.stance = 'crouch';
@@ -441,7 +527,8 @@ export class SoldierBrain {
   }
 
   private relocate(why: 'time' | 'miss' | 'friend'): void {
-    if (!this.chooseSpot(SQUAD.relocateMinM)) {
+    // A guard who holds a post stays on it: a near miss or a friend down only makes him wait a while longer before he rises.
+    if (this.post || !this.chooseSpot(SQUAD.relocateMinM)) {
       this.stayLeft = between(this.rng, SQUAD.stayS); // nowhere to go: stay put a while longer
       return;
     }
@@ -502,7 +589,7 @@ export class SoldierBrain {
 
   /** At the spot: crouch, face the threat, wait for the first look out. */
   private arrive(): void {
-    const s = this.spot >= 0 ? this.map.spots[this.spot] : null;
+    const s = this.current();
     if (s) {
       this.x = s.x;
       this.z = s.z;
@@ -520,8 +607,13 @@ export class SoldierBrain {
 
   // ---- in cover ----
 
+  /** The spot he holds: his cover spot, or a guard's post. */
+  private current(): Spot | null {
+    return this.spot >= 0 ? this.map.spots[this.spot] : this.post;
+  }
+
   private cover(dt: number, playerX: number, playerZ: number): void {
-    const s = this.spot >= 0 ? this.map.spots[this.spot] : null;
+    const s = this.current();
     const state = this.squad.state;
     this.stayLeft -= dt;
     if (this.stayLeft <= 0 && this.phase === 'hold') {
@@ -603,7 +695,7 @@ export class SoldierBrain {
   intentInto(out: { speed: number; gait: 'none' | 'sprint' | 'crouchRun' | 'walk'; stance: 'stand' | 'crouch' | 'kneel'; aim: boolean; turnRate: number }): void {
     const moving = (this.mode === 'alerted' || this.mode === 'relocating') && this.reactLeft <= 0 && this.speed > 0.05;
     out.speed = this.speed;
-    out.gait = moving ? this.moveKind : 'none';
+    out.gait = moving ? this.moveKind : this.patrolling && this.speed > 0.05 ? 'walk' : 'none';
     out.stance = this.stance;
     out.aim = this.aiming;
     out.turnRate = this.turnRate;
