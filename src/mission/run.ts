@@ -26,10 +26,10 @@ import type { AlarmCue } from '../game/hvt';
 import type { Cue } from '../game/hearing';
 import { segmentBox, segmentSphere } from '../game/hit';
 import type { HitTarget, HitZone } from '../game/hit';
-import { continuedVelocity, exitPoint } from '../game/penetration';
+import { continuedVelocity, downsSecondTarget, exitPoint, punchThrough } from '../game/penetration';
 import { rangeUnderCrosshair } from '../game/rangefinder';
 import { Squad } from '../game/squad';
-import { BOLT_TIME_S, RELOAD_TIME_S, Weapon } from '../game/weapon';
+import { Weapon } from '../game/weapon';
 import { InputState, bindInput } from '../player/input';
 import { FirstPersonRifle } from '../player/rifle';
 import { GHILLIE_TINT } from '../player/rifleHands';
@@ -184,7 +184,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     listeners: () => listenerPoints,
     passRadiusM: HEARING.crackRadiusM,
   });
-  const weapon = new Weapon(rifle.magazine);
+  const weapon = new Weapon(rifle.magazine, rifle); // the rifle's own bolt (or semi-auto cycle) and reload times
   // The mission clock is stopped until the player's first pointer lock or first shot (whichever comes first).
   let stats = newStats(targetsTotal, null, world.hvt ? { guards: world.hvt.guards.length } : undefined);
   /** Timestamp of the frame being processed, ms (impacts are stamped with it). */
@@ -493,15 +493,16 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     firedAt.set(bullets.fire(origin, velocity, rifle.bcG7), gameTime);
     playShot(audio, config.rifle, config.suppressed);
     rifleModel.fire(shot.boltCycle);
-    if (shot.boltCycle) playBoltCycle(audio, BOLT_TIME_S);
+    view.kick(rifle.recoil); // the picture jumps: barely for a .308, the sight picture lost for a moment with a .50
+    if (shot.boltCycle && rifle.action === 'bolt') playBoltCycle(audio, weapon.boltTimeS); // a semi-auto cycles inside the shot's own report
     hud.setResult('Shot away…');
   }
 
   function reload(): void {
     if (!weapon.reload()) return;
     hud.setRounds(weapon.ammo, weapon.magazine, true);
-    playReload(audio, RELOAD_TIME_S);
-    rifleModel.reload(RELOAD_TIME_S);
+    playReload(audio, weapon.reloadTimeS);
+    rifleModel.reload(weapon.reloadTimeS);
   }
 
   /** Take a target out of the list the bullets see. */
@@ -510,13 +511,21 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     if (i >= 0) liveTargets.splice(i, 1);
   }
 
-  /** The bullets that have come out of a body and fly on (they only ever kick up dust or sparks: nothing is scored, no message is shown). */
+  /**
+   * The bullets that have come out of a body and fly on: they kick up dust or sparks, and down a man behind only with the energy for it
+   * (`downsSecondTarget`: a heavy calibre does, a .308 hardly ever); that kill counts, but not as a hit.
+   */
   const throughBullets = new Map<number, Vec3>(); // bullet id -> where it came out of the body
   const penetrationRng = createRng(0x51ee7);
 
   /** Where a bullet that went through a soldier or sniper ends: dust (or sparks off metal) and the thud, nothing else. */
   function onThroughImpact(event: ImpactEvent, exit: Vec3): void {
     if (event.kind === 'expired') return;
+    if (event.kind === 'target') {
+      // Too spent to down him (or he is a vehicle's engine): it stops in him.
+      playImpactHit(audio, impactSoundDelay(event.point, shooter, atmo.speedOfSound), distance(event.point, shooter));
+      return;
+    }
     const metal = event.kind === 'obstacle' && event.material === 'metal';
     if (metal) sparks.spawn(event.point);
     else dust.spawn(event.point, distance(event.point, exit) < NEAR_LANDING_M ? 0.35 : 1); // landing at his feet: a small puff, not one that hides him
@@ -535,7 +544,10 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     const out = exitPoint(zones, event.point, dir);
     blood.spawnEntry(event.point, dir);
     blood.spawnExit(out, dir);
-    const id = bullets.fire(out, continuedVelocity(event.velocity, penetrationRng), rifle.bcG7, { ghost: true, startTime: event.time });
+    const id = bullets.fire(out, continuedVelocity(event.velocity, penetrationRng, rifle.bulletMassG), rifle.bcG7, {
+      ignoreTargetId: event.targetId,
+      startTime: event.time,
+    });
     throughBullets.set(id, out);
     firedAt.set(id, firedAt.get(event.bulletId) ?? gameTime - event.time); // it keeps the clock of the shot it came from
   }
@@ -545,8 +557,22 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     const exit = throughBullets.get(event.bulletId);
     if (exit) {
       throughBullets.delete(event.bulletId);
-      onThroughImpact(event, exit);
-      return;
+      const live = event.kind === 'target' && event.velocity && downsSecondTarget(rifle.bulletMassG, event.velocity);
+      if (!live) {
+        onThroughImpact(event, exit);
+        return;
+      }
+    }
+    // A heavy anti-materiel bullet goes on through a vehicle's skin (walls still stop everything): the sparks and the clang here, the
+    // bullet flying on past the far face to what is behind (an engine block, a man in cover).
+    let punched = false;
+    if (!exit && rifle.antiMateriel && event.kind === 'obstacle' && event.material === 'metal' && event.velocity) {
+      const box = obstacles.find((o) => o.id === event.obstacleId)?.box;
+      const on = box ? punchThrough(box, event.point, event.velocity, rifle.bulletMassG, penetrationRng) : null;
+      if (on) {
+        bullets.fire(on.origin, on.velocity, rifle.bcG7, { ignoreObstacleId: event.obstacleId, startTime: event.time });
+        punched = true;
+      }
     }
     const result = applyImpact(event, {
       stats,
@@ -565,12 +591,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         if (sniper) return { kind: 'sniper', down: sniper.sniper.down };
         return undefined;
       },
-    });
+    }, exit !== undefined);
     stats = result.stats;
 
-    // A bullet that kills a sniper passed within a hair of him: that is no cue for the others, who only see him go down.
+    // A bullet that kills a sniper passed within a hair of him: that is no cue for the others, who only see him go down. One that
+    // punched through a vehicle has not ended yet.
     const killedSniper = result.killedTargetId !== null && snipers.has(result.killedTargetId);
-    if (!killedSniper) combat?.onBulletEnd(event.closestWatchM);
+    if (!killedSniper && !punched) combat?.onBulletEnd(event.closestWatchM);
 
     const hit = event.kind === 'target' && event.velocity ? { point: event.point, velocity: event.velocity, zone: event.zone } : undefined;
     // The HVT's party sees what happens round them: a bullet that strikes close by, a man going down near the officer.
@@ -778,6 +805,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     frameNowMs = nowMs;
 
+    view.update(dt); // the recoil settles
     view.look(input.yaw, input.pitch);
 
     gameTime += dt;

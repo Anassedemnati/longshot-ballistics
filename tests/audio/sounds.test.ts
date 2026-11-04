@@ -152,3 +152,42 @@ describe('suppressed shot', () => {
     for (const f of filters) expect(f.type === 'lowpass' && f.frequency.value === 1400).toBe(true);
   });
 });
+
+describe('each rifle has its own report', () => {
+  const shot = (id: Parameters<typeof playShot>[1], suppressed = false) => {
+    const f = fakeEngine('ready');
+    playShot(f.engine, id, suppressed);
+    return f;
+  };
+
+  it('heavier calibres play deeper and louder, with a low-shelf boost', () => {
+    const light = shot('308');
+    for (const id of ['408', '50', '127'] as const) {
+      const heavy = shot(id);
+      expect(heavy.rates[0].value).toBeLessThan(light.rates[0].value * 0.95);
+      expect(heavy.gains[0].value).toBeGreaterThan(light.gains[0].value);
+      expect(heavy.filters.some((f) => f.type === 'lowshelf')).toBe(true);
+    }
+    expect(shot('50').rates[0].value).toBeLessThan(shot('408').rates[0].value);
+  });
+
+  it('the 12.7 mm rifles add a slowed, low-passed boom layer under the report; the suppressed shot does not', () => {
+    for (const id of ['50', '127'] as const) {
+      const open = shot(id);
+      expect(open.created.filter((k) => k === 'source')).toHaveLength(2);
+      expect(open.rates[1].value).toBeLessThan(0.6);
+      expect(open.filters.some((f) => f.type === 'lowpass' && f.frequency.value <= 400)).toBe(true);
+      expect(shot(id, true).created.filter((k) => k === 'source')).toHaveLength(1);
+    }
+    expect(shot('308').created.filter((k) => k === 'source')).toHaveLength(1);
+  });
+
+  it("the 12.7x55's integral can is a quiet low thup: quieter and duller than a suppressed .308", () => {
+    const thup = shot('127s', true);
+    const can = shot('308', true);
+    expect(thup.gains[0].value).toBeLessThan(can.gains[0].value);
+    const cutoff = thup.filters.find((f) => f.type === 'lowpass')?.frequency.value ?? Infinity;
+    expect(cutoff).toBeLessThan(600);
+    expect(thup.rates[0].value).toBeLessThan(0.6);
+  });
+});

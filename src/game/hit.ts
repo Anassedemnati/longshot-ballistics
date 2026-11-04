@@ -124,6 +124,42 @@ export function segmentBox(a: Vec3, b: Vec3, box: Box): number | null {
   return u0;
 }
 
+/**
+ * How far along the unit vector `dir` from `point` the ray leaves the oriented box, m (0 when the ray is never inside it: it starts
+ * outside and points away, or misses). Same local frame as `segmentBox`: the far end of the slab interval, the exit face. Used to
+ * carry a bullet that punched through a vehicle's skin out the far side.
+ */
+export function boxExitDistance(box: Box, point: Vec3, dir: Vec3): number {
+  const c = Math.cos(box.yaw);
+  const s = Math.sin(box.yaw);
+  const px0 = point.x - box.center.x;
+  const pz0 = point.z - box.center.z;
+  // World -> local is R_y(-yaw), as in segmentBox.
+  const px = c * px0 - s * pz0;
+  const pz = s * px0 + c * pz0;
+  const py = point.y - box.center.y;
+  const dx = c * dir.x - s * dir.z;
+  const dz = s * dir.x + c * dir.z;
+  const dy = dir.y;
+  let t0 = -Infinity;
+  let t1 = Infinity;
+  for (let axis = 0; axis < 3; axis++) {
+    const p = axis === 0 ? px : axis === 1 ? py : pz;
+    const d = axis === 0 ? dx : axis === 1 ? dy : dz;
+    const h = axis === 0 ? box.halfSize.x : axis === 1 ? box.halfSize.y : box.halfSize.z;
+    if (d === 0) {
+      if (p > h || p < -h) return 0;
+      continue;
+    }
+    let a = (-h - p) / d;
+    let b = (h - p) / d;
+    if (a > b) [a, b] = [b, a];
+    if (a > t0) t0 = a;
+    if (b < t1) t1 = b;
+  }
+  return t0 <= t1 && t1 > 0 ? t1 : 0;
+}
+
 /** Bounding-sphere radius (half diagonal) per obstacle object; rotation does not change it. */
 const boundingRadii = new WeakMap<Obstacle, number>();
 

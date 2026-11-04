@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RIFLES as RIFLE_DATA } from '../../src/ballistics/rifles';
 import { DEFAULT_MISSION, MISSION_LIMITS, decodeMission, randomMission, routeFromSearch, windVector } from '../../src/mission/config';
 import { createRng } from '../../src/mission/random';
 import { THEMES } from '../../src/mission/themes';
@@ -15,8 +16,13 @@ import {
   mpsToMph,
   positionNote,
   rangeLabel,
+  ART_BOX_ASPECT,
+  OWN_ART_IMAGE,
   RIFLE_ART,
   RIFLE_ART_IMAGE,
+  WHOLE_ART,
+  boxCrop,
+  rifleArt,
   rifleArtStyle,
   rifleNote,
   rifleTitle,
@@ -99,8 +105,17 @@ describe('labels', () => {
   });
 
   it('rifleNote gives the ballistic coefficient and muzzle velocity of each rifle (spec 5.5)', () => {
-    expect(rifleNote('308')).toBe('G7 BC 0.243 · 790 m/s');
-    expect(rifleNote('338')).toBe('G7 BC 0.322 · 900 m/s');
+    expect(rifleNote('308')).toBe('.308 · G7 BC 0.243 · 790 m/s\nPrecision · bolt · 5 rds');
+    expect(rifleNote('338')).toBe('.338 · G7 BC 0.322 · 900 m/s\nLong-range · bolt · 5 rds');
+    expect(rifleNote('50')).toBe('.50 BMG · G7 BC 0.51 · 860 m/s\nAnti-materiel · semi · 10 rds');
+    expect(rifleNote('127s')).toMatch(/≤ 250 m/);
+    // Two lines, each short enough for the rifle panel at 1280x720 (about 33 monospaced characters).
+    for (const id of Object.keys(RIFLE_DATA) as (keyof typeof RIFLE_DATA)[]) {
+      const lines = rifleNote(id).split('\n');
+      expect(lines).toHaveLength(2);
+      for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(33);
+      expect(rifleTitle(id).length, rifleTitle(id)).toBeLessThanOrEqual(26);
+    }
   });
 
   it('densityNote gives the prop counts of spec A.4', () => {
@@ -290,6 +305,29 @@ describe('firing position, enemy snipers and rifle art labels', () => {
   it('rifleTitle names each rifle as the concept art does', () => {
     expect(rifleTitle('308')).toBe('Compact precision rifle');
     expect(rifleTitle('338')).toBe('Long-range precision rifle');
+  });
+});
+
+describe('rifle art per rifle', () => {
+  it('the .308 and .338 are cut from the concept sheet; every other rifle has its own picture, shown whole', () => {
+    expect(rifleArt('308')).toEqual({ file: 'references/rifle-concept.png', crop: RIFLE_ART['308'] });
+    expect(rifleArt('338').crop).toEqual(RIFLE_ART['338']);
+    for (const id of ['300', '408', '50', '127', '127s'] as const) expect(rifleArt(id)).toEqual({ file: `references/rifle-${id}.webp`, crop: null });
+  });
+
+  it('every picture, cropped or whole, is fitted to the one box shape and covers it', () => {
+    for (const r of ['308', '338'] as const) {
+      const c = boxCrop(RIFLE_ART[r]);
+      expect(c.w / c.h).toBeCloseTo(ART_BOX_ASPECT, 6);
+      expect(c.y).toBeGreaterThanOrEqual(RIFLE_ART[r].y);
+      expect(c.y + c.h).toBeLessThanOrEqual(RIFLE_ART[r].y + RIFLE_ART[r].h + 1e-9);
+    }
+    expect(WHOLE_ART.aspect).toBe(ART_BOX_ASPECT);
+    expect(WHOLE_ART.widthPct).toBe(100);
+    // The whole picture is taller than the box: it is centred, overhanging equally top and bottom.
+    const imageHeightPct = (100 * ART_BOX_ASPECT * OWN_ART_IMAGE.h) / OWN_ART_IMAGE.w;
+    expect(WHOLE_ART.topPct).toBeLessThan(0);
+    expect(WHOLE_ART.topPct * 2 + imageHeightPct).toBeCloseTo(100, 6);
   });
 });
 

@@ -207,6 +207,11 @@
 .menu-seg-option:hover .menu-seg-text { background: rgba(255, 255, 255, 0.12); }
 .menu-sr:checked + .menu-seg-text { background: var(--accent); color: #17130a; }
 .menu-sr:focus-visible + .menu-seg-text { outline: 2px solid #fff; outline-offset: -4px; }
+.menu-seg-note { white-space: pre-line; } /* a two-line note (the rifle's) breaks where its text says */
+/* Many short options (the seven rifles): a grid of compact buttons, four to a row, that never widens its panel's column. */
+.menu-seg-compact { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.menu-seg-compact .menu-seg-option { min-width: 0; border-left: 1px solid var(--line); border-top: 1px solid var(--line); margin: -1px 0 0 -1px; }
+.menu-seg-compact .menu-seg-text { padding: 4px 1px; font-size: 11px; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; }
 
 /* On/off switches: a native checkbox (hidden, focusable) and a drawn switch after it. */
 .menu-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; }
@@ -240,13 +245,16 @@
 .menu-sr:checked + .menu-switch::after { transform: translateX(18px); background: #17130a; }
 .menu-sr:focus-visible + .menu-switch { outline: 2px solid #fff; outline-offset: 2px; }
 .menu-toggle-note { margin-top: 4px; font: 12px/1.2 var(--mono); }
+/* Locked on (the rifle is built round its suppressor): the switch shows its state but cannot be moved. */
+.menu-toggle.is-locked { cursor: not-allowed; }
+.menu-toggle.is-locked .menu-switch { opacity: 0.6; }
 
 /* Rifle concept art: the picture is cut to one rifle by an overflow-hidden box (the percentages come from menuModel). */
 .menu-rifle-art {
   position: relative;
   box-sizing: border-box;
   width: 100%;
-  margin: 12px 0 0;
+  margin: 4px 0 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -258,6 +266,19 @@
   position: absolute;
   inset: 0;
   background: linear-gradient(to top, rgba(10, 13, 12, 0.7), rgba(10, 13, 12, 0) 30%), radial-gradient(ellipse at center, rgba(10, 13, 12, 0) 70%, rgba(10, 13, 12, 0.45) 100%);
+}
+/* No picture (not there yet, or it failed): the box keeps its size and shows the calibre, written large, over its caption. */
+.menu-rifle-calibre { display: none; }
+.menu-rifle-art.is-missing .menu-rifle-img { visibility: hidden; }
+.menu-rifle-art.is-missing .menu-rifle-calibre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.55);
+  font: 600 22px/1 var(--mono);
+  letter-spacing: 0.08em;
 }
 .menu-rifle-caption {
   position: absolute;
@@ -326,6 +347,7 @@
   .menu-card-img { height: 90px; }
   .menu-card-caption { flex-direction: column; align-items: flex-start; justify-content: center; }
   .menu-actions { flex-wrap: wrap; }
+  .menu-seg-compact .menu-seg-text { padding: 9px 2px; font-size: 12px; } /* finger-sized on a phone */
 }
 
 @media (prefers-reduced-motion: reduce) {

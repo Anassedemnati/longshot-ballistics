@@ -233,3 +233,13 @@ describe('applyImpact: the HVT is hit', () => {
     expect(r.woundedTargetId ?? null).toBeNull();
   });
 });
+
+describe('applyImpact: a bullet that went through one man downs the next', () => {
+  it('counts the kill but not a second hit, and says so', () => {
+    const r = applyImpact(onTarget('s2', 'upperTorso'), state(), true);
+    expect(r.killedTargetId).toBe('s2');
+    expect(r.stats.targetsDown).toBe(1);
+    expect(r.stats.hits).toBe(0);
+    expect(r.hud.result).toMatch(/through/);
+  });
+});

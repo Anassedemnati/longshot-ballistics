@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { RIFLES } from '../../src/ballistics/rifles';
 import { BOLT_TIME_S, RELOAD_TIME_S } from '../../src/game/weapon';
 import { GHILLIE_TINT } from '../../src/player/rifleHands';
 import {
@@ -11,7 +12,7 @@ import {
   buildRifleModel,
 } from '../../src/player/rifle';
 
-const IDS = ['308', '338'] as const;
+const IDS = ['308', '338', '300', '408', '50', '127', '127s'] as const;
 const FRAME_S = 1 / 60;
 /** The rifle may add this many draw calls (meshes) to the frame; the whole game has a 400-call budget. */
 const MAX_RIFLE_MESHES = 10;
@@ -55,9 +56,11 @@ describe('rifle model', () => {
           expect(meshes(bolt).length).toBeGreaterThan(0);
         });
 
-        it(`${suppressed ? 'has' : 'has no'} suppressor parts`, () => {
+        // The 12.7x55 is built round its suppressor: it always has one.
+        const fitted = suppressed || id === '127s';
+        it(`${fitted ? 'has' : 'has no'} suppressor parts`, () => {
           const suppressor = group.getObjectByName('suppressor');
-          if (suppressed) {
+          if (fitted) {
             expect(suppressor).toBeDefined();
             expect(meshes(suppressor as THREE.Object3D).length).toBeGreaterThan(0);
           } else {
@@ -70,9 +73,15 @@ describe('rifle model', () => {
 
   it('the suppressor adds triangles and length to the muzzle', () => {
     for (const id of IDS) {
+      if (id === '127s') continue; // its can is integral: there with or without the switch
       const plain = buildRifleModel(id, false);
       const can = buildRifleModel(id, true);
-      expect(triangles(can.group)).toBeGreaterThan(triangles(plain.group));
+      if (id === '308' || id === '338') expect(triangles(can.group)).toBeGreaterThan(triangles(plain.group));
+      if (id !== '308' && id !== '338') {
+        // The heavy calibres' big brakes come off for their longer can: it still reaches well past the plain muzzle.
+        expect(can.muzzleZ).toBeLessThan(plain.muzzleZ - 0.1);
+        continue;
+      }
       const extra = bounds(plain.group).min.z - bounds(can.group).min.z;
       expect(extra).toBeGreaterThan(SUPPRESSOR_LENGTH_M * 0.9);
       expect(can.muzzleZ).toBeLessThan(plain.muzzleZ - SUPPRESSOR_LENGTH_M * 0.9);
@@ -264,5 +273,89 @@ describe('first-person rifle: camera', () => {
     expect(rifle.camera.aspect).toBe(1);
     rifle.resize(0, 0); // a hidden window: keep the last good aspect
     expect(rifle.camera.aspect).toBe(1);
+  });
+});
+
+describe('the heavier calibres', () => {
+  const size = (id: (typeof IDS)[number]) => bounds(buildRifleModel(id, false, false).group);
+
+  it('are longer than the .308 (the 12.7x55 apart: a short barrel in its can), and the .50 BMG hangs a big box magazine', () => {
+    for (const id of ['300', '408', '50', '127'] as const) expect(size(id).min.z).toBeLessThan(size('308').min.z - 0.1);
+    expect(BARREL_LENGTH_M['127s']).toBeLessThan(BARREL_LENGTH_M['308']);
+    const metalBottom = (id: (typeof IDS)[number]) =>
+      new THREE.Box3().setFromBufferAttribute(
+        (meshes(buildRifleModel(id, false, false).group).find((m) => m.name === 'metal') as THREE.Mesh).geometry.attributes.position as THREE.BufferAttribute,
+      ).min.y;
+    expect(metalBottom('50')).toBeLessThan(metalBottom('308') - 0.07);
+  });
+
+  it('every rifle has its own stock colour', () => {
+    const colours = IDS.map((id) => {
+      const stock = meshes(buildRifleModel(id, false, false).group).find((m) => m.name === 'stock') as THREE.Mesh;
+      return (stock.material as THREE.MeshStandardMaterial).color.getHex();
+    });
+    expect(new Set(colours).size).toBe(IDS.length);
+  });
+
+  it('the support hand still cradles each fore-end: under it, round both sides', () => {
+    for (const id of IDS) {
+      const glove = meshes(buildRifleModel(id, false).group).find((m) => m.name === 'glove') as THREE.Mesh;
+      const p = glove.geometry.attributes.position;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let topY = -Infinity;
+      for (let i = 0; i < p.count; i++) {
+        const [x, y, z] = [p.getX(i), p.getY(i), p.getZ(i)];
+        if (z < -0.37 || z > -0.29 || y < -0.03) continue; // the palm and fingers round the handguard, not the arm
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        topY = Math.max(topY, y);
+      }
+      expect(topY, id).toBeGreaterThan(0.005); // the fingers come up the side, past the underside (y 0.006)
+      expect(minX, id).toBeLessThan(-0.02);
+      expect(maxX, id).toBeGreaterThan(0.02);
+    }
+  });
+
+  it('the 12.7x55 is always suppressed: no flash even when the switch is off', () => {
+    const rifle = new FirstPersonRifle('127s', false);
+    expect(rifle.suppressed).toBe(true);
+    rifle.fire();
+    rifle.update(FRAME_S);
+    expect(rifle.flashVisible).toBe(false);
+  });
+
+  it('kicks harder with the heavy calibres', () => {
+    const peak = (id: (typeof IDS)[number]) => {
+      const rifle = new FirstPersonRifle(id);
+      rifle.update(FRAME_S);
+      const rest = rifle.model.position.z;
+      rifle.fire();
+      rifle.update(FRAME_S);
+      return rifle.model.position.z - rest;
+    };
+    expect(peak('50')).toBeGreaterThan(peak('308') * 1.6);
+    expect(peak('127')).toBeGreaterThan(peak('308') * 1.6);
+  });
+
+  it("works each rifle's own bolt time, and the semi-automatic .50's handle never lifts", () => {
+    for (const id of ['127', '50'] as const) {
+      const rifle = new FirstPersonRifle(id);
+      const bolt = rifle.model.getObjectByName('bolt') as THREE.Object3D;
+      rifle.fire(true);
+      let lift = 0;
+      let slide = 0;
+      const rest = bolt.position.z;
+      for (let t = 0; t < RIFLES[id].boltTimeS - 0.05; t += FRAME_S) {
+        rifle.update(FRAME_S);
+        lift = Math.max(lift, bolt.rotation.z);
+        slide = Math.max(slide, bolt.position.z - rest);
+      }
+      if (id === '50') expect(lift).toBe(0);
+      else expect(lift).toBeGreaterThan(0.5);
+      expect(slide).toBeGreaterThan(0.02);
+      for (let i = 0; i < 10; i++) rifle.update(FRAME_S);
+      expect(bolt.position.z).toBeCloseTo(rest, 6);
+    }
   });
 });

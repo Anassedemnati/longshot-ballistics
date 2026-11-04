@@ -5,6 +5,8 @@ describe('shotClipId', () => {
   it('picks the Tikka recording for the .308 and the Mosin-Nagant for the .338', () => {
     expect(shotClipId('308')).toBe('shot_308');
     expect(shotClipId('338')).toBe('shot_338');
+    for (const id of ['300', '408', '50', '127'] as const) expect(shotClipId(id)).toBe('shot_338');
+    expect(shotClipId('127s')).toBe('shot_308');
   });
 });
 

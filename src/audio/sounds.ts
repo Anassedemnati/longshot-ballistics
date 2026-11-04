@@ -1,5 +1,5 @@
 import type { Rifle } from '../ballistics/types';
-import { fitRate, jitterRate, shotClipId } from './clips';
+import { SHOT_PROFILE, fitRate, jitterRate, shotClipId } from './clips';
 import type { ClipId } from './clips';
 import type { AudioEngine } from './engine';
 import type { Clip } from './samples';
@@ -41,6 +41,9 @@ const SHOT_RATE_SPREAD = 0.03;
 const IMPACT_RATE_SPREAD = 0.05;
 /** Fade at the end of a clip that has to be cut short, s. */
 const CUT_FADE_S = 0.06;
+
+/** Corner of the low-shelf boost of the heavy calibres' reports, Hz. */
+const LOW_SHELF_HZ = 250;
 
 /** Envelope floor: an exponential ramp cannot reach 0, and -80 dB is inaudible. */
 const SILENCE = 1e-4;
@@ -93,17 +96,27 @@ interface ClipOptions {
   rate?: number;
   /** Low-pass cutoff, Hz: duller sound for distant impacts. */
   cutoff?: number;
+  /** Low-shelf boost under 250 Hz, dB (0 or absent: none): the thump of a big case. */
+  lowShelfDb?: number;
   /** Cut the clip off after this many seconds (with a short fade). */
   maxSec?: number;
 }
 
 /** Play a recording from its first audible sample at `s.t`: [low-pass] -> gain -> master chain. */
 function playClip(s: Stage, clip: Clip, options: ClipOptions): void {
-  const { level, rate = 1, cutoff, maxSec } = options;
+  const { level, rate = 1, cutoff, maxSec, lowShelfDb = 0 } = options;
   const source = s.ctx.createBufferSource();
   source.buffer = clip.buffer;
   source.playbackRate.value = rate;
   let tail: AudioNode = source;
+  if (lowShelfDb !== 0) {
+    const shelf = s.ctx.createBiquadFilter();
+    shelf.type = 'lowshelf';
+    shelf.frequency.value = LOW_SHELF_HZ;
+    shelf.gain.value = lowShelfDb;
+    tail.connect(shelf);
+    tail = shelf;
+  }
   if (cutoff !== undefined) {
     const lowpass = s.ctx.createBiquadFilter();
     lowpass.type = 'lowpass';
@@ -221,21 +234,36 @@ function synthSuppressedShot(s: Stage): void {
 }
 
 /**
- * The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time.
- * A suppressed shot is much quieter and duller (level x 0.22, low-passed at 1400 Hz).
+ * The shot of `rifleId` (a real rifle with its own outdoor echo tail), pitch varied a little each time, made that rifle's own by its
+ * `SHOT_PROFILE`: deeper, louder and fuller as the calibre grows, and the 12.7 mm rifles with a slowed boom layer under the report.
+ * A suppressed shot is much quieter and duller (level x 0.22, low-passed at 1400 Hz), and has no boom; the 12.7x55's integral can
+ * gives its own low "thup".
  */
 export function playShot(e: AudioEngine, rifleId: Rifle['id'] = '308', suppressed = false): void {
   const s = stage(e);
   if (!s) return;
+  const profile = SHOT_PROFILE[rifleId];
+  const jitter = jitterRate(SHOT_RATE_SPREAD);
   recordingOrSynth(
     e,
     shotClipId(rifleId),
-    (clip) =>
+    (clip) => {
+      const can = suppressed ? profile.suppressed : undefined;
+      if (can) {
+        playClip(s, clip, { level: LEVELS.shot * can.level, cutoff: can.cutoffHz, rate: can.rate * jitter, lowShelfDb: can.lowShelfDb });
+        return;
+      }
       playClip(s, clip, {
-        level: LEVELS.shot * (suppressed ? SUPPRESSED_LEVEL : 1),
+        level: LEVELS.shot * profile.level * (suppressed ? SUPPRESSED_LEVEL : 1),
         cutoff: suppressed ? SUPPRESSED_CUTOFF_HZ : undefined,
-        rate: jitterRate(SHOT_RATE_SPREAD),
-      }),
+        rate: profile.rate * jitter,
+        lowShelfDb: profile.lowShelfDb,
+      });
+      if (profile.boom && !suppressed) {
+        const { rate, level, cutoffHz } = profile.boom;
+        playClip(s, clip, { level: LEVELS.shot * profile.level * level, cutoff: cutoffHz, rate: rate * jitter });
+      }
+    },
     () => (suppressed ? synthSuppressedShot(s) : synthShot(s)),
   );
 }
