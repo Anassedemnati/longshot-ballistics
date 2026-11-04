@@ -15,7 +15,13 @@ export const GRIP_LEAN_RAD = -0.25;
  * across (x) and, on the grip, front to back, and by raising the left hand to the handguard's underside.
  */
 const GRIP_HAND_SCALE = new THREE.Vector3(0.68, 1, 0.74);
-const HANDGUARD_HAND = new THREE.Matrix4().compose(new THREE.Vector3(0, 0.05, 0), new THREE.Quaternion(), new THREE.Vector3(0.76, 1, 1));
+/** The support hand's squeeze across (x) round the .308's handguard; a wider fore-end opens it by its own width factor. */
+const HANDGUARD_HAND_SQUEEZE = 0.76;
+
+/** The support hand's frame: raised to the handguard's underside, squeezed across to its width (`foreEnd` x the .308's). */
+function handguardFrame(foreEnd: number): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(new THREE.Vector3(0, 0.05, 0), new THREE.Quaternion(), new THREE.Vector3(HANDGUARD_HAND_SQUEEZE * foreEnd, 1, 1));
+}
 
 /** The sleeve tint over the glove's camo cloth: darker, greyer. */
 const SLEEVE: PartStyle = { color: 0xb4ae98 };
@@ -141,8 +147,8 @@ function ringMatrix(at: THREE.Vector3, axis: THREE.Vector3): THREE.Matrix4 {
 }
 
 /** The left hand cupping the underside of the fore-end, thumb along its left side, and its sleeve. */
-function leftHand(parts: PartSet, cloth: Cloth): void {
-  parts.setFrame(HANDGUARD_HAND);
+function leftHand(parts: PartSet, cloth: Cloth, foreEnd: number): void {
+  parts.setFrame(handguardFrame(foreEnd));
   parts.ellipsoid('glove', 0.04, 0.017, 0.052, 0, -0.06, -0.335);
   parts.ellipsoid('glove', 0.016, 0.02, 0.034, -0.036, -0.058, -0.3);
   parts.ellipsoid('rubber', 0.026, 0.006, 0.03, -0.004, -0.076, -0.335); // palm pad
@@ -178,10 +184,11 @@ function leftHand(parts: PartSet, cloth: Cloth): void {
 
 /**
  * Add both gloved hands and their sleeves to `parts` (the glove and rubber meshes of the rifle). `ghillie` is the sRGB hex of a ghillie
- * suit (see GHILLIE_TINT) and recolours the sleeves and the cuffs; null (the default) leaves the plain camo-tan ones.
+ * suit (see GHILLIE_TINT) and recolours the sleeves and the cuffs; null (the default) leaves the plain camo-tan ones. `foreEnd` is how
+ * much wider than the .308's the handguard is: the support hand opens round it (the grip hand never moves: every rifle has the same grip).
  */
-export function addHands(parts: PartSet, ghillie: number | null = null): void {
+export function addHands(parts: PartSet, ghillie: number | null = null, foreEnd = 1): void {
   const cloth: Cloth = ghillie === null ? { sleeve: SLEEVE, cuff: GLOVE } : { sleeve: { color: ghillie }, cuff: { color: ghillie } };
   rightHand(parts, cloth);
-  leftHand(parts, cloth);
+  leftHand(parts, cloth, foreEnd);
 }

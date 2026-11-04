@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { RIFLES } from '../ballistics/rifles';
 import type { Rifle } from '../ballistics/types';
-import { BOLT_TIME_S, RELOAD_TIME_S } from '../game/weapon';
 import { SKY_OBJECT_NAMES } from '../scene/sky';
 import { rifleEnvironment } from './rifleEnvironment';
 import { GRIP_CENTER, GRIP_LEAN_RAD, addHands } from './rifleHands';
@@ -16,28 +16,184 @@ import { rifleTextures } from './rifleTextures';
 // then, and for good without the HDRI, by a small environment of its own (the sky stand-in of rifleEnvironment.ts).
 // All parts are baked into one mesh per material (7 draw calls at most) and built once; nothing here allocates per frame.
 
-/** Barrel length by rifle, m: the .338 is the longer rifle. */
-export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = { '308': 0.36, '338': 0.47, '300': 0.43, '408': 0.5, '50': 0.55, '127': 0.53, '127s': 0.3 };
-/** Stock colour by rifle: .308 olive polymer, .338 sand chassis. */
-const STOCK_COLOR: Readonly<Record<Rifle['id'], number>> = {
-  '308': 0x535c3d,
-  '338': 0x957f5c,
-  '300': 0x535c3d,
-  '408': 0x957f5c,
-  '50': 0x2e3030,
-  '127': 0x3d4430,
-  '127s': 0x2e3030,
+/** Where the .308's handguard ends, m along z; the barrel runs on alone from here. */
+const HANDGUARD_FRONT_Z = -0.49;
+
+/** The muzzle device on the barrel's end. */
+type MuzzleDevice =
+  /** A slim three-port brake (the .308, .338, .300). */
+  | 'compact'
+  /** A long, wide cylinder with three large ports a side and a stepped front cap (the .408). */
+  | 'large'
+  /** A flat two-chamber brake: two big windows a side (the .50 BMG). */
+  | 'twoPort'
+  /** A heavy cylinder with two rows of five ports a side (the 12.7x108). */
+  | 'multiPort'
+  /** None: the barrel ends inside the integral suppressor (the 12.7x55). */
+  | 'none';
+
+/** How a rifle looks: the per-calibre choices `buildRifleModel` reads. Lengths in m. */
+interface RifleLook {
+  /** Barrel length from the receiver's front, m. */
+  barrel: number;
+  /** Barrel radius at the muzzle and at the breech, m. */
+  barrelRadius: readonly [number, number];
+  muzzle: MuzzleDevice;
+  /** The action: a round bolt action, or (the .50) a massive box-shaped semi-automatic receiver with a charging handle. */
+  receiver: 'round' | 'box';
+  /** Buttstock: solid, skeleton (one window), frame (two windows and a monopod), heavy (thick, a buffer pad and a monopod). */
+  stock: 'solid' | 'skeleton' | 'frame' | 'heavy';
+  stockWidth: number;
+  /** Stock and grip colours, sRGB hex. */
+  stockColor: number;
+  gripColor: number;
+  /** The handguard is this much wider (and the support hand opens this much more round it), 1 = the .308's. */
+  foreEnd: number;
+  /** Where the handguard ends, m along z (the .308's at HANDGUARD_FRONT_Z; a heavy rifle's runs further out along its barrel). */
+  guardFront: number;
+  /** Scope: how much higher it sits (taller rings), and how much longer its tube is (the objective moves forward), m. */
+  scopeRise: number;
+  scopeStretch: number;
+  /** How far a detachable box magazine hangs below the chassis, m (0: none, the rounds sit inside). */
+  magazineDrop: number;
+  /** A folded bipod under the barrel, ahead of the handguard. */
+  bipod: boolean;
+  /** An integral suppressor round the barrel: [radius, length], m; it starts at the handguard's front. */
+  integralCan: readonly [number, number] | null;
+}
+
+/**
+ * Every rifle's look. Generic designs by calibre, each heavier where it should be: the .308 compact and olive, the .338 longer with a
+ * sand skeleton stock (both after public/references/rifle-concept.png), the .300 WM long and coyote brown, the .408 longer still with a big
+ * brake and a long, high scope, the .50 BMG a massive black semi-automatic with a two-port brake and a thick barrel, the 12.7x108 a
+ * heavy bolt gun on a brown frame stock, and the 12.7x55 short, built round a fat suppressor.
+ */
+const RIFLE_LOOK: Readonly<Record<Rifle['id'], RifleLook>> = {
+  '308': {
+    barrel: 0.36,
+    barrelRadius: [0.0105, 0.0125],
+    muzzle: 'compact',
+    receiver: 'round',
+    stock: 'solid',
+    stockWidth: 0.048,
+    stockColor: 0x535c3d,
+    gripColor: 0x3d4430,
+    foreEnd: 1,
+    guardFront: HANDGUARD_FRONT_Z,
+    scopeRise: 0,
+    scopeStretch: 0,
+    magazineDrop: 0,
+    bipod: false,
+    integralCan: null,
+  },
+  '338': {
+    barrel: 0.47,
+    barrelRadius: [0.0105, 0.0125],
+    muzzle: 'compact',
+    receiver: 'round',
+    stock: 'skeleton',
+    stockWidth: 0.04,
+    stockColor: 0x957f5c,
+    gripColor: 0x8a7656,
+    foreEnd: 1,
+    guardFront: HANDGUARD_FRONT_Z,
+    scopeRise: 0,
+    scopeStretch: 0,
+    magazineDrop: 0,
+    bipod: false,
+    integralCan: null,
+  },
+  '300': {
+    barrel: 0.52,
+    barrelRadius: [0.011, 0.0135],
+    muzzle: 'compact',
+    receiver: 'round',
+    stock: 'solid',
+    stockWidth: 0.046,
+    stockColor: 0x6e5a42,
+    gripColor: 0x2b2a27,
+    foreEnd: 1,
+    guardFront: HANDGUARD_FRONT_Z,
+    scopeRise: 0.004,
+    scopeStretch: 0.03,
+    magazineDrop: 0.022,
+    bipod: false,
+    integralCan: null,
+  },
+  '408': {
+    barrel: 0.58,
+    barrelRadius: [0.0125, 0.0155],
+    muzzle: 'large',
+    receiver: 'round',
+    stock: 'skeleton',
+    stockWidth: 0.044,
+    stockColor: 0x4d5256,
+    gripColor: 0x26292b,
+    foreEnd: 1.06,
+    guardFront: -0.56,
+    scopeRise: 0.016,
+    scopeStretch: 0.1,
+    magazineDrop: 0.034,
+    bipod: true,
+    integralCan: null,
+  },
+  '50': {
+    barrel: 0.6,
+    barrelRadius: [0.018, 0.021],
+    muzzle: 'twoPort',
+    receiver: 'box',
+    stock: 'heavy',
+    stockWidth: 0.058,
+    stockColor: 0x2e3133,
+    gripColor: 0x1f2122,
+    foreEnd: 1.2,
+    guardFront: -0.7,
+    scopeRise: 0.01,
+    scopeStretch: 0.05,
+    magazineDrop: 0.075,
+    bipod: true,
+    integralCan: null,
+  },
+  '127': {
+    barrel: 0.6,
+    barrelRadius: [0.0155, 0.019],
+    muzzle: 'multiPort',
+    receiver: 'round',
+    stock: 'frame',
+    stockWidth: 0.052,
+    stockColor: 0x5a3f2c,
+    gripColor: 0x2a2621,
+    foreEnd: 1.12,
+    guardFront: -0.6,
+    scopeRise: 0.012,
+    scopeStretch: 0.06,
+    magazineDrop: 0.05,
+    bipod: true,
+    integralCan: null,
+  },
+  '127s': {
+    barrel: 0.22,
+    barrelRadius: [0.013, 0.016],
+    muzzle: 'none',
+    receiver: 'round',
+    stock: 'skeleton',
+    stockWidth: 0.046,
+    stockColor: 0x3b3f3a,
+    gripColor: 0x222424,
+    foreEnd: 1.08,
+    guardFront: HANDGUARD_FRONT_Z,
+    scopeRise: 0.006,
+    scopeStretch: -0.04,
+    magazineDrop: 0.045,
+    bipod: false,
+    integralCan: [0.04, 0.36],
+  },
 };
-/** The grip's rubber overmould by rifle: a darker shade of the stock. */
-const GRIP_COLOR: Readonly<Record<Rifle['id'], number>> = {
-  '308': 0x3d4430,
-  '338': 0x8a7656,
-  '300': 0x3d4430,
-  '408': 0x8a7656,
-  '50': 0x222424,
-  '127': 0x2e3326,
-  '127s': 0x222424,
-};
+
+/** Barrel length by rifle, m: the .338 is longer than the .308, the heavy calibres longer still, the 12.7x55 shortest (in its can). */
+export const BARREL_LENGTH_M: Readonly<Record<Rifle['id'], number>> = Object.fromEntries(
+  Object.entries(RIFLE_LOOK).map(([id, look]) => [id, look.barrel]),
+) as Record<Rifle['id'], number>;
 
 /** Where the barrel starts (the receiver's front), m along the model's z axis (negative = forward). */
 const BARREL_START_Z = -0.5;
@@ -45,11 +201,11 @@ const BARREL_START_Z = -0.5;
 const BARREL_Y = 0.04;
 /** The suppressor is this long, m, and sits on the muzzle. */
 export const SUPPRESSOR_LENGTH_M = 0.19;
+/** The heavy calibres' suppressor (in place of their big brakes) is longer, m. */
+const HEAVY_SUPPRESSOR_LENGTH_M = 0.26;
 
 /** Scope axis height, m: a 30 mm tube on medium rings, its 56 mm objective just clearing the rail. */
 const SCOPE_Y = 0.106;
-/** Where the handguard ends, m along z; the barrel runs on alone from here. */
-const HANDGUARD_FRONT_Z = -0.49;
 /** Smooth normals across bevels and curves, hard at creases sharper than this, rad. */
 const CREASE_RAD = (40 * Math.PI) / 180;
 /** Cross-sections (x, y) of the dark slots: an M-LOK slot or the ejection port on a side face, a muzzle brake port. */
@@ -100,10 +256,15 @@ const BREATH_DRIFT_M = 0.0008;
 const BREATH_PITCH_RAD = 0.0035;
 const BREATH_ROLL_RAD = 0.0015;
 
-/** Recoil: the kick fades as exp(-KICK_DECAY * t); it pushes the rifle back and tips the muzzle up. */
+/**
+ * Recoil of the .308 (`Rifle.recoil` 1): the kick fades as exp(-KICK_DECAY * t); it pushes the rifle back and tips the muzzle up. A
+ * harder-kicking rifle pushes further (as recoil^KICK_GROWTH: a .50 BMG's 2.6 is about twice the .308's travel, not 2.6 times, or the
+ * rifle would leave the picture) and settles a little slower (the decay rate divided by the square root of its recoil).
+ */
 const KICK_DECAY = 13;
 const KICK_BACK_M = 0.065;
 const KICK_PITCH_RAD = 0.09;
+const KICK_GROWTH = 0.7;
 
 /** Reload motion: the rifle dips, pitches the muzzle down and rolls, then comes back. */
 const RELOAD_DIP_M = 0.18;
@@ -182,7 +343,7 @@ function makeMaterials(id: Rifle['id']): Record<MaterialKey, THREE.Material> {
     }),
     // Polymer: the stock colour times the vertex wear, with a stipple normal map.
     stock: new THREE.MeshStandardMaterial({
-      color: STOCK_COLOR[id],
+      color: RIFLE_LOOK[id].stockColor,
       vertexColors: true,
       metalness: 0.02,
       roughness: 0.6,
@@ -330,19 +491,97 @@ function ringArc(parts: PartSet, radius: number, tube: number, y: number, z: num
   parts.add('metal', geometry, 0, y, z, 0, Math.PI / 2, 0, style);
 }
 
+/** A rounded rectangle cross-section (x, y) of half-width `w` and half-height `h`: a brake port, a lightening cut. */
+function port(w: number, h: number): OutlinePoint[] {
+  return [
+    [-w, -h],
+    [w, -h],
+    [w, h],
+    [-w, h],
+  ];
+}
+
 /**
- * Build the rifle model (no WebGL needed), after public/references/rifle-concept.png: a bolt action on a chassis with
- * a slotted handguard, moulded pistol grip and a stock with a cheek riser (solid on the .308, skeleton on the .338),
- * a 30 mm scope on a rail, the gloved hands holding grip and handguard (unless `hands` is false; `ghillie`, an sRGB hex from
- * GHILLIE_TINT, dresses their sleeves in a ghillie suit), the bolt handle as its own small group, and - only when `suppressed` -
- * a suppressor group on the muzzle. The camera looks down -z; +x is to the right. One mesh per surface: stock (polymer /
- * cerakote), metal, rubber, glass, glove.
+ * The muzzle device on a barrel that ends at `end` (m along z) with muzzle radius `r`; returns the z of its front face (where the bore
+ * opens and the flash starts). `compact` is the original three-port brake.
+ */
+function muzzleDevice(body: PartSet, device: MuzzleDevice, end: number, r: number, dark: PartStyle): number {
+  const y = BARREL_Y;
+  switch (device) {
+    case 'compact': {
+      body.tube('metal', 0.0145, 0.0145, 0.065, 0, y, end - 0.01, Math.PI / 2, 0, { color: BLUED, wear: 0.6 });
+      for (let i = 0; i < 3; i++) {
+        const back = end + 0.016 - i * 0.016; // the brake spans 0.0225 m behind to 0.0425 m ahead of the barrel's end
+        for (const side of [-1, 1]) lengthPart(body, 'metal', BRAKE_PORT, back - 0.011, back, side * 0.0128, y, dark, { radius: 0.002, bevel: 0.0005 });
+      }
+      return end - 0.0425;
+    }
+    case 'large': {
+      // A wide can-sized brake: z end+0.02 .. end-0.09, three big ports a side, then a stepped front cap.
+      const radius = r + 0.009;
+      body.tube('metal', radius, radius, 0.11, 0, y, end - 0.035, Math.PI / 2, 0, { color: BLUED, wear: 0.55 });
+      for (let i = 0; i < 3; i++) {
+        const back = end + 0.005 - i * 0.03;
+        for (const side of [-1, 1]) lengthPart(body, 'metal', port(0.003, 0.0095), back - 0.02, back, side * (radius - 0.0012), y, dark, { radius: 0.002, bevel: 0.0005 });
+      }
+      body.tube('metal', radius - 0.003, radius - 0.003, 0.012, 0, y, end - 0.096, Math.PI / 2, 0, { color: LIGHT_COAT, wear: 0.6 });
+      return end - 0.102;
+    }
+    case 'twoPort': {
+      // A flat, wide two-chamber brake: a block wider than it is tall, two big windows a side, a sloped front plate.
+      const w = r * 3.4;
+      const h = r * 2.5;
+      body.box('metal', w, h, 0.11, 0, y, end - 0.04, 0, { color: BLUED, wear: 0.6, round: 0.2 });
+      for (const z of [end - 0.012, end - 0.066]) body.box('metal', w + 0.0012, h * 0.62, 0.034, 0, y, z, 0, dark);
+      body.box('metal', w * 0.92, h * 0.86, 0.012, 0, y, end - 0.1, 0, { color: LIGHT_COAT, wear: 0.6 });
+      return end - 0.106;
+    }
+    case 'multiPort': {
+      // A heavy cylinder with two rows of five small ports a side, and a plain front ring.
+      const radius = r + 0.006;
+      body.tube('metal', radius, radius, 0.12, 0, y, end - 0.04, Math.PI / 2, 0, { color: BLUED, wear: 0.5 });
+      for (let i = 0; i < 5; i++) {
+        const z = end + 0.005 - i * 0.022;
+        for (const side of [-1, 1]) {
+          for (const dy of [-0.0065, 0.0065]) {
+            lengthPart(body, 'metal', port(0.0025, 0.0035), z - 0.009, z, side * (radius - 0.0006), y + dy, dark, { radius: 0.0015, bevel: 0.0004 });
+          }
+        }
+      }
+      body.tube('metal', radius + 0.001, radius + 0.001, 0.01, 0, y, end - 0.095, Math.PI / 2, 0, { color: LIGHT_COAT, wear: 0.6 });
+      return end - 0.1;
+    }
+    case 'none':
+      return end;
+  }
+}
+
+/** A suppressor can of `radius` and `length` with its back at `back` (m along z): machined end caps, the dark bore opening. Returns its front z. */
+function can(parts: PartSet, radius: number, length: number, back: number, dark: PartStyle): number {
+  const centre = back - length / 2;
+  const front = back - length;
+  parts.tube('metal', radius, radius, length, 0, BARREL_Y, centre, Math.PI / 2, 0, { color: CERAKOTE, wear: 0 });
+  parts.tube('metal', 0.0075, 0.0075, 0.002, 0, BARREL_Y, front - 0.001, Math.PI / 2, 0, dark);
+  for (const z of [back - 0.007, front + 0.007]) parts.tube('metal', radius + 0.0008, radius + 0.0008, 0.014, 0, BARREL_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT, wear: 0.6 });
+  return front;
+}
+
+/**
+ * Build the rifle model (no WebGL needed): a rifle on a chassis with a slotted handguard, moulded pistol grip and a stock with a cheek
+ * riser, a scope on a rail, the gloved hands holding grip and handguard (unless `hands` is false; `ghillie`, an sRGB hex from GHILLIE_TINT,
+ * dresses their sleeves in a ghillie suit), the bolt handle (the .50's charging handle) as its own small group, and - only when
+ * `suppressed` - a suppressor group on the muzzle. What differs by calibre is in RIFLE_LOOK: barrel, muzzle device, receiver, stock,
+ * colours, scope height and length, magazine, bipod, and the 12.7x55's integral can (always fitted, in the suppressor group). The .308
+ * and .338 follow public/references/rifle-concept.png. The camera looks down -z; +x is to the right. One mesh per surface: stock
+ * (polymer / cerakote), metal, rubber, glass, glove.
  */
 export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = true, ghillie: number | null = null): RifleModel {
+  const look = RIFLE_LOOK[id];
   const materials = makeMaterials(id);
   const group = new THREE.Group();
   const body = new PartSet();
-  const length = BARREL_LENGTH_M[id];
+  const length = look.barrel;
+  const [muzzleRadius, breechRadius] = look.barrelRadius;
   const shell: PartStyle = { wear: 0.35 };
   const black: PartStyle = { color: ANODISED, wear: 0.5 };
   const dark: PartStyle = { color: BORE };
@@ -362,26 +601,29 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
       [-0.205, -0.082, 0.004],
       [-0.205, 0.006],
     ],
-    0.05,
+    0.05 * Math.max(1, look.foreEnd * 0.95),
     shell,
   );
-  // Handguard: a long chamfered tube round the barrel with rows of M-LOK slots, a rail on top.
+  // Handguard: a long chamfered tube round the barrel with rows of M-LOK slots, a rail on top. A heavy rifle's is wider (its underside,
+  // where the support hand lies, stays at the same height).
   const guardY = 0.032;
+  const g = look.foreEnd;
   const guard: OutlinePoint[] = [
-    [-0.026, -0.014],
-    [-0.015, -0.026],
-    [0.015, -0.026],
-    [0.026, -0.014],
-    [0.026, 0.017],
-    [0.017, 0.026],
-    [-0.017, 0.026],
-    [-0.026, 0.017],
+    [-0.026 * g, -0.014],
+    [-0.015 * g, -0.026],
+    [0.015 * g, -0.026],
+    [0.026 * g, -0.014],
+    [0.026 * g, 0.017],
+    [0.017 * g, 0.026],
+    [-0.017 * g, 0.026],
+    [-0.026 * g, 0.017],
   ];
-  lengthPart(body, 'stock', guard, HANDGUARD_FRONT_Z, -0.19, 0, guardY, shell);
-  for (let i = 0; i < 6; i++) {
+  lengthPart(body, 'stock', guard, look.guardFront, -0.19, 0, guardY, shell);
+  const slots = Math.round((-0.19 - look.guardFront - 0.04) / 0.043);
+  for (let i = 0; i < slots; i++) {
     const z = -0.235 - i * 0.043;
     for (const side of [-1, 1]) {
-      lengthPart(body, 'metal', SLOT, z - 0.014, z + 0.014, side * 0.0262, guardY + 0.002, dark, { radius: 0.003, bevel: 0.0004 });
+      lengthPart(body, 'metal', SLOT, z - 0.014, z + 0.014, side * (0.026 * g + 0.0002), guardY + 0.002, dark, { radius: 0.003, bevel: 0.0004 });
     }
   }
 
@@ -405,16 +647,57 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
       [-0.02, 0.026],
     ],
     0.036,
-    { color: GRIP_COLOR[id], wear: 0.2 },
+    { color: look.gripColor, wear: 0.2 },
     { radius: 0.005, bevel: 0.006, lean: GRIP_LEAN_RAD, at: GRIP_CENTER },
   );
   ringArc(body, 0.03, 0.0035, -0.044, -0.045, Math.PI, Math.PI, black, 0.9); // trigger guard, a loop under the chassis
   ringArc(body, 0.015, 0.0028, -0.056, -0.012, -Math.PI * 0.3, Math.PI * 0.5, bare); // the trigger blade, curved back
   body.box('metal', 0.008, 0.012, 0.01, 0, -0.05, -0.09, 0, bare); // magazine release, ahead of the guard
 
-  // Buttstock: a straight comb back to the butt, a toe hook below; skeletonised on the .338.
+  // A detachable box magazine under the well (the big calibres' rounds do not fit inside the chassis), with its base plate.
+  if (look.magazineDrop > 0) {
+    const drop = look.magazineDrop;
+    const width = id === '50' ? 0.05 : 0.04;
+    const depth = id === '50' ? 0.104 : 0.09;
+    body.box('metal', width, drop + 0.02, depth, 0, -0.072 - drop / 2, -0.148, 0, { color: ANODISED, wear: 0.45 });
+    body.box('metal', width + 0.006, 0.009, depth + 0.008, 0, -0.082 - drop, -0.148, 0, { color: BLUED, wear: 0.6 });
+    for (const side of [-1, 1]) body.box('metal', 0.001, drop * 0.55, 0.01, side * (width / 2 + 0.0002), -0.08 - drop / 2, -0.148, 0, dark); // witness slot
+  }
+
+  // Buttstock: a straight comb back to the butt, a toe hook below. Solid, skeletonised (one window), a frame (two windows) or heavy.
+  const heavy = look.stock === 'heavy';
   const butt = 0.385;
-  const stockWidth = id === '338' ? 0.04 : 0.048;
+  const stockWidth = look.stockWidth;
+  const windows: OutlinePoint[][] =
+    look.stock === 'skeleton'
+      ? [
+          [
+            [0.12, 0.012],
+            [0.31, 0.012],
+            [0.31, -0.07],
+            [0.27, -0.074],
+            [0.19, -0.054],
+            [0.13, -0.034],
+          ],
+        ]
+      : look.stock === 'frame'
+        ? [
+            [
+              [0.12, 0.012],
+              [0.2, 0.012],
+              [0.2, -0.056],
+              [0.19, -0.054],
+              [0.13, -0.034],
+            ],
+            [
+              [0.228, 0.012],
+              [0.31, 0.012],
+              [0.31, -0.07],
+              [0.27, -0.074],
+              [0.228, -0.064],
+            ],
+          ]
+        : [];
   sidePart(
     body,
     'stock',
@@ -431,28 +714,13 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
     ],
     stockWidth,
     shell,
-    {
-      holes:
-        id === '338'
-          ? [
-              [
-                [0.12, 0.012],
-                [0.31, 0.012],
-                [0.31, -0.07],
-                [0.27, -0.074],
-                [0.19, -0.054],
-                [0.13, -0.034],
-              ],
-            ]
-          : [],
-      radius: 0.008,
-    },
+    { holes: windows, radius: 0.008 },
   );
   // The seam where the stock meets the chassis, and a sling cup in the butt.
   body.box('metal', 0.0505, 0.064, 0.0015, 0, 0.001, 0.0745, 0, dark);
   body.tube('metal', 0.0078, 0.0078, stockWidth + 0.0012, 0, -0.075, 0.36, Math.PI / 2, Math.PI / 2, bare);
   body.tube('metal', 0.0055, 0.0055, stockWidth + 0.0016, 0, -0.075, 0.36, Math.PI / 2, Math.PI / 2, dark);
-  // Cheek riser on two posts, and the butt pad with its ribs.
+  // Cheek riser on two posts (rubber on the .338's skeleton stock), and the butt pad with its ribs: a thick buffer pad on the heavy stock.
   sidePart(
     body,
     id === '338' ? 'rubber' : 'stock',
@@ -462,14 +730,21 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
       [0.33, 0.042, 0.004],
       [0.13, 0.042, 0.004],
     ],
-    0.042,
+    Math.min(0.042, stockWidth - 0.004),
     id === '338' ? { wear: 0.3 } : shell,
     { bevel: 0.004 },
   );
   for (const z of [0.17, 0.29]) body.tube('metal', 0.0045, 0.0045, 0.012, 0, 0.038, z, 0, 0, bare);
-  body.tube('metal', 0.007, 0.007, 0.0525, 0, 0, 0.35, Math.PI / 2, Math.PI / 2, black); // the riser's adjuster knob, through the stock
-  body.box('rubber', 0.052, 0.166, 0.022, 0, -0.046, butt + 0.012, 0, { wear: 0.4, round: 0.35 });
-  for (let i = 0; i < 6; i++) body.box('rubber', 0.054, 0.004, 0.018, 0, -0.105 + i * 0.024, butt + 0.013, 0, { wear: 0.2 });
+  body.tube('metal', 0.007, 0.007, stockWidth + 0.0045, 0, 0, 0.35, Math.PI / 2, Math.PI / 2, black); // the riser's adjuster knob, through the stock
+  const pad = heavy ? 0.042 : 0.022;
+  body.box('rubber', stockWidth + 0.004, 0.166, pad, 0, -0.046, butt + pad / 2 + 0.001, 0, { wear: 0.4, round: 0.35 });
+  for (let i = 0; i < 6; i++) body.box('rubber', stockWidth + 0.006, 0.004, pad - 0.004, 0, -0.105 + i * 0.024, butt + pad / 2 + 0.002, 0, { wear: 0.2 });
+  // A rear monopod under the butt of the frame and heavy stocks: a leg with a knurled collar and a foot.
+  if (look.stock === 'frame' || heavy) {
+    body.tube('metal', 0.0065, 0.0065, 0.07, 0, -0.152, 0.335, 0, 0, black);
+    body.tube('metal', 0.0095, 0.0095, 0.018, 0, -0.13, 0.335, 0, 0, { color: LIGHT_COAT, wear: 0.5 });
+    body.box('rubber', 0.026, 0.008, 0.03, 0, -0.19, 0.335, 0, { wear: 0.3 });
+  }
   for (const [y, z] of [
     [-0.1, 0.3],
     [guardY - 0.027, -0.45],
@@ -477,47 +752,66 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
     body.tube('metal', 0.0065, 0.0065, 0.004, 0, y, z, 0, 0, bare); // sling studs
   }
 
-  // Receiver (a round action bedded in the chassis), its ejection port and the bolt shroud behind.
-  body.tube('metal', 0.0175, 0.0175, 0.25, 0, BARREL_Y, -0.06, Math.PI / 2, 0, { color: BLUED, wear: 0.3 });
-  lengthPart(body, 'metal', SLOT, -0.1, -0.03, 0.0168, BARREL_Y + 0.006, dark, { radius: 0.002, bevel: 0.0004 });
-  body.lathe(
-    'metal',
-    [
-      [0.0165, 0],
-      [0.016, 0.02],
-      [0.012, 0.035],
-      [0.006, 0.04],
-    ],
-    0,
-    BARREL_Y,
-    0.065,
-    { color: BLUED, wear: 0.3 },
-  );
+  // Receiver. A round bolt action bedded in the chassis, its ejection port and the bolt shroud behind; or, on the .50, a massive box
+  // receiver: the recoiling semi-automatic action, its lightening cuts and the buffer tube running back into the stock.
+  if (look.receiver === 'box') {
+    body.box('metal', 0.064, 0.058, 0.3, 0, 0.029, -0.07, 0, { color: CERAKOTE, wear: 0.4, round: 0.12 });
+    for (const z of [-0.18, -0.12, -0.06]) lengthPart(body, 'metal', port(0.0012, 0.012), z - 0.022, z + 0.022, -0.0322, 0.032, dark, { radius: 0.003, bevel: 0.0004 });
+    lengthPart(body, 'metal', port(0.0012, 0.01), -0.02, 0.05, 0.0322, 0.034, dark, { radius: 0.003, bevel: 0.0004 }); // the ejection port, right side
+    body.tube('metal', 0.022, 0.022, 0.06, 0, 0.026, 0.1, Math.PI / 2, 0, { color: BLUED, wear: 0.4 });
+  } else {
+    const radius = breechRadius > 0.014 ? 0.0198 : 0.0175;
+    body.tube('metal', radius, radius, 0.25, 0, BARREL_Y, -0.06, Math.PI / 2, 0, { color: BLUED, wear: 0.3 });
+    lengthPart(body, 'metal', SLOT, -0.1, -0.03, radius - 0.0007, BARREL_Y + 0.006, dark, { radius: 0.002, bevel: 0.0004 });
+    body.lathe(
+      'metal',
+      [
+        [radius - 0.001, 0],
+        [radius - 0.0015, 0.02],
+        [0.012, 0.035],
+        [0.006, 0.04],
+      ],
+      0,
+      BARREL_Y,
+      0.065,
+      { color: BLUED, wear: 0.3 },
+    );
+  }
 
-  // Barrel (tapering toward the muzzle), the muzzle brake with three ports a side, and the dark bore.
-  body.tube('metal', 0.0105, 0.0125, length + 0.32, 0, BARREL_Y, BARREL_START_Z + 0.32 - (length + 0.32) / 2, Math.PI / 2, 0, { color: BLUED, wear: 0.2 });
-  body.tube('metal', 0.0145, 0.0145, 0.065, 0, BARREL_Y, BARREL_START_Z - 0.01 - length, Math.PI / 2, 0, { color: BLUED, wear: 0.6 });
-  for (let i = 0; i < 3; i++) {
-    const back = BARREL_START_Z + 0.016 - length - i * 0.016; // the brake spans 0.0225 m behind to 0.0425 m ahead of the barrel's end
+  // Barrel (tapering toward the muzzle), the muzzle device and the dark bore.
+  body.tube('metal', muzzleRadius, breechRadius, length + 0.32, 0, BARREL_Y, BARREL_START_Z + 0.32 - (length + 0.32) / 2, Math.PI / 2, 0, { color: BLUED, wear: 0.2 });
+  const barrelEnd = BARREL_START_Z - length;
+  // A suppressor takes the place of the bigger brakes; the slim one stays under the can, as on the .308 and .338.
+  const device = suppressed && look.muzzle !== 'compact' ? 'none' : look.muzzle;
+  const deviceFront = muzzleDevice(body, device, barrelEnd, muzzleRadius, dark);
+  if (!look.integralCan) body.tube('metal', 0.0062, 0.0062, 0.001, 0, BARREL_Y, deviceFront, Math.PI / 2, 0, dark);
+
+  // A folded bipod under the barrel just ahead of the handguard: the clamp, two legs lying forward, their feet.
+  if (look.bipod) {
+    const under = BARREL_Y - breechRadius - 0.012;
+    const at = look.guardFront;
+    body.box('metal', 0.036, 0.022, 0.034, 0, under + 0.004, at - 0.03, 0, { ...black, round: 0.2 });
     for (const side of [-1, 1]) {
-      lengthPart(body, 'metal', BRAKE_PORT, back - 0.011, back, side * 0.0128, BARREL_Y, dark, { radius: 0.002, bevel: 0.0005 });
+      body.tube('metal', 0.0065, 0.0075, 0.24, side * 0.014, under - 0.006, at - 0.17, Math.PI / 2, 0, black);
+      body.box('rubber', 0.016, 0.014, 0.024, side * 0.014, under - 0.008, at - 0.295, 0, { wear: 0.3 });
     }
   }
-  body.tube('metal', 0.0062, 0.0062, 0.001, 0, BARREL_Y, BARREL_START_Z - 0.0425 - length, Math.PI / 2, 0, dark);
 
   // Picatinny rail from the receiver over the handguard, with its cross slots.
   const railTop = BARREL_Y + 0.027;
   body.box('metal', 0.021, 0.009, 0.5, 0, railTop - 0.0045, -0.2, 0, black);
   for (let i = 0; i < 50; i++) body.box('metal', 0.0215, 0.0028, 0.0052, 0, railTop + 0.0014, -0.445 + i * 0.01, 0, black);
 
-  // Scope (30 mm tube, 56 mm objective): rings on the rail, tube, eyepiece and its rear lens, the turret saddle and
-  // turrets, the objective bell with its gold ring and front lens.
-  for (const z of [-0.035, -0.225]) {
-    body.box('metal', 0.026, 0.03, 0.02, 0, railTop + 0.012, z, 0, black);
-    body.tube('metal', 0.0182, 0.0182, 0.02, 0, SCOPE_Y, z, Math.PI / 2, 0, black);
+  // Scope (30 mm tube, 56 mm objective): rings on the rail, tube, eyepiece and its rear lens, the turret saddle and turrets, the objective
+  // bell with its gold ring and front lens. A heavy rifle's sits higher on taller rings, and its tube is longer (the objective forward).
+  const scopeY = SCOPE_Y + look.scopeRise;
+  const stretch = look.scopeStretch;
+  for (const z of [-0.035, -0.225 - stretch * 0.4]) {
+    body.box('metal', 0.026, 0.03 + look.scopeRise, 0.02, 0, railTop + 0.012 + look.scopeRise / 2, z, 0, black);
+    body.tube('metal', 0.0182, 0.0182, 0.02, 0, scopeY, z, Math.PI / 2, 0, black);
     body.tube('metal', 0.005, 0.005, 0.034, 0, railTop + 0.006, z, Math.PI / 2, Math.PI / 2, bare); // the cross bolt
   }
-  body.tube('metal', 0.015, 0.015, 0.32, 0, SCOPE_Y, -0.14, Math.PI / 2, 0, { color: ANODISED, wear: 0.4 });
+  body.tube('metal', 0.015, 0.015, 0.32 + stretch, 0, scopeY, -0.14 - stretch / 2, Math.PI / 2, 0, { color: ANODISED, wear: 0.4 });
   // Eyepiece: z 0.0025 .. 0.0875, the power ring, then the eyecup, hollow at the rear for the lens.
   body.lathe(
     'metal',
@@ -533,28 +827,29 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
       [0.0178, 0.077],
     ],
     0,
-    SCOPE_Y,
+    scopeY,
     0.0025,
     { color: ANODISED, wear: 0.4 },
   );
-  lens(body, 0.0178, 0.003, 1, SCOPE_Y, 0.0025 + 0.077);
-  body.tube('metal', 0.0178, 0.0178, 0.002, 0, SCOPE_Y, 0.0025 + 0.076, Math.PI / 2, 0, dark); // the dark inside behind it
+  lens(body, 0.0178, 0.003, 1, scopeY, 0.0025 + 0.077);
+  body.tube('metal', 0.0178, 0.0178, 0.002, 0, scopeY, 0.0025 + 0.076, Math.PI / 2, 0, dark); // the dark inside behind it
   for (let i = 0; i < 40; i++) {
     const a = (i * Math.PI) / 20;
-    body.box('metal', 0.0022, 0.0022, 0.022, Math.cos(a) * 0.0197, SCOPE_Y + Math.sin(a) * 0.0197, 0.034, 0, { color: LIGHT_COAT }); // power ring knurling
+    body.box('metal', 0.0022, 0.0022, 0.022, Math.cos(a) * 0.0197, scopeY + Math.sin(a) * 0.0197, 0.034, 0, { color: LIGHT_COAT }); // power ring knurling
   }
   // Turret saddle and turrets: elevation on top, windage on the right, parallax on the left.
-  body.box('metal', 0.034, 0.034, 0.046, 0, SCOPE_Y, -0.13, 0, { color: ANODISED, wear: 0.6, round: 0.3 });
-  body.tube('metal', 0.0135, 0.0135, 0.026, 0, SCOPE_Y + 0.03, -0.13, 0, 0, { color: ANODISED, wear: 0.5 });
-  body.tube('metal', 0.0115, 0.0115, 0.003, 0, SCOPE_Y + 0.0445, -0.13, 0, 0, { color: LIGHT_COAT });
+  body.box('metal', 0.034, 0.034, 0.046, 0, scopeY, -0.13, 0, { color: ANODISED, wear: 0.6, round: 0.3 });
+  body.tube('metal', 0.0135, 0.0135, 0.026, 0, scopeY + 0.03, -0.13, 0, 0, { color: ANODISED, wear: 0.5 });
+  body.tube('metal', 0.0115, 0.0115, 0.003, 0, scopeY + 0.0445, -0.13, 0, 0, { color: LIGHT_COAT });
   for (let i = 0; i < 30; i++) {
     const a = (i * Math.PI) / 15;
-    body.box('metal', 0.0024, 0.018, 0.0024, Math.cos(a) * 0.0137, SCOPE_Y + 0.033, -0.13 + Math.sin(a) * 0.0137, 0, { color: LIGHT_COAT }); // its ridges
+    body.box('metal', 0.0024, 0.018, 0.0024, Math.cos(a) * 0.0137, scopeY + 0.033, -0.13 + Math.sin(a) * 0.0137, 0, { color: LIGHT_COAT }); // its ridges
   }
-  body.tube('metal', 0.0125, 0.0125, 0.022, 0.026, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
-  body.tube('metal', 0.012, 0.012, 0.02, -0.025, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
-  for (const x of [0.0375, -0.0355]) body.tube('metal', 0.0105, 0.0105, 0.002, x, SCOPE_Y, -0.13, Math.PI / 2, Math.PI / 2, { color: LIGHT_COAT });
-  // Objective bell: z -0.44 (front) .. -0.30, flaring from the tube, recessed at the front for the lens.
+  body.tube('metal', 0.0125, 0.0125, 0.022, 0.026, scopeY, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
+  body.tube('metal', 0.012, 0.012, 0.02, -0.025, scopeY, -0.13, Math.PI / 2, Math.PI / 2, { color: ANODISED, wear: 0.5 });
+  for (const x of [0.0375, -0.0355]) body.tube('metal', 0.0105, 0.0105, 0.002, x, scopeY, -0.13, Math.PI / 2, Math.PI / 2, { color: LIGHT_COAT });
+  // Objective bell: z -0.44 (front) .. -0.30 on the .308, flaring from the tube, recessed at the front for the lens.
+  const bell = -0.44 - stretch;
   body.lathe(
     'metal',
     [
@@ -568,42 +863,53 @@ export function buildRifleModel(id: Rifle['id'], suppressed: boolean, hands = tr
       [0.015, 0.14],
     ],
     0,
-    SCOPE_Y,
-    -0.44,
+    scopeY,
+    bell,
     { color: ANODISED, wear: 0.4 },
   );
-  lens(body, 0.0275, 0.004, -1, SCOPE_Y, -0.44 + 0.012);
-  body.tube('metal', 0.0275, 0.0275, 0.002, 0, SCOPE_Y, -0.44 + 0.013, Math.PI / 2, 0, dark);
-  body.tube('metal', 0.0308, 0.0308, 0.0025, 0, SCOPE_Y, -0.398, Math.PI / 2, 0, { color: BRASS }); // the gold coating ring
+  lens(body, 0.0275, 0.004, -1, scopeY, bell + 0.012);
+  body.tube('metal', 0.0275, 0.0275, 0.002, 0, scopeY, bell + 0.013, Math.PI / 2, 0, dark);
+  body.tube('metal', 0.0308, 0.0308, 0.0025, 0, scopeY, bell + 0.042, Math.PI / 2, 0, { color: BRASS }); // the gold coating ring
   for (const z of [-0.15, -0.06, 0.05]) {
     for (const side of [-1, 1]) body.tube('metal', 0.0035, 0.0035, 0.002, side * 0.0255, -0.005, z, Math.PI / 2, Math.PI / 2, bare); // chassis screws
   }
 
-  if (hands) addHands(body, ghillie);
+  if (hands) addHands(body, ghillie, look.foreEnd);
   for (const mesh of body.toMeshes(materials)) group.add(mesh);
 
-  // The bolt handle: a bent rod out of the receiver's right side and its round knob, local to the pivot.
+  // The bolt handle: a bent rod out of the receiver's right side and its round knob, local to the pivot. The .50 has none: its
+  // charging handle, a squared knob on the right of the receiver, rides in the same group.
   const boltParts = new PartSet();
-  boltParts.tube('metal', 0.0055, 0.0055, 0.055, 0.042, -0.006, 0, Math.PI / 2, Math.PI / 2 - 0.22, { color: BLUED });
-  boltParts.sphere('metal', 0.0115, 0.07, -0.013, 0, { color: ANODISED, wear: 0.5 });
+  if (look.receiver === 'box') {
+    boltParts.box('metal', 0.022, 0.014, 0.026, 0.042, -0.004, -0.11, 0, { color: ANODISED, wear: 0.5, round: 0.3 });
+    boltParts.box('metal', 0.012, 0.006, 0.04, 0.034, -0.004, -0.11, 0, { color: BLUED });
+  } else {
+    boltParts.tube('metal', 0.0055, 0.0055, 0.055, 0.042, -0.006, 0, Math.PI / 2, Math.PI / 2 - 0.22, { color: BLUED });
+    boltParts.sphere('metal', id === '127' || id === '408' ? 0.0135 : 0.0115, 0.07, -0.013, 0, { color: ANODISED, wear: 0.5 });
+  }
   const bolt = new THREE.Group();
   bolt.name = 'bolt';
   bolt.position.set(BOLT_PIVOT.x, BOLT_PIVOT.y, BOLT_PIVOT.z);
   for (const mesh of boltParts.toMeshes(materials)) bolt.add(mesh);
   group.add(bolt);
 
-  // The suppressor: a can on the muzzle with machined end caps and its dark front opening.
-  let muzzleZ = BARREL_START_Z - 0.0425 - length;
-  if (suppressed) {
-    const can = new PartSet();
-    const centre = BARREL_START_Z - 0.12 - length;
-    can.tube('metal', 0.022, 0.022, SUPPRESSOR_LENGTH_M, 0, BARREL_Y, centre, Math.PI / 2, 0, { color: CERAKOTE, wear: 0 });
-    muzzleZ = centre - SUPPRESSOR_LENGTH_M / 2;
-    can.tube('metal', 0.0075, 0.0075, 0.002, 0, BARREL_Y, muzzleZ - 0.001, Math.PI / 2, 0, dark);
-    for (const z of [centre + 0.088, centre - 0.088]) can.tube('metal', 0.0228, 0.0228, 0.014, 0, BARREL_Y, z, Math.PI / 2, 0, { color: LIGHT_COAT, wear: 0.6 });
+  // The suppressor: a can on the muzzle with machined end caps and its dark front opening (longer and fatter on the heavy calibres). The
+  // 12.7x55's integral can is always there: the rifle is built round it, from the handguard's front to well past the short barrel.
+  let muzzleZ = deviceFront;
+  if (look.integralCan || suppressed) {
+    const parts = new PartSet();
+    if (look.integralCan) {
+      const [radius, canLength] = look.integralCan;
+      muzzleZ = can(parts, radius, canLength, look.guardFront + 0.012, dark);
+      for (let i = 0; i < 4; i++) parts.tube('metal', radius + 0.0006, radius + 0.0006, 0.004, 0, BARREL_Y, look.guardFront - 0.06 - i * 0.07, Math.PI / 2, 0, { color: BLUED }); // baffle seams
+    } else if (look.muzzle === 'compact') {
+      muzzleZ = can(parts, 0.022, SUPPRESSOR_LENGTH_M, barrelEnd - 0.025, dark);
+    } else {
+      muzzleZ = can(parts, Math.max(0.026, muzzleRadius + 0.012), HEAVY_SUPPRESSOR_LENGTH_M, barrelEnd + 0.02, dark);
+    }
     const suppressor = new THREE.Group();
     suppressor.name = 'suppressor';
-    for (const mesh of can.toMeshes(materials)) suppressor.add(mesh);
+    for (const mesh of parts.toMeshes(materials)) suppressor.add(mesh);
     group.add(suppressor);
   }
 
@@ -662,7 +968,8 @@ class MuzzleFlash {
   /** True from `trigger` to the next `update`: that first frame is shown even when it was a slow one. */
   private fresh = false;
 
-  constructor(muzzleZ: number) {
+  /** `size` scales the fireball (1: the .308's). */
+  constructor(muzzleZ: number, size = 1) {
     this.material = new THREE.SpriteMaterial({
       map: flameTexture(),
       transparent: true,
@@ -671,10 +978,10 @@ class MuzzleFlash {
       toneMapped: false,
     });
     const flame = new THREE.Sprite(this.material);
-    flame.scale.set(FLAME_SIZE_M, FLAME_SIZE_M, 1);
+    flame.scale.set(FLAME_SIZE_M * size, FLAME_SIZE_M * size, 1);
     const core = new THREE.Sprite(this.material);
-    core.position.z = -0.07;
-    core.scale.set(CORE_SIZE_M, CORE_SIZE_M, 1);
+    core.position.z = -0.07 * size;
+    core.scale.set(CORE_SIZE_M * size, CORE_SIZE_M * size, 1);
     this.group.add(flame, core);
     this.group.position.set(0, BARREL_Y, muzzleZ - FLASH_GAP_M);
     this.group.visible = false;
@@ -737,22 +1044,42 @@ export class FirstPersonRifle {
   private readonly bolt: THREE.Group;
   /** Null when suppressed: a suppressed shot has no flash at all. */
   private readonly flash: MuzzleFlash | null;
+  /** Whether the rifle has a suppressor (always, for one built round it). */
+  readonly suppressed: boolean;
+  /** The rifle's own bolt cycle (a semi-automatic's is short, and has no handle to lift), s. */
+  private readonly boltTime: number;
+  private readonly semi: boolean;
+  /** Kick travel (m), muzzle climb (rad) and fade rate (1/s) of this rifle's recoil. */
+  private readonly kickBack: number;
+  private readonly kickPitch: number;
+  private readonly kickDecay: number;
   private kick = 0;
   private time = 0;
   private reloadRemaining = 0;
-  private reloadDuration = RELOAD_TIME_S;
-  /** Time since the bolt cycle started, s; BOLT_TIME_S means no cycle is running. */
-  private boltElapsed = BOLT_TIME_S;
+  private reloadDuration: number;
+  /** Time since the bolt cycle started, s; `boltTime` means no cycle is running. */
+  private boltElapsed: number;
 
   constructor(
     id: Rifle['id'],
-    readonly suppressed = false,
+    suppressed = false,
     ghillie: number | null = null,
   ) {
-    const built = buildRifleModel(id, suppressed, true, ghillie);
+    const rifle = RIFLES[id];
+    // A rifle built round its suppressor is suppressed whatever it is told (clampMission makes sure of it too).
+    this.suppressed = suppressed || rifle.integralSuppressor;
+    this.boltTime = rifle.boltTimeS;
+    this.semi = rifle.action === 'semi';
+    this.reloadDuration = rifle.reloadTimeS;
+    this.boltElapsed = this.boltTime;
+    this.kickBack = KICK_BACK_M * Math.pow(rifle.recoil, KICK_GROWTH);
+    this.kickPitch = KICK_PITCH_RAD * Math.pow(rifle.recoil, KICK_GROWTH);
+    this.kickDecay = KICK_DECAY / Math.sqrt(rifle.recoil);
+    const built = buildRifleModel(id, this.suppressed, true, ghillie);
     this.model = built.group;
     this.bolt = built.bolt;
-    this.flash = suppressed ? null : new MuzzleFlash(built.muzzleZ);
+    // A bigger cartridge throws a bigger fireball.
+    this.flash = this.suppressed ? null : new MuzzleFlash(built.muzzleZ, Math.sqrt(rifle.recoil));
     if (this.flash) this.model.add(this.flash.group, this.flash.light);
     this.model.rotation.y = HOLD_YAW_RAD;
     this.holder.name = 'holder';
@@ -846,7 +1173,7 @@ export class FirstPersonRifle {
 
   /**
    * A shot went off: kick and (unsuppressed) flash. `boltCycle` is true when a round is left to chamber:
-   * the bolt is then worked (it takes BOLT_TIME_S).
+   * the bolt is then worked (it takes the rifle's `boltTimeS`; on the semi-automatic .50 the action snaps back and forward by itself).
    */
   fire(boltCycle = true): void {
     this.kick = 1;
@@ -854,8 +1181,8 @@ export class FirstPersonRifle {
     if (boltCycle) this.boltElapsed = 0;
   }
 
-  /** A reload started: dip and come back over `durationS`. */
-  reload(durationS = RELOAD_TIME_S): void {
+  /** A reload started: dip and come back over `durationS` (default: the rifle's own reload time). */
+  reload(durationS = this.reloadDuration): void {
     if (!(durationS > 0)) return;
     this.reloadDuration = durationS;
     this.reloadRemaining = durationS;
@@ -866,7 +1193,7 @@ export class FirstPersonRifle {
     this.time += step;
     this.flash?.update(step);
 
-    this.kick *= Math.exp(-step * KICK_DECAY);
+    this.kick *= Math.exp(-step * this.kickDecay);
     this.reloadRemaining = Math.max(0, this.reloadRemaining - step);
     const dip = this.reloadRemaining > 0 ? Math.sin(Math.PI * (1 - this.reloadRemaining / this.reloadDuration)) : 0;
     breathingSway(this.time, this.sway);
@@ -875,15 +1202,16 @@ export class FirstPersonRifle {
     this.model.position.set(
       HOLD.x,
       HOLD.y - dip * RELOAD_DIP_M,
-      HOLD.z + this.kick * KICK_BACK_M,
+      HOLD.z + this.kick * this.kickBack,
     );
-    this.model.rotation.x = this.kick * KICK_PITCH_RAD - dip * RELOAD_PITCH_RAD;
+    this.model.rotation.x = this.kick * this.kickPitch - dip * RELOAD_PITCH_RAD;
     this.model.rotation.z = HOLD_ROLL_RAD + dip * RELOAD_ROLL_RAD;
 
-    this.boltElapsed = Math.min(BOLT_TIME_S, this.boltElapsed + step);
-    const progress = this.boltElapsed / BOLT_TIME_S;
-    this.bolt.rotation.z = boltLift(progress);
-    this.bolt.position.z = BOLT_PIVOT.z + boltSlide(progress);
+    this.boltElapsed = Math.min(this.boltTime, this.boltElapsed + step);
+    const progress = this.boltElapsed / this.boltTime;
+    // The semi-automatic's charging handle is not lifted: it rides back with the action and slams home.
+    this.bolt.rotation.z = this.semi ? 0 : boltLift(progress);
+    this.bolt.position.z = BOLT_PIVOT.z + (this.semi ? boltSlide(progress) * 1.6 : boltSlide(progress));
   }
 
   /** Match the camera to the window (CSS px); call on start and on every resize. */

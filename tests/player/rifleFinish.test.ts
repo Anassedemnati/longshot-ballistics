@@ -16,7 +16,7 @@ import {
   stipplePixels,
 } from '../../src/player/rifleTextures';
 
-const IDS = ['308', '338'] as const;
+const IDS = ['308', '338', '300', '408', '50', '127', '127s'] as const;
 
 function meshes(root: THREE.Object3D): THREE.Mesh[] {
   const found: THREE.Mesh[] = [];
@@ -49,7 +49,8 @@ describe('rifle finish: surfaces', () => {
 
         it('has one mesh per surface: stock, metal, rubber, glass, glove (+ bolt, + suppressor)', () => {
           const names = meshes(group).map((m) => m.name).sort();
-          expect(names).toEqual(['glass', 'glove', 'metal', 'metal', ...(suppressed ? ['metal'] : []), 'rubber', 'stock'].sort());
+          const fitted = suppressed || id === '127s'; // the 12.7x55's can is integral
+          expect(names).toEqual(['glass', 'glove', 'metal', 'metal', ...(fitted ? ['metal'] : []), 'rubber', 'stock'].sort());
         });
 
         it('keeps the draw calls to a handful (meshes, materials)', () => {
