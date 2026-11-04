@@ -4,13 +4,16 @@ import type { Vec3 } from '../../src/ballistics/types';
 import { segmentBox, segmentSphere } from '../../src/game/hit';
 import { facingYaw } from '../../src/mission/layout';
 import type { VehicleTargetPlacement } from '../../src/mission/layout';
+import { BASE_KINDS } from '../../src/mission/baseProps';
 import { propBoxes, toWorldBox, vehicleTargetBoxes, vehicleTargetColliders } from '../../src/mission/props';
-import type { PropKind, PropPlacement } from '../../src/mission/props';
+import type { LocalBox, PropKind, SceneryKind, SceneryPlacement } from '../../src/mission/props';
+import { planBase } from '../../src/mission/basePlan';
 import { createRng } from '../../src/mission/random';
 import type { ThemeId } from '../../src/mission/themes';
 import { SmokeColumn } from '../../src/fx/smoke';
 import { SPARK_LIFETIME, SparkSystem } from '../../src/fx/sparks';
-import { createPropMesh, propParts } from '../../src/scene/props';
+import { createBaseMesh } from '../../src/scene/baseMesh';
+import { createPropMesh, partVertices, propParts } from '../../src/scene/props';
 import { createSky } from '../../src/scene/sky';
 import { FALL_DURATION, createTargetDummy, dummyHitSpheres } from '../../src/scene/target';
 import { advance, bonesOf } from '../helpers/bones';
@@ -18,7 +21,9 @@ import { terrainHeight } from '../../src/scene/terrainHeight';
 import { createVehicleTarget } from '../../src/scene/vehicleTarget';
 import { shootAtPoint } from '../helpers/shoot';
 
-const KINDS: PropKind[] = ['house', 'wall', 'shed', 'truck', 'jeep'];
+const VILLAGE_KINDS: PropKind[] = ['house', 'wall', 'shed', 'truck', 'jeep'];
+/** Village props and the military-base hardware: the collider/mesh rules hold for every kind. */
+const KINDS: SceneryKind[] = [...VILLAGE_KINDS, ...BASE_KINDS];
 const THEMES: ThemeId[] = ['desert', 'arctic', 'valley'];
 const DEG = Math.PI / 180;
 
@@ -78,21 +83,42 @@ function meshVertices(mesh: THREE.Mesh): Vec3[] {
   return out;
 }
 
-/** True when the local-frame point lies in one of the boxes grown by `margin` m. */
-function insideAnyBox(p: Vec3, boxes: ReadonlyArray<{ center: Vec3; halfSize: Vec3 }>, margin: number): boolean {
-  return boxes.some(
-    (b) =>
-      Math.abs(p.x - b.center.x) <= b.halfSize.x + margin + 1e-6 &&
-      Math.abs(p.y - b.center.y) <= b.halfSize.y + margin + 1e-6 &&
-      Math.abs(p.z - b.center.z) <= b.halfSize.z + margin + 1e-6,
-  );
+/** A prop-frame point in a box's own frame (its yaw undone about its centre), relative to the centre. */
+function inBoxFrame(p: Vec3, b: { center: Vec3; yaw?: number }): Vec3 {
+  const dx = p.x - b.center.x;
+  const dz = p.z - b.center.z;
+  const c = Math.cos(b.yaw ?? 0);
+  const s = Math.sin(b.yaw ?? 0);
+  // The box maps its +X to (cos, -sin) and +Z to (sin, cos): project onto those axes.
+  return { x: c * dx - s * dz, y: p.y - b.center.y, z: s * dx + c * dz };
+}
+
+/** True when the local-frame point lies in one of the boxes (turned by their own yaw) grown by `margin` m. */
+function insideAnyBox(p: Vec3, boxes: ReadonlyArray<{ center: Vec3; halfSize: Vec3; yaw?: number }>, margin: number): boolean {
+  return boxes.some((b) => {
+    const q = inBoxFrame(p, b);
+    return Math.abs(q.x) <= b.halfSize.x + margin + 1e-6 && Math.abs(q.y) <= b.halfSize.y + margin + 1e-6 && Math.abs(q.z) <= b.halfSize.z + margin + 1e-6;
+  });
+}
+
+/** Default look of a collider box (a wheel's box is the round tyre inside it). */
+const lookOf = (b: LocalBox): string => b.look ?? (b.part === 'wheel' ? 'roundX' : 'box');
+
+/**
+ * How far short of a box face the drawn shape may stop, m: a prism's polygon touches its box only where a vertex
+ * lies on the axis of the face, which every 4k-sided prism has; a tilted tube's polygon can fall r (1 - cos pi/N)
+ * short. Plus 1 mm.
+ */
+function faceSlack(b: LocalBox): number {
+  if (b.look === 'tube' && b.tube) return b.tube.radius * (1 - Math.cos(Math.PI / (b.sides ?? 12))) + 0.001;
+  return 0.001;
 }
 
 describe('prop meshes are built from the collider boxes', () => {
   for (const theme of THEMES) {
     for (const kind of KINDS) {
       it(`${kind} (${theme}): every collider box is in exactly one mesh with its corners (a wheel: its round tyre touching the box) (1 mm); every other vertex stays within 3 cm of a collider or under the ground`, () => {
-        const p: PropPlacement = { id: `p-${kind}`, kind, x: 37, z: -612, yaw: 0.7 };
+        const p: SceneryPlacement = { id: `p-${kind}`, kind, x: 37, z: -612, yaw: 0.7 };
         const groundY = 3.2;
         const group = createPropMesh(p, groundY, theme);
         group.updateMatrixWorld(true);
@@ -100,13 +126,35 @@ describe('prop meshes are built from the collider boxes', () => {
         const boxes = propBoxes(kind);
         const expectedBoxes = boxes.map((b) => toWorldBox(b, p.x, p.z, p.yaw, groundY));
 
-        boxes.forEach((_b, i) => {
+        const parts = propParts(kind, theme);
+        boxes.forEach((b, i) => {
           const holders = meshes.filter((m) => (m.userData.boxes as number[]).includes(i));
           expect(holders, `${kind} box ${i}`).toHaveLength(1);
           const have = meshVertices(holders[0]);
-          const points = boxes[i].part === 'wheel' ? tyrePoints(expectedBoxes[i]) : boxCorners(expectedBoxes[i]);
-          for (const corner of points) {
-            expect(Math.min(...have.map((h) => dist(h, corner))), `${kind} box ${i} corner`).toBeLessThan(0.001);
+          const look = lookOf(b);
+          if (look === 'box' || (look === 'roundX' && b.part === 'wheel' && !b.look)) {
+            const points = look === 'box' ? boxCorners(expectedBoxes[i]) : tyrePoints(expectedBoxes[i]);
+            for (const corner of points) {
+              expect(Math.min(...have.map((h) => dist(h, corner))), `${kind} box ${i} corner`).toBeLessThan(0.001);
+            }
+            return;
+          }
+          // Any other look: the drawn shape stays in its box and touches all six faces, and the mesh holds it.
+          const part = parts.find((q) => q.box === i);
+          expect(part, `${kind} box ${i} part`).toBeDefined();
+          const drawn = partVertices(part as NonNullable<typeof part>);
+          const slack = faceSlack(b);
+          for (const axis of ['x', 'y', 'z'] as const) {
+            const along = drawn.map((v) => inBoxFrame(v, b)[axis]);
+            expect(Math.max(...along), `${kind} box ${i} (${look}) +${axis} face`).toBeGreaterThan(b.halfSize[axis] - slack);
+            expect(Math.min(...along), `${kind} box ${i} (${look}) -${axis} face`).toBeLessThan(-b.halfSize[axis] + slack);
+            expect(Math.max(...along.map(Math.abs)), `${kind} box ${i} (${look}) inside on ${axis}`).toBeLessThanOrEqual(b.halfSize[axis] + 1e-6);
+          }
+          const c = Math.cos(p.yaw);
+          const s = Math.sin(p.yaw);
+          for (const v of [drawn[0], drawn[drawn.length - 1], drawn[Math.floor(drawn.length / 2)]]) {
+            const w = { x: p.x + c * v.x + s * v.z, y: groundY + v.y, z: p.z - s * v.x + c * v.z };
+            expect(Math.min(...have.map((h) => dist(h, w))), `${kind} box ${i} (${look}) is in its mesh`).toBeLessThan(0.001);
           }
         });
 
@@ -145,14 +193,16 @@ describe('prop meshes are built from the collider boxes', () => {
 
   // A prop costs one draw call per mesh plus one more per shadow caster. Before the realism pass a prop was a mesh per
   // box and per decoration (house 10, wall 3, shed 6, truck 16, jeep 14, shadows included); with far more detail it is now:
-  const BUDGET: Record<PropKind, number> = { house: 7, wall: 2, shed: 7, truck: 7, jeep: 6 };
+  const BUDGET: Partial<Record<SceneryKind, number>> = { house: 7, wall: 2, shed: 7, truck: 7, jeep: 6 };
+  /** A military prop on its own (the preview's "before"); a base merges them all (scene/baseMesh.ts). */
+  const BASE_BUDGET = 8;
   for (const kind of KINDS) {
-    it(`${kind}: at most ${BUDGET[kind]} draw calls (meshes + shadow casters)`, () => {
+    it(`${kind}: at most ${BUDGET[kind] ?? BASE_BUDGET} draw calls (meshes + shadow casters)`, () => {
       for (const theme of THEMES) {
         const g = createPropMesh({ id: `d-${kind}`, kind, x: 0, z: -300, yaw: 0 }, 0, theme);
         const meshes = meshesOf(g);
         const calls = meshes.length + meshes.filter((m) => m.castShadow).length;
-        expect(calls, `${kind} (${theme})`).toBeLessThanOrEqual(BUDGET[kind]);
+        expect(calls, `${kind} (${theme})`).toBeLessThanOrEqual(BUDGET[kind] ?? BASE_BUDGET);
         expect(meshes.length, `${kind} (${theme}) meshes`).toBeLessThanOrEqual(6);
       }
     });
@@ -870,5 +920,39 @@ describe('createSky(scene, theme)', () => {
       expect(setup.sunDirection.y).toBeGreaterThan(0.1);
       expect(setup.sunDirection.length()).toBeCloseTo(1, 9);
     }
+  });
+});
+
+describe('a military base merged into one mesh per material class', () => {
+  it('costs at most six meshes (plus their shadow passes) for a whole base, and holds exactly the vertices of its props', () => {
+    for (const theme of THEMES) {
+      const plan = planBase({ x: 30, z: -480 }, 0.4, 'base', createRng(11));
+      const ground = (x: number, z: number): number => 2 + 0.01 * x - 0.02 * z;
+      const merged = createBaseMesh(plan.props, ground, theme);
+      const meshes = meshesOf(merged);
+      expect(meshes.length).toBeLessThanOrEqual(6);
+      const calls = meshes.length + meshes.filter((m) => m.castShadow).length;
+      expect(calls).toBeLessThanOrEqual(12);
+      // One by one, the same base would cost:
+      const single = plan.props.map((p) => createPropMesh(p, ground(p.x, p.z), theme));
+      const singleMeshes = single.flatMap(meshesOf);
+      const singleCalls = singleMeshes.length + singleMeshes.filter((m) => m.castShadow).length;
+      expect(singleCalls).toBeGreaterThan(120); // about 140-200 for a base
+      const count = (ms: THREE.Mesh[]): number => ms.reduce((n, m) => n + m.geometry.getAttribute('position').count, 0);
+      expect(count(meshes)).toBe(count(singleMeshes));
+    }
+  });
+
+  it('puts every vertex where the prop drawn on its own would have it (same placement, same ground)', () => {
+    const p: SceneryPlacement = { id: 'm-tank', kind: 'tank', x: 12, z: -300, yaw: 1.1 };
+    const merged = meshesOf(createBaseMesh([p], () => 4, 'valley'));
+    const alone = createPropMesh(p, 4, 'valley');
+    alone.updateMatrixWorld(true);
+    const paintAlone = meshesOf(alone).find((m) => m.userData.part === 'paint') as THREE.Mesh;
+    const paintMerged = merged.find((m) => m.userData.part === 'paint') as THREE.Mesh;
+    const a = meshVertices(paintAlone);
+    const b = meshVertices(paintMerged);
+    expect(b.length).toBe(a.length);
+    for (let i = 0; i < a.length; i += 97) expect(dist(a[i], b[i])).toBeLessThan(1e-4);
   });
 });
