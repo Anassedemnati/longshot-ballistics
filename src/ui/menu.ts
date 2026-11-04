@@ -513,7 +513,10 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   const artCalibre = el(art, 'span', 'menu-rifle-calibre');
   artCalibre.setAttribute('aria-hidden', 'true');
   const artCaption = el(art, 'figcaption', 'menu-rifle-caption');
-  const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) => apply({ rifle: v }), rifleNote, 2, true);
+  const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) =>
+      // Leaving a rifle with a built-in suppressor takes the suppressor off with it: it was never the player's choice.
+      apply({ rifle: v, ...(RIFLES[cfg.rifle].integralSuppressor && !RIFLES[v].integralSuppressor ? { suppressed: false } : {}) }),
+    rifleNote, 2, true);
   const syncSuppressor = toggle(gear, 'suppressed', 'Suppressor', SUPPRESSOR_NOTE, (on) => apply({ suppressed: on }));
   const syncCamo = toggle(gear, 'camo', 'Ghillie suit', GHILLIE_NOTE, (on) => apply({ camo: on }));
   const syncAssists = toggle(gear, 'assists', 'Aim assists', ASSISTS_NOTE, (on) => apply({ assists: on }));

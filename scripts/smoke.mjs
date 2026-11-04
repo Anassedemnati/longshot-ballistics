@@ -1407,15 +1407,8 @@ async function run() {
     await random.locator('.menu-random').click();
     const rollA = await menuConfig(random);
     await random.locator('.menu-random').click();
-    let second = await menuConfig(random);
+    const second = await menuConfig(random);
     check(JSON.stringify(rollA) !== JSON.stringify(second), 'two Random clicks give different missions');
-    // Random draws from every calibre of ballistics/rifles.ts, but the menu's rifle panel does not list the five added in 9f146f2 yet (that
-    // panel is being reworked on another branch): roll again until the rifle is one the menu can show. A no-op once every calibre has its radio;
-    // delete it then.
-    for (let i = 0; i < 60 && (await random.locator(`input[name=rifle][value="${second.rifle}"]`).count()) === 0; i++) {
-      await random.locator('.menu-random').click();
-      second = await menuConfig(random);
-    }
     log(`random mission: ${JSON.stringify(second)}`);
     const shown = await menuDom(random);
     check(

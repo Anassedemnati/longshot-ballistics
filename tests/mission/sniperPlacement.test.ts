@@ -446,3 +446,16 @@ describe('sniper placement: fuzz', () => {
     }
   });
 });
+
+describe('a short-range rifle keeps the enemy snipers within its reach', () => {
+  it('the 12.7x55 subsonic never meets a sniper past its 250 m reach', () => {
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const config = clampMission({ ...DEFAULT_MISSION, rifle: '127s', rangeMin: 150, rangeMax: 250, enemySnipers: 3, seed });
+      const { field, layout } = setup(config);
+      expect(layout.snipers.length, `seed ${seed}`).toBeGreaterThan(0);
+      for (const s of layout.snipers) {
+        expect(Math.hypot(s.x - field.shooter.x, s.z - field.shooter.z), `seed ${seed}`).toBeLessThanOrEqual(251);
+      }
+    }
+  });
+});

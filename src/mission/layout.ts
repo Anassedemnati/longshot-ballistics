@@ -1,8 +1,10 @@
+import { RIFLES } from '../ballistics/rifles';
 import type { Vec3 } from '../ballistics/types';
 import { segmentBox } from '../game/hit';
 import type { Box, Obstacle } from '../game/hit';
 import { SECTOR_HALF_ANGLE_RAD, SECTOR_MAX_RANGE } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
+import { MISSION_LIMITS } from './config';
 import type { Density, MissionConfig } from './config';
 import { DUMMY_HEAD, DUMMY_UPRIGHT, LOWER_TORSO_CY, UPPER_TORSO_CY } from './dummyDims';
 import { backdropScore, nearestCoverGap, pickHide, scoreHide } from './hide';
@@ -923,9 +925,11 @@ function groundHides(ctx: Ctx, window: readonly [number, number], stage: Stage):
  */
 function placeSniper(ctx: Ctx): PlacedSniper | null {
   const { config } = ctx;
+  // A short-range rifle (the 12.7x55 subsonic) caps the snipers at its reach too: past it the hold leaves the reticle's ladder.
+  const reach = RIFLES[config.rifle].maxRangeM;
   const window = [
-    Math.max(MIN_SNIPER_RANGE, config.rangeMin - SNIPER_BAND_MARGIN),
-    Math.min(SECTOR_MAX_RANGE, config.rangeMax + SNIPER_BAND_MARGIN),
+    Math.max(MIN_SNIPER_RANGE, Math.min(config.rangeMin - SNIPER_BAND_MARGIN, reach - SNIPER_BAND_MARGIN)),
+    Math.min(SECTOR_MAX_RANGE, config.rangeMax + SNIPER_BAND_MARGIN, reach < MISSION_LIMITS.rangeMax ? reach : Infinity),
   ] as const;
   const roofs = roofHides(ctx, window);
   for (const stage of SNIPER_STAGES) {
