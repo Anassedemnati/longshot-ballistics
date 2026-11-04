@@ -1408,7 +1408,7 @@ async function run() {
     await random.locator('.menu-random').click();
     const rollA = await menuConfig(random);
     await random.locator('.menu-random').click();
-    const second = await menuConfig(random);
+    let second = await menuConfig(random);
     check(JSON.stringify(rollA) !== JSON.stringify(second), 'two Random clicks give different missions');
     log(`random mission: ${JSON.stringify(second)}`);
     const shown = await menuDom(random);
@@ -1433,9 +1433,9 @@ async function run() {
     check(new Set(rolls.map((r) => r.enemySnipers)).size >= 3, 'Random mission rolls different enemy sniper counts');
     check(new Set(rolls.map((r) => r.suppressed)).size === 2 && new Set(rolls.map((r) => r.assists)).size === 2 && new Set(rolls.map((r) => r.camo)).size === 2, 'Random mission rolls the suppressor, aim assists and ghillie suit on and off');
     await random.locator('.menu-random').click();
-    // The mission started below is this last roll, with its snipers pinned to 0 and the objective to clearing the area: it counts soldiers and vehicle
-    // targets, and snipers (and an HVT with his bodyguards) are targets of their own.
-    await random.evaluate(() => window.__menu.set({ enemySnipers: 0, objective: 'clear' }));
+    // The mission started below is this last roll, with its snipers pinned to 0, the objective to clearing the area and no base: it counts soldiers
+    // and vehicle targets, and snipers (and an HVT with his bodyguards, and a base's guards) are targets of their own.
+    await random.evaluate(() => window.__menu.set({ enemySnipers: 0, objective: 'clear', base: 'none' }));
     second = await menuConfig(random);
     await clickStart(random, { debug: true });
     st = await gameState(random);
