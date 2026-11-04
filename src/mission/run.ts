@@ -413,8 +413,11 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // sniper's upper torso, a vehicle's engine.
   const assistTargets = (): AimTarget[] => {
     const list: AimTarget[] = [];
-    // The HVT first: in an `hvt` mission he is the one that matters (the spotter reads him out before anyone else at the same angle).
-    if (hvt && !hvt.officerSoldier.dummy.down && !hvt.escaped) list.push({ id: 'hvt', point: hvt.officerSoldier.upperTorso });
+    // An `hvt` mission: while he is up, the HVT is the assists' one target (the spotter calls him, whoever else is nearer the crosshair).
+    if (hvt && !hvt.officerSoldier.dummy.down && !hvt.escaped) {
+      list.push({ id: 'hvt', point: hvt.officerSoldier.upperTorso });
+      return list;
+    }
     if (world.hvt) for (const g of world.hvt.guards) if (!g.dummy.down) list.push({ id: g.placement.id, point: g.upperTorso });
     for (const s of soldiers.values()) if (!s.dummy.down) list.push({ id: s.placement.id, point: s.upperTorso });
     for (const v of vehicles.values()) if (!v.target.disabled) list.push({ id: v.placement.id, point: v.engineCenter });
@@ -796,6 +799,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         hud.setTargets(liveTargets.length, targetsTotal);
       }
     }
+    // The HVT's party falls like the soldiers do (their ragdolls run whatever the pause).
+    if (world.hvt) for (const b of [world.hvt.officer, ...world.hvt.guards]) b.dummy.update(dt);
     for (const v of vehicles.values()) v.target.update(dt);
     for (const k of snipers.values()) k.sniper.update(dt);
     // The cues that have reached their listeners by now (after this frame's impacts, which may have taken one of them out).

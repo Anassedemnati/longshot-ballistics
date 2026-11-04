@@ -220,14 +220,15 @@ export class Assists {
     button.setAttribute('aria-pressed', String(on));
   }
 
-  /** The direction that hits `target` (cached: the shot depends on nothing that moves). */
+  /** The direction that hits `target` (cached while the target stands still: a soldier on the move or the walking HVT is solved again). */
   private solutionFor(target: AimTarget): Vec3 | null {
     const cached = this.solutions.get(target.id);
     const p = target.point;
     if (cached && cached.point.x === p.x && cached.point.y === p.y && cached.point.z === p.z) return cached.dir;
     const { eye, rifle, atmo, wind, zero } = this.opts;
     const dir = solveAim(eye, p, rifle, atmo, wind, zero);
-    this.solutions.set(target.id, { point: p, dir });
+    // A copy: the target's point is often a live object that moves with the body, and the cache must notice when it does.
+    this.solutions.set(target.id, { point: { x: p.x, y: p.y, z: p.z }, dir });
     return dir;
   }
 
