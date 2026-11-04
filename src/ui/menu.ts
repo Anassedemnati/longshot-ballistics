@@ -1,4 +1,5 @@
 import './menu.css';
+import { RIFLES } from '../ballistics/rifles';
 import { DEFAULT_MISSION, MISSION_LIMITS, clampMission, randomMission, windClockLabel } from '../mission/config';
 import type { Density, FiringPosition, MissionConfig } from '../mission/config';
 import { createRng } from '../mission/random';
@@ -8,9 +9,14 @@ import {
   ASSISTS_NOTE,
   FIGHT_BACK_NOTE,
   GHILLIE_NOTE,
+  INTEGRAL_SUPPRESSOR_NOTE,
   RANGE_STEP_M,
-  RIFLE_ART,
+  ART_BOX_ASPECT,
+  OWN_ART_IMAGE,
   RIFLE_ART_IMAGE,
+  RIFLE_SHORT_NAME,
+  WHOLE_ART,
+  boxCrop,
   SNIPERS_NOTE,
   SUPPRESSOR_NOTE,
   WIND_STEP_MPS,
@@ -20,6 +26,7 @@ import {
   menuSearch,
   positionNote,
   rangeLabel,
+  rifleArt,
   rifleArtStyle,
   rifleNote,
   rifleTitle,
@@ -59,10 +66,15 @@ const POSITION_OPTIONS: ReadonlyArray<{ value: FiringPosition; label: string }> 
   { value: 'ridge', label: 'Ridge' },
   { value: 'mountain', label: 'Mountain' },
 ];
-const RIFLE_OPTIONS: ReadonlyArray<{ value: MissionConfig['rifle']; label: string }> = [
-  { value: '308', label: '.308 Win' },
-  { value: '338', label: '.338 Lapua' },
-];
+/**
+ * The rifles by calibre, lightest first, in a grid of compact buttons four to a row. Listed by hand: `Object.keys(RIFLES)` would put the
+ * integer-like ids ('50', '127', '300' ...) in numeric order.
+ */
+const RIFLE_ORDER: readonly MissionConfig['rifle'][] = ['308', '338', '300', '408', '50', '127', '127s'];
+const RIFLE_OPTIONS: ReadonlyArray<{ value: MissionConfig['rifle']; label: string }> = RIFLE_ORDER.map((id) => ({
+  value: id,
+  label: RIFLE_SHORT_NAME[id],
+}));
 
 /** Arrow keys on the wind dial: clockwise or counter-clockwise by one position. */
 const ARROW_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 };
@@ -144,11 +156,13 @@ function segmented<T extends string>(
   noteFor: (value: T) => string,
   /** Lines the note reserves, so a longer note in one state does not make the panel grow. */
   noteLines = 1,
+  /** Many short options: compact buttons that wrap into a grid on a narrow screen (the rifles). */
+  compact = false,
 ): (value: T) => void {
   const field = el(parent, 'div', 'menu-field');
   const captionId = `menu-${name}-label`;
   el(el(field, 'div', 'menu-field-head'), 'span', 'menu-label', label).id = captionId;
-  const group = el(field, 'div', 'menu-seg');
+  const group = el(field, 'div', compact ? 'menu-seg menu-seg-compact' : 'menu-seg');
   group.setAttribute('role', 'radiogroup');
   group.setAttribute('aria-labelledby', captionId);
   const inputs = new Map<T, HTMLInputElement>();
@@ -175,7 +189,8 @@ function segmented<T extends string>(
 
 /**
  * An on/off switch: a native checkbox (Space toggles it, Tab reaches it) drawn as a switch, the caption on the left and
- * the state on the right, a fixed note under it. Returns the function that shows a value.
+ * the state on the right, a note under it. Returns the function that shows a value; given a `locked` text it also locks the
+ * switch (disabled, the text in place of the note) until it is called without one.
  */
 function toggle(
   parent: HTMLElement,
@@ -183,7 +198,7 @@ function toggle(
   label: string,
   note: string,
   onChange: (on: boolean) => void,
-): (on: boolean) => void {
+): (on: boolean, locked?: string | null) => void {
   const field = el(parent, 'div', 'menu-field');
   const row = el(field, 'label', 'menu-toggle');
   el(row, 'span', 'menu-label', label);
@@ -193,10 +208,13 @@ function toggle(
   input.name = name;
   input.addEventListener('change', () => onChange(input.checked));
   el(row, 'span', 'menu-switch').setAttribute('aria-hidden', 'true');
-  el(field, 'p', 'menu-note menu-toggle-note', note);
-  return (on) => {
+  const noteEl = el(field, 'p', 'menu-note menu-toggle-note', note);
+  return (on, locked = null) => {
     input.checked = on;
+    input.disabled = locked !== null;
+    row.classList.toggle('is-locked', locked !== null);
     state.textContent = on ? 'On' : 'Off';
+    noteEl.textContent = locked ?? note;
   };
 }
 
@@ -483,22 +501,33 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   const gear = el(columns, 'section', 'menu-panel');
   el(gear, 'h2', 'menu-panel-title', 'Rifle and aids');
   const art = el(gear, 'figure', 'menu-rifle-art');
-  art.style.aspectRatio = String(rifleArtStyle(RIFLE_ART['308']).aspect);
+  art.style.aspectRatio = String(ART_BOX_ASPECT); // every rifle's art is fitted to this shape: the box never changes height
   const artImg = el(art, 'img', 'menu-rifle-img');
-  artImg.src = `${base}references/rifle-concept.png`;
-  artImg.width = RIFLE_ART_IMAGE.w;
-  artImg.height = RIFLE_ART_IMAGE.h;
   artImg.alt = '';
   artImg.decoding = 'async';
+  // A picture that cannot be loaded leaves the box with its caption only (and the calibre written large in it).
+  artImg.addEventListener('error', () => art.classList.add('is-missing'));
+  artImg.addEventListener('load', () => art.classList.remove('is-missing'));
+  const artCalibre = el(art, 'span', 'menu-rifle-calibre');
+  artCalibre.setAttribute('aria-hidden', 'true');
   const artCaption = el(art, 'figcaption', 'menu-rifle-caption');
-  const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) => apply({ rifle: v }), rifleNote);
+  const syncRifle = segmented(gear, 'rifle', 'Rifle', RIFLE_OPTIONS, (v) => apply({ rifle: v }), rifleNote, 2, true);
   const syncSuppressor = toggle(gear, 'suppressed', 'Suppressor', SUPPRESSOR_NOTE, (on) => apply({ suppressed: on }));
   const syncCamo = toggle(gear, 'camo', 'Ghillie suit', GHILLIE_NOTE, (on) => apply({ camo: on }));
   const syncAssists = toggle(gear, 'assists', 'Aim assists', ASSISTS_NOTE, (on) => apply({ assists: on }));
   syncers.push(
     () => {
-      const style = rifleArtStyle(RIFLE_ART[cfg.rifle]);
+      const { file, crop } = rifleArt(cfg.rifle);
+      const style = crop ? rifleArtStyle(boxCrop(crop)) : WHOLE_ART;
       art.dataset.rifle = cfg.rifle;
+      if (artImg.dataset.file !== file) {
+        art.classList.remove('is-missing');
+        artImg.dataset.file = file;
+        artImg.width = crop ? RIFLE_ART_IMAGE.w : OWN_ART_IMAGE.w;
+        artImg.height = crop ? RIFLE_ART_IMAGE.h : OWN_ART_IMAGE.h;
+        artImg.src = `${base}${file}`;
+      }
+      artCalibre.textContent = RIFLE_SHORT_NAME[cfg.rifle];
       artImg.style.width = `${style.widthPct}%`;
       artImg.style.left = `${style.leftPct}%`;
       artImg.style.top = `${style.topPct}%`;
@@ -506,7 +535,7 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
       art.setAttribute('aria-label', `${rifleTitle(cfg.rifle)}, concept art`);
     },
     () => syncRifle(cfg.rifle),
-    () => syncSuppressor(cfg.suppressed),
+    () => syncSuppressor(cfg.suppressed, RIFLES[cfg.rifle].integralSuppressor ? INTEGRAL_SUPPRESSOR_NOTE : null),
     () => syncCamo(cfg.camo),
     () => syncAssists(cfg.assists),
   );

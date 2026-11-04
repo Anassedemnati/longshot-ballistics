@@ -47,9 +47,15 @@ Bodies are not planks that tip over. A hit soldier goes limp: a Verlet ragdoll o
   - Air density and the speed of sound come from each map's temperature and pressure.
   - Bullet drop, wind drift and time of flight all emerge from the simulation; nothing is faked.
   - Checked against [js-ballistics](https://www.npmjs.com/package/js-ballistics) in the test suite.
-- **Two rifles**
+- **Seven rifles, by calibre** (generic designs, each with its own model, report, bolt time, reload and recoil)
   - .308 Win: G7 BC 0.243 at 790 m/s.
   - .338 Lapua: G7 BC 0.322 at 900 m/s.
+  - .300 Win Mag: G7 BC 0.31 at 869 m/s.
+  - .408: G7 BC 0.47 (estimated) at 869 m/s, a big brake and a long, high scope.
+  - .50 BMG: G7 BC 0.51 at 860 m/s, semi-automatic, 10 rounds.
+  - 12.7x108 mm: G7 BC 0.42 (estimated) at 785 m/s, a heavy bolt action.
+  - 12.7x55 mm subsonic: G7 BC 0.3 (estimated) at 295 m/s, built round its suppressor; its targets stay within 250 m, where the drop still fits the reticle.
+  - The .50, .408 and 12.7x108 punch through vehicle bodies to the engine or the man behind, and any heavy round that goes through one man can down the next.
   - Each has an optional suppressor: no muzzle flash, a quieter report and slower detection.
 - **5-25x scope** with a mil reticle, mouse-wheel zoom and a moving bolt. The picture is sharpened while you look through it, so a man at 600 m stays a man and not a smudge.
   - Sound travels at the speed of sound: at long range you hear the impact well after the shot.
@@ -166,7 +172,7 @@ Run `npm test` and `npm run smoke` before you open a PR.
 
 - **Textures, HDRI skies and 3D models:** [Poly Haven](https://polyhaven.com), CC0. See [`public/assets/CREDITS.md`](public/assets/CREDITS.md).
 - **Sounds:** the Free Firearm Sound Library and freesound.org contributors, all CC0. See [`public/sounds/CREDITS.md`](public/sounds/CREDITS.md).
-- **AI-generated images:** the menu artwork and the rifle reference sheet. Their prompts are stored next to the files.
+- **AI-generated images:** the menu artwork, the rifle reference sheet and the rifle art of the .300, .408, .50 and 12.7x108 (`public/references/rifle-<id>.webp`). Their prompts are stored next to the files. The 12.7x55's art is a render of the game's own model.
 - **Libraries:** [three.js](https://threejs.org), [Vite](https://vite.dev) and [Vitest](https://vitest.dev).
 
 ## License

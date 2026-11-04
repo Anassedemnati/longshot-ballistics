@@ -1,0 +1,7 @@
+{
+  "source": "Rendered from the game's own procedural first-person rifle model (buildRifleModel('127s') in src/player/rifle.ts), no hands, with three.js in headless Chrome",
+  "generated": "2026-11-04",
+  "kind": "render",
+  "prompt": "",
+  "notes": "Orthographic right-side view, muzzle to the right, on a grey studio gradient (#6e7072 to #55575a), 1240x400 to match the other rifle art. The image service declined this one, so it is a render of the in-game model instead."
+}

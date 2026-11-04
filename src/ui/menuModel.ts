@@ -52,11 +52,40 @@ export function themeBlurb(id: ThemeId): string {
   return `${temp} · ${air}`;
 }
 
-/** "G7 BC 0.243 · 790 m/s": the line under the rifle toggle. */
+/** Each rifle's calibre as the menu writes it (its button and its note): short, so a note line fits the panel (about 33 characters). */
+export const RIFLE_SHORT_NAME: Record<MissionConfig['rifle'], string> = {
+  '308': '.308',
+  '338': '.338',
+  '300': '.300 WM',
+  '408': '.408',
+  '50': '.50 BMG',
+  '127': '12.7×108',
+  '127s': '12.7×55',
+};
+
+/** What each rifle is for, as the note under the rifle choice says it. */
+const RIFLE_CLASS: Record<MissionConfig['rifle'], string> = {
+  '308': 'Precision',
+  '338': 'Long-range',
+  '300': 'Long-range',
+  '408': 'Extreme-range',
+  '50': 'Anti-materiel',
+  '127': 'Anti-materiel',
+  '127s': 'Subsonic',
+};
+
+/**
+ * The two lines under the rifle choice: ".50 BMG · G7 BC 0.51 · 860 m/s", then "Anti-materiel · semi · 10 rds" (the subsonic one adds
+ * its 250 m band limit). The first line is the calibre and the ballistics, the second the class and the handling.
+ */
 export function rifleNote(rifle: MissionConfig['rifle']): string {
   const r = RIFLES[rifle];
-  return `G7 BC ${r.bcG7} · ${r.muzzleVelocity} m/s`;
+  const limit = r.maxRangeM < MISSION_LIMITS.rangeMax ? `, ≤ ${r.maxRangeM} m` : '';
+  return `${RIFLE_SHORT_NAME[rifle]} · G7 BC ${r.bcG7} · ${r.muzzleVelocity} m/s\n${RIFLE_CLASS[rifle]}${limit} · ${r.action} · ${r.magazine} rds`;
 }
+
+/** Under the suppressor switch when the rifle is built round its can (the 12.7x55): it cannot come off. */
+export const INTEGRAL_SUPPRESSOR_NOTE = 'Integral: built round its can';
 
 /** The line under the firing position control: what the player sees from each position (spec B.2). Theme-neutral: it reads the same in every theme. */
 const POSITION_NOTE: Record<FiringPosition, string> = {
@@ -89,9 +118,19 @@ export const FIGHT_BACK_NOTE = 'Shoot back. Count: slider above.';
 /** Under the aim assists switch (spec B.5). */
 export const ASSISTS_NOTE = 'Trajectory, aim marker and spotter — training aid';
 
-/** What each rifle is, as the concept art captions it. */
+/** What each rifle is, as the art captions it. */
+const RIFLE_TITLE: Record<MissionConfig['rifle'], string> = {
+  '308': 'Compact precision rifle',
+  '338': 'Long-range precision rifle',
+  '300': 'Magnum precision rifle',
+  '408': 'Extreme long-range rifle',
+  '50': 'Semi-auto anti-materiel',
+  '127': 'Heavy anti-materiel rifle',
+  '127s': 'Suppressed heavy rifle',
+};
+
 export function rifleTitle(rifle: MissionConfig['rifle']): string {
-  return rifle === '308' ? 'Compact precision rifle' : 'Long-range precision rifle';
+  return RIFLE_TITLE[rifle];
 }
 
 /** How many buildings / scenery vehicles a density gives (spec A.4; the layout draws a count in this range). */
@@ -105,9 +144,10 @@ export function densityNote(kind: 'buildings' | 'vehicles', density: Density): s
 }
 
 // --- Rifle concept art ------------------------------------------------------------------------
-// `public/references/rifle-concept.png` shows both rifles side by side (.308 olive on top, .338 sand below it). The
+// `public/references/rifle-concept.png` shows the first two rifles side by side (.308 olive on top, .338 sand below it). The
 // menu cuts one rifle out of it in the browser: the picture sits in an `overflow: hidden` box and is scaled and
-// shifted by percentages, so no second image file is needed.
+// shifted by percentages. Every other rifle has a picture of its own, `public/references/rifle-<id>.webp`, already cropped to
+// the box's 3.1:1, shown whole.
 
 /** Size of the concept art, px. */
 export const RIFLE_ART_IMAGE = { w: 1672, h: 941 } as const;
@@ -124,16 +164,36 @@ export interface ArtCrop {
  * Where each rifle sits in the art: the stock, receiver and scope of each (the long barrels are cut so the rifle
  * fills the box), picked so the other rifle and the picture's captions stay out. Both are 3.1:1.
  */
-export const RIFLE_ART: Record<MissionConfig['rifle'], ArtCrop> = {
+export const RIFLE_ART: Record<'308' | '338', ArtCrop> = {
   '308': { x: 52, y: 0, w: 790, h: 255 },
   '338': { x: 22, y: 248, w: 900, h: 290 },
-  // The heavier calibres have no art of their own yet: they borrow the long rifle's.
-  '300': { x: 52, y: 0, w: 790, h: 255 },
-  '408': { x: 22, y: 248, w: 900, h: 290 },
-  '50': { x: 22, y: 248, w: 900, h: 290 },
-  '127': { x: 22, y: 248, w: 900, h: 290 },
-  '127s': { x: 52, y: 0, w: 790, h: 255 },
 };
+
+/** The art of a rifle: the file (relative to the site's base) and the crop of it to show, or null to show it whole. */
+export function rifleArt(rifle: MissionConfig['rifle']): { file: string; crop: ArtCrop | null } {
+  if (rifle === '308' || rifle === '338') return { file: 'references/rifle-concept.png', crop: RIFLE_ART[rifle] };
+  return { file: `references/rifle-${rifle}.webp`, crop: null };
+}
+
+/**
+ * The art box's shape (width / height): wider than the pictures' 3.1:1 (their middle band is shown), so the panel still fits 1280x720 with
+ * seven rifle buttons in two rows and a two-line note.
+ */
+export const ART_BOX_ASPECT = 3.9;
+/** Size of each rifle's own picture, px (3.1:1). */
+export const OWN_ART_IMAGE = { w: 1240, h: 400 } as const;
+
+/** `crop` narrowed top and bottom (about its middle) to the art box's shape, so the picture still covers the box. */
+export function boxCrop(crop: ArtCrop): ArtCrop {
+  const h = Math.min(crop.h, crop.w / ART_BOX_ASPECT);
+  return { x: crop.x, y: crop.y + (crop.h - h) / 2, w: crop.w, h };
+}
+
+/** The style that shows a rifle's own picture filling the box (its middle band, at the box's shape). */
+export const WHOLE_ART: ArtStyle = (() => {
+  const crop = boxCrop({ x: 0, y: 0, w: OWN_ART_IMAGE.w, h: OWN_ART_IMAGE.h });
+  return { aspect: ART_BOX_ASPECT, widthPct: 100, leftPct: 0, topPct: (-crop.y / crop.h) * 100 };
+})();
 
 /** CSS numbers that make a box of `aspect` (width / height) show only `crop` of the art. Percentages of the box. */
 export interface ArtStyle {
