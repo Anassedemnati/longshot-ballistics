@@ -23,6 +23,8 @@ import type { VehicleTarget } from '../scene/vehicleTarget';
 import { createVegetation, gltfModelLoader, meshGroundOf } from '../scene/vegetation';
 import type { ModelLoader, Vegetation } from '../scene/vegetation';
 import type { MissionConfig } from './config';
+import { routeSamples } from './hvtLayout';
+import type { HvtPlacement } from './hvtLayout';
 import { generateLayout, legacyLayout, soldierAimPoints } from './layout';
 import type { MissionLayout, SniperPlacement, SoldierPlacement, VehicleTargetPlacement } from './layout';
 import { propColliders, vehicleEngineObstacle } from './props';
@@ -63,6 +65,16 @@ export interface Vehicle {
   engineCenter: Vec3;
 }
 
+/** The HVT's party of an `hvt` mission: the officer and his bodyguards (bodies like the soldiers', not in `soldiers`), and the jeep he can drive off in. */
+export interface HvtWorld {
+  placement: HvtPlacement;
+  officer: Soldier;
+  guards: Soldier[];
+  /** The jeep's mesh (left movable) and its colliders (moved with it, edited in place). */
+  vehicle: THREE.Object3D | null;
+  vehicleColliders: Obstacle[];
+}
+
 /** What the render quality level changes in the scene itself (see scene/quality.ts); the defaults are the full scene. */
 export interface WorldQuality {
   shadowMapSize?: number;
@@ -98,7 +110,9 @@ export interface World extends MissionPlan {
   soldiers: Map<string, Soldier>;
   vehicles: Map<string, Vehicle>;
   snipers: Map<string, EnemySniper>;
-  /** Soldiers + vehicle targets + enemy snipers. */
+  /** The HVT and his bodyguards (an `hvt` mission), else null. */
+  hvt: HvtWorld | null;
+  /** Soldiers + vehicle targets + enemy snipers (+ the HVT and his bodyguards). */
   targetsTotal: number;
 }
 
@@ -138,7 +152,9 @@ export function buildWorld(
   scene.add(createTerrainMesh(field, opts.maxAnisotropy, sunDirection));
   scene.add(createRocks(field));
   // Pebbles (and grass in the valley): visual only, kept off the lanes, the props and every target, enemy snipers included.
-  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, layout.snipers, quality.detailScale ?? 1).group);
+  // The HVT's walk is kept clear like a target's lane (a sample every few metres along it).
+  const walk = layout.hvt ? routeSamples(layout.hvt.route) : [];
+  scene.add(createGroundDetail(field, layout, config.seed, opts.maxAnisotropy, [...layout.snipers, ...walk], quality.detailScale ?? 1).group);
   // Trees, boulders, grass and the firing nest stand on the terrain mesh's surface; both keep clear of every line of sight.
   const ground = meshGroundOf(field);
   const loadModel = opts.loadModel ?? gltfModelLoader(); // one loader, so a model both use (the boulder) is fetched once
@@ -154,12 +170,19 @@ export function buildWorld(
   scene.add(blood.group);
 
   const obstacles: Obstacle[] = [];
+  let hvtVehicle: THREE.Object3D | null = null;
+  let hvtVehicleColliders: Obstacle[] = [];
   for (const p of layout.props) {
     const groundY = field.height(p.x, p.z);
     const mesh = createPropMesh(p, groundY, config.theme);
-    freezeStatic(mesh);
+    const colliders = propColliders(p, groundY);
+    // The HVT's jeep may drive off with him: it is left movable.
+    if (layout.hvt && p.id === layout.hvt.vehicleId) {
+      hvtVehicle = mesh;
+      hvtVehicleColliders = colliders;
+    } else freezeStatic(mesh);
     scene.add(mesh);
-    obstacles.push(...propColliders(p, groundY));
+    obstacles.push(...colliders);
   }
 
   const liveTargets: HitTarget[] = [];
@@ -202,9 +225,26 @@ export function buildWorld(
     snipers.set(p.id, { placement: p, sniper, head: aim.head, upperTorso: aim.upperTorso, live: true });
     liveTargets.push(sniper.hitTarget);
   }
-  const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length;
+  // The HVT and his bodyguards: the officer at the start of his walk (the door), the guards round him; mission/hvtDirector.ts moves them from the first frame.
+  let hvt: HvtWorld | null = null;
+  if (layout.hvt) {
+    const h = layout.hvt;
+    const body = (id: string, x: number, z: number, variant: 'officer' | 'guard'): Soldier => {
+      const placement: SoldierPlacement = { id, x, z, yaw: Math.atan2(-x, -z), range: Math.hypot(x, z), behindCover: false };
+      const dummy = createTargetDummy({ x, y: field.height(x, z), z }, placement.yaw, id, { autoReset: false, ground: field.height, variant });
+      scene.add(dummy.group);
+      liveTargets.push(dummy.hitTarget);
+      const aim = soldierAimPoints(placement, field);
+      return { placement, dummy, head: aim.head, upperTorso: aim.upperTorso, lowerTorso: aim.lowerTorso, live: true };
+    };
+    const start = h.route[0];
+    const officer = body('hvt', start.x, start.z, 'officer');
+    const guards = Array.from({ length: h.guards }, (_, i) => body(`guard-${i}`, start.x + 2 * Math.sin(i * 1.7), start.z + 2 * Math.cos(i * 1.7), 'guard'));
+    hvt = { placement: h, officer, guards, vehicle: hvtVehicle, vehicleColliders: hvtVehicleColliders };
+  }
+  const targetsTotal = layout.soldiers.length + layout.vehicleTargets.length + layout.snipers.length + (hvt ? 1 + hvt.guards.length : 0);
 
-  return { ...plan, scene, shadow, dust, sparks, blood, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, targetsTotal };
+  return { ...plan, scene, shadow, dust, sparks, blood, vegetation, nest, obstacles, liveTargets, soldiers, vehicles, snipers, hvt, targetsTotal };
 }
 
 /** The point to start looking at: the nearest target's chest (a soldier) or engine (a vehicle); null with no targets. */

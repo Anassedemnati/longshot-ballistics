@@ -2,6 +2,7 @@ import type { Vec3 } from '../ballistics/types';
 import type { Awareness } from '../game/encounter';
 import type { SquadState } from '../game/squad';
 import type { MissionStats } from './stats';
+import type { HvtState } from './hvtDirector';
 import type { MemberState } from './squadDirector';
 import type { EnemySniper, Soldier, Vehicle } from './world';
 
@@ -29,6 +30,11 @@ export interface GameDebugState {
   snipersLeft: number;
   /** The soldiers that fight back: the squad's state and knowledge (0..1) of where the player lies, and what each soldier is doing; null when the soldiers stand still. */
   squad: { state: SquadState; knowledge: number; soldiers: MemberState[] } | null;
+  /**
+   * The HVT of an `hvt` mission (null otherwise): his status, where his feet are, his bodyguards still up, his speed, the seconds until he is
+   * gone, his way out, his head and upper torso, and `exposed`: the line from the shooter's eye to his head is clear of his guards and of cover.
+   */
+  hvt: (HvtState & { exposed: boolean }) | null;
   /** Draw calls and triangles of the last rendered frame. */
   render: { calls: number; triangles: number };
 }
@@ -57,6 +63,13 @@ export interface GameDebugHook {
   setHealth?(points: number): void;
   /** Set how much of the player's position the squad knows (0..1), so a check can bring on their aimed fire and mortars at once. No effect when the soldiers stand still. Only with `?debug=1`. */
   setSquadKnowledge?(value: number): void;
+  /** Point the view at the HVT's head or chest (the crosshair, no hold-over and no lead). Does nothing without an HVT. */
+  aimAtHvt?(part?: 'head' | 'chest'): void;
+  /**
+   * Let the world run without pointer lock (a headless check never locks it, so the enemy and the HVT would otherwise stand still). Only
+   * with `?debug=1`.
+   */
+  keepRunning?(on: boolean): void;
 }
 
 declare global {
@@ -84,6 +97,8 @@ export interface DebugSources {
   } | null;
   /** The squad of soldiers that fight back; null when the soldiers stand still. */
   squad: { state(): SquadState; knowledge(): number; soldiers(): MemberState[] } | null;
+  /** The HVT (an `hvt` mission), else null. */
+  hvt: (() => HvtState & { exposed: boolean }) | null;
   render(): { calls: number; triangles: number };
 }
 
@@ -124,6 +139,7 @@ export function installDebugHook(actions: Omit<GameDebugHook, 'state'>, sources:
       awareness: fight ? fight.awareness() : 'unaware',
       snipersLeft: fight ? fight.snipersLeft() : 0,
       squad: sources.squad && { state: sources.squad.state(), knowledge: sources.squad.knowledge(), soldiers: sources.squad.soldiers() },
+      hvt: sources.hvt ? sources.hvt() : null,
       render: sources.render(),
     }),
   };

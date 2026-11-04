@@ -60,7 +60,7 @@ interface Look {
 const OLIVE = 0x4f5236;
 const LEATHER = 0x4a2e1a;
 /** The beret: a saturated red that survives the haze of 800 m (a darker maroon goes brown at range). */
-export const OFFICER_BERET = 0xb3161a;
+export const OFFICER_BERET = 0xc4141b;
 const BLACK = 0x232426;
 
 const LOOKS: Record<SoldierVariant, Look> = {
@@ -268,7 +268,7 @@ function head(look: Look): ModelPart[] {
     // The beret: a full, soft disc of felt pulled down over his right ear and puffed up to his left, wider than the head so its colour
     // reads as a blob at range; a black leather band round the brow and a gold badge over the left eye.
     parts.push(
-      e([0.03, 1.745, -0.006], [0.14, 0.05, 0.135], 'cloth', look.hat, [0.05, 0, 0.22], 1),
+      e([0.03, 1.748, -0.006], [0.152, 0.056, 0.146], 'cloth', look.hat, [0.05, 0, 0.22], 1),
       { kind: 'lathe', profile: [[0.104, -0.012], [0.108, -0.006], [0.108, 0.006], [0.104, 0.012]], c: [0, 1.712, 0.004], scale: [1, 1, 1.1], rot: [-0.08, 0, 0.12], surface: 'gear', color: 0x1a1412, sides: 16 },
       e([0.045, 1.73, 0.11], [0.018, 0.022, 0.008], 'metal', 0xc79a3a),
     );

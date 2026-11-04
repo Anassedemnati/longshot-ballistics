@@ -3,6 +3,7 @@ import { SNOW_LINES } from '../scene/snowLine';
 import { sectorDistance } from '../scene/terrainField';
 import type { TerrainField } from '../scene/terrainField';
 import type { FiringPosition } from './config';
+import { routeSamples } from './hvtLayout';
 import type { MissionLayout } from './layout';
 import { BOULDER_UNIT, GRASS_UNIT, LOG_UNIT, SNAG_UNIT } from './models';
 import { NEST_AREA_RADIUS } from './nestPlan';
@@ -261,6 +262,13 @@ class Placer {
       this.discs.push({ x: s.x, z: s.z, r: TARGET_MARGIN });
     }
     for (const p of layout.props) this.discs.push({ x: p.x, z: p.z, r: propFootprintRadius(p.kind) + PROP_MARGIN });
+    // The HVT's walk: no tree or bush in the way of the shooter's view of it, nor on it.
+    if (layout.hvt) {
+      for (const p of routeSamples(layout.hvt.route)) {
+        this.targets.push(p);
+        this.discs.push({ x: p.x, z: p.z, r: TARGET_MARGIN });
+      }
+    }
   }
 
   private key(cx: number, cz: number): number {

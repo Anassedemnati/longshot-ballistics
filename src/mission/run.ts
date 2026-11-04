@@ -21,7 +21,10 @@ import type { ImpactEvent } from '../game/bullets';
 import { MuzzleFlashes } from '../fx/muzzleFlash';
 import { Encounter } from '../game/encounter';
 import { CueQueue, HEARING, crackDelay, crackHeard, reportArrival } from '../game/hearing';
+import { HVT } from '../game/hvt';
+import type { AlarmCue } from '../game/hvt';
 import type { Cue } from '../game/hearing';
+import { segmentBox, segmentSphere } from '../game/hit';
 import type { HitTarget, HitZone } from '../game/hit';
 import { continuedVelocity, exitPoint } from '../game/penetration';
 import { rangeUnderCrosshair } from '../game/rangefinder';
@@ -51,11 +54,12 @@ import { windVector } from './config';
 import type { MissionConfig } from './config';
 import { CoverMap } from './coverSpots';
 import { installDebugHook } from './debugHook';
+import { HvtDirector, objectiveText } from './hvtDirector';
 import { applyImpact } from './impact';
 import { settledWithin } from './preload';
 import { createRng } from './random';
 import { SquadDirector } from './squadDirector';
-import { isComplete, markAssistsUsed, newStats, recordFailure, recordShot, startClock } from './stats';
+import { isComplete, markAssistsUsed, newStats, recordFailure, recordGuardDown, recordHvtDown, recordShot, startClock } from './stats';
 import { themeAtmosphere } from './themes';
 import { buildWorld, nearestAimPoint, planMission } from './world';
 
@@ -73,6 +77,8 @@ const RANGEFINDER_INTERVAL_S = 0.1;
 const RESULTS_DELAY_S = 1.5;
 /** Pause after the player is killed before "Mission failed" appears, s of game time. */
 const FAILED_DELAY_S = 1.2;
+/** Pause after the HVT gets away before "Mission failed" appears, s of game time (long enough to watch the jeep pull away). */
+const ESCAPE_RESULTS_DELAY_S = 4;
 
 /**
  * Resolve once the browser has had a chance to paint what is in the DOM now: after the next animation
@@ -156,7 +162,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // Who hears the player's shots (game/hearing.ts): the enemy snipers, the soldiers that fight back, and each as a GROUP (the first of them
   // to hear a cue tells the rest). One table of live points for the whole mission, in a fixed order (a dead listener stays in it and is
   // skipped): the bullets measure their closest pass by each, for the crack.
-  type Listeners = 'snipers' | 'squad';
+  type Listeners = 'snipers' | 'squad' | 'hvt';
   const listenerPoints: Vec3[] = [];
   const listenerGroup: Listeners[] = [];
   const listenerAlive: Array<() => boolean> = [];
@@ -166,7 +172,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   /** Game time each bullet in flight was fired at, s (a bullet that came out of a body keeps its own's); and the groups its crack has reached (bit per group). */
   const firedAt = new Map<number, number>();
   const cracked = new Map<number, number>();
-  const GROUP_BIT: Record<Listeners, number> = { snipers: 1, squad: 2 };
+  const GROUP_BIT: Record<Listeners, number> = { snipers: 1, squad: 2, hvt: 4 };
 
   const bullets = new BulletSystem({
     atmo,
@@ -180,7 +186,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   });
   const weapon = new Weapon(rifle.magazine);
   // The mission clock is stopped until the player's first pointer lock or first shot (whichever comes first).
-  let stats = newStats(targetsTotal);
+  let stats = newStats(targetsTotal, null, world.hvt ? { guards: world.hvt.guards.length } : undefined);
   /** Timestamp of the frame being processed, ms (impacts are stamped with it). */
   let frameNowMs = performance.now();
   let resultsShown = false;
@@ -215,6 +221,22 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   if (post.composer) rifleModel.lightFrom(scene, renderer.toneMappingExposure, post.bloom !== null);
   prep.remove(); // the canvas is in; the rest of the build runs before the next paint
 
+  /** `?debug=1` only: the world runs without pointer lock (see the debug hook's `keepRunning`). */
+  let debugLive = false;
+
+  /** The lines from the eye to the HVT's head and chest are clear of his guards' bodies and of every collider (the debug hook's `exposed`). */
+  function hvtExposed(): boolean {
+    if (!hvt || !world.hvt || hvt.escaped) return false;
+    for (const p of [hvt.officerSoldier.head, hvt.officerSoldier.upperTorso]) {
+      for (const g of world.hvt.guards) {
+        if (g.dummy.down) continue;
+        for (const z of g.dummy.hitTarget.zones) if (segmentSphere(shooter, p, z.center, z.radius + 0.05) !== null) return false;
+      }
+      for (const o of obstacles) if (segmentBox(shooter, p, o.box) !== null) return false;
+    }
+    return true;
+  }
+
   /** Turn the view at a world point (also used by the debug hook). */
   function lookAtPoint(x: number, y: number, z: number): void {
     const dx = x - shooter.x;
@@ -227,7 +249,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   }
 
   // Start looking at the nearest target: a soldier's chest, a vehicle's engine.
-  const firstLook = nearestAimPoint(world);
+  const firstLook = world.hvt ? world.hvt.officer.upperTorso : nearestAimPoint(world);
   if (firstLook) lookAtPoint(firstLook.x, firstLook.y, firstLook.z);
   view.look(input.yaw, input.pitch);
 
@@ -239,7 +261,12 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // The hint lists C (cover) only when there is something to hide from (snipers, or soldiers that shoot back), and T / A / P only when the assists are on.
   const hasSnipers = !legacy && snipers.size > 0;
   const squadFights = !legacy && config.soldiersFightBack && soldiers.size > 0;
-  const hud = new Hud(document.body, config, targetsTotal, menuHref, { cover: hasSnipers || squadFights, assists: config.assists, fullscreen: fullscreenAvailable() });
+  const hud = new Hud(document.body, config, targetsTotal, menuHref, {
+    cover: hasSnipers || squadFights,
+    assists: config.assists,
+    fullscreen: fullscreenAvailable(),
+    objective: world.hvt !== null,
+  });
   hud.setRounds(weapon.ammo, weapon.magazine, false);
   hud.setHintVisible(true);
 
@@ -282,10 +309,12 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
           squad: squadFights ? { state: () => squad.state, alive: () => director?.alive ?? 0 } : undefined,
         })
       : null;
-  if (squadFights) {
+  // The soldiers' cover map: their cover spots, and the routes round the props both they and the HVT's party walk.
+  const coverMap = squadFights || world.hvt ? new CoverMap(plan.layout, field) : null;
+  if (squadFights && coverMap) {
     director = new SquadDirector({
       soldiers,
-      map: new CoverMap(plan.layout, field),
+      map: coverMap,
       field,
       shooter,
       squad,
@@ -304,7 +333,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     });
   }
 
-  // The listener table: every sniper's head, every soldier's upper torso (the director moves those points in place), when they fight.
+  // The HVT and his bodyguards (an `hvt` mission): their own brain and bodies (mission/hvtDirector.ts).
+  const hvt = world.hvt && coverMap ? new HvtDirector({ world: world.hvt, field, map: coverMap, seed: config.seed }) : null;
+  /** What the party learns from a cue: the shooter's direction only from a report it could place. */
+  const cueFor = (directional: boolean): AlarmCue => ({ directional, shooterX: shooter.x, shooterZ: shooter.z });
+
+  // The listener table: every sniper's head, every soldier's upper torso (the director moves those points in place), when they fight;
+  // the HVT's and each bodyguard's head.
   if (combat && snipers.size > 0) {
     for (const k of snipers.values()) {
       listenerPoints.push(k.head);
@@ -317,6 +352,13 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       listenerPoints.push(s.upperTorso);
       listenerGroup.push('squad');
       listenerAlive.push(() => !s.dummy.down);
+    }
+  }
+  if (hvt) {
+    for (const l of hvt.listeners()) {
+      listenerPoints.push(l.point);
+      listenerGroup.push('hvt');
+      listenerAlive.push(l.alive);
     }
   }
 
@@ -332,7 +374,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
 
   /** The player's shot: its report is on its way to every group, arriving when the sound reaches the nearest of them (if it is heard at all). */
   function scheduleReports(): void {
-    for (const group of ['snipers', 'squad'] as const) {
+    for (const group of ['snipers', 'squad', 'hvt'] as const) {
       const arrival = reportArrival(nearestListener(group), atmo.speedOfSound, config.suppressed);
       if (arrival) cues.schedule({ kind: 'report', group, at: gameTime + arrival.delayS, directional: arrival.directional, suppressed: config.suppressed });
     }
@@ -356,7 +398,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   /** A cue has reached its group: the report gives the existing amounts of detection and knowledge; a crack only alarms. */
   function hear(cue: Cue<Listeners>): void {
     if (missionDone() || stats.failed) return;
-    if (cue.group === 'snipers') {
+    if (cue.group === 'hvt') {
+      hvt?.alarm(cueFor(cue.directional));
+    } else if (cue.group === 'snipers') {
       if (cue.kind === 'report') combat?.onShot();
       else combat?.onCrack();
     } else if (director) {
@@ -369,6 +413,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
   // sniper's upper torso, a vehicle's engine.
   const assistTargets = (): AimTarget[] => {
     const list: AimTarget[] = [];
+    // The HVT first: in an `hvt` mission he is the one that matters (the spotter reads him out before anyone else at the same angle).
+    if (hvt && !hvt.officerSoldier.dummy.down && !hvt.escaped) list.push({ id: 'hvt', point: hvt.officerSoldier.upperTorso });
+    if (world.hvt) for (const g of world.hvt.guards) if (!g.dummy.down) list.push({ id: g.placement.id, point: g.upperTorso });
     for (const s of soldiers.values()) if (!s.dummy.down) list.push({ id: s.placement.id, point: s.upperTorso });
     for (const v of vehicles.values()) if (!v.target.disabled) list.push({ id: v.placement.id, point: v.engineCenter });
     for (const k of snipers.values()) if (!k.sniper.down) list.push({ id: k.placement.id, point: k.upperTorso });
@@ -504,6 +551,9 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
       speedOfSound: atmo.speedOfSound,
       nowMs: frameNowMs,
       target: (id) => {
+        if (hvt && id === 'hvt') return { kind: 'hvt', down: hvt.officerSoldier.dummy.down, wounded: hvt.status === 'wounded' };
+        const guard = hvt ? hvt.guardIndex(id) : -1;
+        if (guard >= 0 && world.hvt) return { kind: 'soldier', down: world.hvt.guards[guard].dummy.down };
         const soldier = soldiers.get(id);
         if (soldier) return { kind: 'soldier', down: soldier.dummy.down };
         const vehicle = vehicles.get(id);
@@ -519,11 +569,28 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     const killedSniper = result.killedTargetId !== null && snipers.has(result.killedTargetId);
     if (!killedSniper) combat?.onBulletEnd(event.closestWatchM);
 
-    if (result.killedTargetId !== null) {
+    const hit = event.kind === 'target' && event.velocity ? { point: event.point, velocity: event.velocity, zone: event.zone } : undefined;
+    // The HVT's party sees what happens round them: a bullet that strikes close by, a man going down near the officer.
+    if (hvt && !hvt.party.alarmed && event.kind !== 'expired' && hvt.nearest(event.point) <= HEARING.impactSeenM) hvt.alarm(cueFor(false));
+    if (hvt && result.woundedTargetId === 'hvt') {
+      penetrate(event, hvt.officerSoldier.dummy.hitTarget.zones);
+      hvt.wound(cueFor(false));
+    }
+    if (hvt && result.killedTargetId !== null && (result.killedTargetId === 'hvt' || hvt.guardIndex(result.killedTargetId) >= 0)) {
+      const body = result.killedTargetId === 'hvt' ? hvt.officerSoldier : world.hvt?.guards[hvt.guardIndex(result.killedTargetId)];
+      if (body) {
+        penetrate(event, body.dummy.hitTarget.zones);
+        body.dummy.knockDown(hit);
+        body.live = false;
+        removeLive(body.dummy.hitTarget);
+        if (result.killedTargetId === 'hvt') stats = recordHvtDown(stats, event.kind === 'target' ? distance(event.point, shooter) : 0, frameNowMs);
+        else stats = recordGuardDown(stats);
+        hvt.killed(result.killedTargetId, cueFor(false));
+      }
+    } else if (result.killedTargetId !== null) {
       const soldier = soldiers.get(result.killedTargetId);
       const vehicle = vehicles.get(result.killedTargetId);
       const sniper = snipers.get(result.killedTargetId);
-      const hit = event.kind === 'target' && event.velocity ? { point: event.point, velocity: event.velocity, zone: event.zone } : undefined;
       if (sniper) {
         penetrate(event, sniper.sniper.hitTarget.zones);
         sniper.sniper.knockDown(hit);
@@ -536,6 +603,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
         soldier.live = false;
         removeLive(soldier.dummy.hitTarget);
         director?.onSoldierKilled(soldier.placement.id);
+        // One of his soldiers going down within sight of the officer raises the alarm.
+        if (hvt && hvt.nearest(soldier.upperTorso) <= HVT.sightM) hvt.alarm(cueFor(false));
       } else if (vehicle) {
         vehicle.target.disable();
         removeLive(vehicle.target.hitTarget);
@@ -621,8 +690,16 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
               setSquadKnowledge: (value: number) => {
                 if (director) squad.setKnowledge(value);
               },
+              keepRunning: (on: boolean) => {
+                debugLive = on === true;
+              },
             }
           : {}),
+        aimAtHvt: (part: 'head' | 'chest' = 'head') => {
+          if (!hvt) return;
+          const p = part === 'chest' ? hvt.officerSoldier.upperTorso : hvt.officerSoldier.head;
+          lookAtPoint(p.x, p.y, p.z);
+        },
       },
       {
         stats: () => stats,
@@ -640,6 +717,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
           snipersLeft: () => combat.snipersLeft,
         },
         squad: director && { state: () => squad.state, knowledge: () => squad.knowledge, soldiers: () => director?.states() ?? [] },
+        hvt: hvt && (() => ({ ...hvt.state(), exposed: hvtExposed() })),
         render: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
       },
     );
@@ -723,8 +801,22 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     // The cues that have reached their listeners by now (after this frame's impacts, which may have taken one of them out).
     cues.deliver(gameTime, hear);
     // The fight with the snipers and the soldiers stands still while the pointer is free and once the mission is over.
-    const paused = !input.locked || resultsShown || missionDone() || stats.failed;
+    const paused = (!input.locked && !debugLive) || resultsShown || missionDone() || stats.failed;
     if (director && !paused) director.update(dt, combat !== null && combat.encounter.awareness === 'firing' && combat.snipersLeft > 0);
+    if (hvt) {
+      if (!paused) hvt.update(dt);
+      // He got away: his hit target leaves the list, and the mission is lost.
+      if (hvt.escaped && hvt.officerSoldier.live) {
+        hvt.officerSoldier.live = false;
+        removeLive(hvt.officerSoldier.dummy.hitTarget);
+        if (!stats.failed && !missionDone()) {
+          stats = recordFailure(stats, frameNowMs, 'escaped');
+          hud.setResult('The HVT escaped');
+        }
+      }
+      const status = hvt.status;
+      hud.setObjective(objectiveText(status, hvt.party.escapeIn), status === 'fleeing' || status === 'wounded' || status === 'alarmed' || status === 'escaped');
+    }
     if (combat && combat.update(dt, paused) && !stats.failed) {
       stats = recordFailure(stats, frameNowMs);
     }
@@ -760,7 +852,8 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     if (stats.failed && !resultsShown) {
       failedTimer += dt;
-      if (failedTimer >= FAILED_DELAY_S) showResultsScreen();
+      // An escape gives the jeep a few seconds to be seen driving off.
+      if (failedTimer >= (stats.failReason === 'escaped' ? ESCAPE_RESULTS_DELAY_S : FAILED_DELAY_S)) showResultsScreen();
     }
 
     // The rifle is in front of the player's face: not through the scope, and not while he is ducked behind cover.

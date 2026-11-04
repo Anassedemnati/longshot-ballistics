@@ -203,3 +203,33 @@ describe('applyImpact: the sound delay and distance', () => {
     expect(near.sound?.delayS).toBeCloseTo(0.1, 9);
   });
 });
+
+describe('applyImpact: the HVT is hit', () => {
+  const hvt = (wounded: boolean, down = false): ImpactState =>
+    state([], { stats: newStats(5, null, { guards: 3 }), target: (id) => (id === 'hvt' ? { kind: 'hvt', down, wounded } : undefined) });
+
+  it('a head or torso hit kills him', () => {
+    for (const zone of ['head', 'upperTorso', 'lowerTorso'] as const) {
+      const r = applyImpact(onTarget('hvt', zone), hvt(false));
+      expect(r.killedTargetId).toBe('hvt');
+      expect(r.woundedTargetId ?? null).toBeNull();
+      expect(r.hud.result).toMatch(/^HVT DOWN/);
+    }
+  });
+
+  it('a limb hit wounds him the first time, and kills him once he is wounded', () => {
+    const first = applyImpact(onTarget('hvt', 'limbs'), hvt(false));
+    expect(first.killedTargetId).toBeNull();
+    expect(first.woundedTargetId).toBe('hvt');
+    expect(first.hud.result).toMatch(/^HVT WOUNDED – Limb/);
+    expect(first.stats.hits).toBe(1);
+    const second = applyImpact(onTarget('hvt', 'limbs'), hvt(true));
+    expect(second.killedTargetId).toBe('hvt');
+  });
+
+  it('a body already down is neither killed nor wounded again', () => {
+    const r = applyImpact(onTarget('hvt', 'limbs'), hvt(false, true));
+    expect(r.killedTargetId).toBeNull();
+    expect(r.woundedTargetId ?? null).toBeNull();
+  });
+});

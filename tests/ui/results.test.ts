@@ -126,3 +126,18 @@ describe('the failed variant', () => {
     expect(failedSummary(recordFailure(newStats(1, 0), 5000))).toBe('0 of 1 target down');
   });
 });
+
+describe('the results of an HVT mission', () => {
+  it('says "HVT eliminated" with the range and the bodyguards, or that he escaped', async () => {
+    const { newStats: fresh, recordHvtDown, recordGuardDown, recordFailure: fail } = await import('../../src/mission/stats');
+    const { resultTitle: title, resultRows: rows, failedSummary: summary } = await import('../../src/ui/results');
+    const won = recordHvtDown(recordGuardDown(fresh(6, 0, { guards: 3 })), 734.6, 60_000);
+    expect(title(won)).toBe('HVT eliminated');
+    expect(rows(won)[0]).toEqual(['HVT', 'Eliminated at 735 m']);
+    expect(rows(won)).toContainEqual(['Bodyguards killed', '1 of 3']);
+    const lost = fail(fresh(6, 0, { guards: 3 }), 30_000, 'escaped');
+    expect(title(lost)).toBe('Mission failed');
+    expect(summary(lost)).toBe('The HVT escaped');
+    expect(rows(lost)[0]).toEqual(['HVT', 'Escaped']);
+  });
+});

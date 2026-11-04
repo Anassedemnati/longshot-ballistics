@@ -20,9 +20,12 @@ const ZONE_LABEL: Record<ZoneName, string> = {
 
 /** What the mission knows about a target id: what it is and whether it is already out of play. */
 export interface ImpactTargetInfo {
-  kind: 'soldier' | 'vehicle' | 'sniper';
+  /** `hvt`: the high-value target, the officer of an `hvt` mission (his bodyguards are soldiers). */
+  kind: 'soldier' | 'vehicle' | 'sniper' | 'hvt';
   /** A soldier or sniper already knocked down, a vehicle already disabled (two bullets in flight can reach the same target). */
   down: boolean;
+  /** The HVT is already wounded in a limb (a second hit anywhere kills him). */
+  wounded?: boolean;
 }
 
 /** Everything `applyImpact` reads. */
@@ -45,6 +48,8 @@ export interface ImpactResult {
   stats: MissionStats;
   /** The soldier or sniper to knock down or the vehicle to disable; null when this impact takes nothing out. */
   killedTargetId: string | null;
+  /** The HVT hit in a limb for the first time: wounded, not down (he limps on at half speed). */
+  woundedTargetId?: string | null;
   hud: {
     /** The result line, or null to leave the last one. */
     result: string | null;
@@ -75,7 +80,15 @@ export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResul
     let result: string | null = null;
     let fx: ImpactResult['fx'] = null;
     let sound: ImpactResult['sound'] = null;
-    if (info?.kind === 'soldier' || info?.kind === 'sniper') {
+    let wounded: string | null = null;
+    if (info?.kind === 'hvt') {
+      // A head or torso hit kills him; a limb wounds him the first time, and a second hit anywhere kills him.
+      const lethal = event.zone !== 'limbs' || info.wounded === true;
+      killed = lethal && !info.down;
+      if (!lethal && !info.down) wounded = event.targetId;
+      sound = { kind: 'hit', delayS, distanceM };
+      result = `${lethal ? 'HVT DOWN' : 'HVT WOUNDED'} – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
+    } else if (info?.kind === 'soldier' || info?.kind === 'sniper') {
       killed = !info.down;
       sound = { kind: 'hit', delayS, distanceM };
       result = `${info.kind === 'sniper' ? 'SNIPER DOWN' : 'HIT'} – ${ZONE_LABEL[event.zone]} – ${event.time.toFixed(2)} s`;
@@ -88,6 +101,7 @@ export function applyImpact(event: ImpactEvent, state: ImpactState): ImpactResul
     return {
       stats: recordImpact(state.stats, event, killed, distanceM, state.nowMs),
       killedTargetId: killed ? event.targetId : null,
+      ...(wounded !== null ? { woundedTargetId: wounded } : {}),
       hud: { result, refreshTargets: true },
       fx,
       sound,

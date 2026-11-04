@@ -277,3 +277,28 @@ describe('a failed mission', () => {
     expect(elapsedMs(recordFailure(newStats(2), 8000))).toBe(0);
   });
 });
+
+describe('an HVT mission', () => {
+  it('is complete when the HVT is down, whatever else stands, and its clock stops then', async () => {
+    const { newStats: fresh, isComplete: done, recordHvtDown, recordGuardDown, recordFailure: fail } = await import('../../src/mission/stats');
+    let s = fresh(8, 1000, { guards: 3 });
+    expect(s.objective).toBe('hvt');
+    expect(done(s)).toBe(false);
+    s = recordGuardDown(s);
+    expect(s.guardsDown).toBe(1);
+    s = recordHvtDown(s, 712.4, 9000);
+    expect(done(s)).toBe(true);
+    expect(s.endMs).toBe(9000);
+    expect(s.hvtRangeM).toBeCloseTo(712.4, 9);
+    expect(fail(s, 9500, 'escaped')).toBe(s); // too late to fail
+  });
+
+  it('fails when he escapes, with the reason', async () => {
+    const { newStats: fresh, recordFailure: fail, isComplete: done } = await import('../../src/mission/stats');
+    const s = fail(fresh(8, 1000, { guards: 2 }), 5000, 'escaped');
+    expect(s.failed).toBe(true);
+    expect(s.failReason).toBe('escaped');
+    expect(done(s)).toBe(false);
+    expect(fail(fresh(3, 0), 10)).not.toHaveProperty('failReason'); // a clear-the-area failure is as it always was
+  });
+});

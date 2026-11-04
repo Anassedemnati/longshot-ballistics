@@ -44,6 +44,11 @@ export interface HintKeys {
   assists?: boolean;
   /** Default true: the F key goes fullscreen (pass false where the browser has no fullscreen). */
   fullscreen?: boolean;
+  /**
+   * An `hvt` mission: the panel opens with the objective line ("Eliminate the HVT: ...", then "HVT is running! ..." after the alarm) in place
+   * of the targets count (the other targets need not go down).
+   */
+  objective?: boolean;
 }
 
 /** The key hint, on one line. */
@@ -65,6 +70,7 @@ export function hintText(keys: HintKeys = {}): string {
  */
 export class Hud {
   private readonly targets: HTMLElement;
+  private readonly objective: HTMLElement | null;
   private readonly range: HTMLElement;
   private readonly magnification: HTMLElement;
   private readonly rounds: HTMLElement;
@@ -82,7 +88,9 @@ export class Hud {
   ) {
     const root = el(parent, 'div', 'hud');
     const panel = el(root, 'div', 'hud-panel');
+    this.objective = keys.objective ? el(panel, 'div', 'hud-line hud-objective') : null;
     this.targets = el(panel, 'div', 'hud-line', targetsText(targetsTotal, targetsTotal));
+    this.targets.hidden = keys.objective === true;
     this.range = el(panel, 'div', 'hud-line', rangeText(null));
 
     const windLine = el(panel, 'div', 'hud-line');
@@ -114,6 +122,18 @@ export class Hud {
 
   setTargets(left: number, total: number): void {
     this.targets.textContent = targetsText(left, total);
+  }
+
+  /** The objective line of an `hvt` mission (`alert`: in red, the HVT is getting away). Cheap to call every frame: the DOM is only touched on change. */
+  setObjective(text: string, alert = false): void {
+    if (!this.objective) return;
+    if (this.objective.textContent !== text) this.objective.textContent = text;
+    this.objective.classList.toggle('is-alert', alert);
+  }
+
+  /** The objective line's text (empty without one). */
+  get objectiveText(): string {
+    return this.objective?.textContent ?? '';
   }
 
   /** Rangefinder reading; cheap to call often: the DOM is only touched on change. */

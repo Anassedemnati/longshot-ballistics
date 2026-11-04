@@ -25,17 +25,25 @@ export function resultRows(s: MissionStats): Array<[string, string]> {
     ['Longest hit', s.longestHitM > 0 ? `${Math.round(s.longestHitM)} m` : '—'],
     ['Mission time', missionTimeText(elapsedMs(s))],
   ];
+  if (s.objective === 'hvt') {
+    // The HVT's own lines first: the range he was taken at, and his bodyguards.
+    rows.unshift(['HVT', s.hvtDown ? `Eliminated at ${Math.round(s.hvtRangeM ?? 0)} m` : s.failReason === 'escaped' ? 'Escaped' : 'Alive']);
+    rows.push(['Bodyguards killed', `${s.guardsDown ?? 0} of ${s.guardsTotal ?? 0}`]);
+  }
   if (s.assistsUsed) rows.push(['Assists used', 'Yes']);
   return rows;
 }
 
 /** The overlay's heading: the mission was won, or the player was killed by the enemy snipers. */
 export function resultTitle(s: MissionStats): string {
-  return s.failed ? 'Mission failed' : 'Mission complete';
+  if (s.failed) return 'Mission failed';
+  return s.objective === 'hvt' ? 'HVT eliminated' : 'Mission complete';
 }
 
-/** "1 of 4 targets down": what a failed mission got done. */
+/** "1 of 4 targets down": what a failed mission got done; "The HVT escaped" when he got away. */
 export function failedSummary(s: MissionStats): string {
+  if (s.failReason === 'escaped') return 'The HVT escaped';
+  if (s.objective === 'hvt') return 'You were killed before the HVT was down';
   return `${s.targetsDown} of ${s.targetsTotal} target${s.targetsTotal === 1 ? '' : 's'} down`;
 }
 

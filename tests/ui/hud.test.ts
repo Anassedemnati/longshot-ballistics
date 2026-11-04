@@ -71,3 +71,14 @@ describe('rangeText', () => {
     expect(rangeText(NaN)).toBe('Range —');
   });
 });
+
+describe('the HVT objective line', () => {
+  it('names him before the alarm, counts down his escape after it, and says how it ended', async () => {
+    const { objectiveText } = await import('../../src/mission/hvtDirector');
+    expect(objectiveText('idle', Infinity)).toBe('Eliminate the HVT: officer in the red beret');
+    expect(objectiveText('fleeing', 12.2)).toBe('HVT is running! 13 s to escape');
+    expect(objectiveText('wounded', 20)).toBe('HVT is running! (wounded) 20 s to escape');
+    expect(objectiveText('escaped', 0)).toBe('The HVT escaped');
+    expect(objectiveText('down', 0)).toBe('HVT eliminated');
+  });
+});

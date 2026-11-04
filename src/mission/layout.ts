@@ -6,6 +6,8 @@ import type { TerrainField } from '../scene/terrainField';
 import type { Density, MissionConfig } from './config';
 import { DUMMY_HEAD, DUMMY_UPRIGHT, LOWER_TORSO_CY, UPPER_TORSO_CY } from './dummyDims';
 import { backdropScore, nearestCoverGap, pickHide, scoreHide } from './hide';
+import { COMPOUND_AREA_M, COMPOUND_CLEAR_M, ROUTE_KEEP_OFF_M, finishHvt, planCompound, routeLegs } from './hvtLayout';
+import type { CompoundDraft, HvtPlacement } from './hvtLayout';
 import {
   propBoxes,
   propColliders,
@@ -73,6 +75,8 @@ export interface MissionLayout {
   snipers: SniperPlacement[];
   /** Scenery: houses, sheds, walls and parked vehicles (the vehicle targets are not in here). */
   props: PropPlacement[];
+  /** An `hvt` mission: the officer's compound (its house and jeep are the first two props), his walk and his ways out. */
+  hvt?: HvtPlacement;
 }
 
 const DEG = Math.PI / 180;
@@ -438,6 +442,8 @@ interface Ctx {
   snipers: PlacedSniper[];
   sniperBounds: Obstacle[];
   usedRoofs: Set<string>;
+  /** An `hvt` mission: the soldiers stand round the compound (`x`, `z`, within `r`), and off the officer's walk (legs x0, z0, x1, z1...). */
+  area?: { x: number; z: number; r: number; legs: number[] };
 }
 
 interface PlacedSniper {
@@ -517,6 +523,12 @@ function evaluateSoldier(ctx: Ctx, x: number, z: number, yaw: number, stage: Sta
     if (Math.hypot(o.s.x - x, o.s.z - z) < stage.spacing) return null;
   }
   const { field, eye } = ctx;
+  if (ctx.area) {
+    const legs = ctx.area.legs;
+    for (let i = 0; i + 3 < legs.length; i += 4) {
+      if (pointSegment2(x, z, legs[i], legs[i + 1], legs[i + 2], legs[i + 3]) < ROUTE_KEEP_OFF_M) return null;
+    }
+  }
   const s: SoldierPlacement = { id: `soldier-${ctx.soldiers.length}`, x, z, yaw, range: Math.hypot(x, z), behindCover: false };
   const aim = soldierAimPoints(s, field);
   const bounds = soldierUprightBounds(s, field);
@@ -540,14 +552,38 @@ function acceptSoldier(ctx: Ctx, p: PlacedSoldier): void {
   ctx.bounds.push(p.bounds);
 }
 
-/** A soldier in the open: range and bearing drawn uniformly. */
+/** Horizontal distance from (x, z) to the segment (ax, az) -> (bx, bz), m. */
+function pointSegment2(x: number, z: number, ax: number, az: number, bx: number, bz: number): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const l2 = dx * dx + dz * dz;
+  const u = l2 > 0 ? Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / l2)) : 0;
+  return Math.hypot(ax + dx * u - x, az + dz * u - z);
+}
+
+/** A soldier in the open: range and bearing drawn uniformly (in an `hvt` mission: anywhere round the compound, except in the last resort). */
 function placeOpen(ctx: Ctx, stage: Stage): PlacedSoldier | null {
   const { rng, config } = ctx;
+  const area = stage === LAST_RESORT ? undefined : ctx.area;
   for (let attempt = 0; attempt < stage.attempts; attempt++) {
-    const range = config.rangeMin + rng() * (config.rangeMax - config.rangeMin);
-    const bearing = (rng() * 2 - 1) * stage.bearing;
-    const x = range * Math.sin(bearing);
-    const z = -range * Math.cos(bearing);
+    let x: number;
+    let z: number;
+    if (area) {
+      // Round the compound, but inside the band (it is a promise of the menu): the band's slice of the area's ring of ranges and bearings.
+      const rc = Math.hypot(area.x, area.z);
+      const lo = Math.max(config.rangeMin, rc - area.r);
+      const hi = Math.min(config.rangeMax, rc + area.r);
+      const range = lo <= hi ? lo + rng() * (hi - lo) : config.rangeMin + rng() * (config.rangeMax - config.rangeMin);
+      const spread = Math.min(stage.bearing, area.r / Math.max(rc, 1));
+      const bearing = Math.max(-stage.bearing, Math.min(stage.bearing, Math.atan2(area.x, -area.z) + (rng() * 2 - 1) * spread));
+      x = range * Math.sin(bearing);
+      z = -range * Math.cos(bearing);
+    } else {
+      const range = config.rangeMin + rng() * (config.rangeMax - config.rangeMin);
+      const bearing = (rng() * 2 - 1) * stage.bearing;
+      x = range * Math.sin(bearing);
+      z = -range * Math.cos(bearing);
+    }
     const yaw = wrapAngle(facingYaw(x, z) + (rng() * 2 - 1) * SOLDIER_YAW_JITTER);
     const placed = evaluateSoldier(ctx, x, z, yaw, stage, false);
     if (placed) return placed;
@@ -919,7 +955,7 @@ function describeBand(config: MissionConfig): string {
 }
 
 /** One complete placement attempt with the given props; null when a target cannot be placed (the caller drops props). */
-function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: PropPlacement[], final: boolean): MissionLayout | null {
+function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: PropPlacement[], final: boolean, compound?: CompoundDraft): MissionLayout | null {
   const placedProps = props.map((p, i) => ({ ...p, id: `prop-${i}` }));
   const staticObs: Obstacle[] = [];
   const coverObs: Obstacle[] = [];
@@ -949,6 +985,7 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
     snipers: [],
     sniperBounds: [],
     usedRoofs: new Set(),
+    area: compound && { x: compound.x, z: compound.z, r: COMPOUND_AREA_M, legs: routeLegs(compound) },
   };
 
   for (let i = 0; i < config.vehicleTargets; i++) {
@@ -960,6 +997,12 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
     candidates.push({ kind: v.kind, x: v.x, z: v.z, yaw: v.yaw });
   }
 
+  // In an `hvt` mission only the cover round the compound is his soldiers' (the rest of the scenery is somebody else's).
+  if (compound) {
+    const near = candidates.filter((c) => Math.hypot(c.x - compound.x, c.z - compound.z) <= COMPOUND_AREA_M + 15);
+    candidates.length = 0;
+    candidates.push(...near);
+  }
   // About 40 % of the soldiers are tried behind cover, placed first while the cover spots are free.
   const wantCover = candidates.length === 0 ? 0 : COVER_FRACTION * config.soldiers;
   const coverCount = Math.floor(wantCover) + (rng() < wantCover - Math.floor(wantCover) ? 1 : 0);
@@ -989,7 +1032,10 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
   }
 
   const soldiers = ctx.soldiers.map((p) => ({ ...p.s, behindCover: isBehindCover(ctx, p) }));
-  return { soldiers, vehicleTargets: ctx.vehicles, snipers: ctx.snipers.map((p) => p.s), props: placedProps };
+  const layout: MissionLayout = { soldiers, vehicleTargets: ctx.vehicles, snipers: ctx.snipers.map((p) => p.s), props: placedProps };
+  // The compound's house and jeep are the first two props (`generateLayout` puts them there and never drops them).
+  if (compound) layout.hvt = finishHvt(compound, { houseId: placedProps[0].id, vehicleId: placedProps[1].id }, soldiers, field, staticObs);
+  return layout;
 }
 
 /**
@@ -1001,13 +1047,22 @@ function solve(config: MissionConfig, field: TerrainField, rng: Rng, props: Prop
  */
 export function generateLayout(config: MissionConfig, field: TerrainField): MissionLayout {
   const rng = createRng((Math.imul(config.seed, 0x9e3779b1) ^ 0x4c41594f) >>> 0);
-  const props = planProps(config, rng);
+  let props = planProps(config, rng);
+  // An `hvt` mission: the officer's compound, from its own rng (a `clear` mission's layout stays exactly as it was). Its house and jeep go
+  // first and are never dropped; the rest of the scenery keeps out of it.
+  let compound: CompoundDraft | undefined;
+  if (config.objective === 'hvt') {
+    compound = planCompound(config, field, createRng((Math.imul(config.seed, 0x85ebca6b) ^ 0x48565421) >>> 0));
+    const c = compound;
+    props = props.filter((p) => Math.hypot(p.x - c.x, p.z - c.z) > COMPOUND_CLEAR_M + propFootprintRadius(p.kind));
+  }
+  const own = compound ? compound.props : [];
   const keeps = [props.length, Math.floor((props.length * 2) / 3), Math.floor(props.length / 3), 0];
   const tried = new Set<number>();
   for (const keep of keeps) {
     if (tried.has(keep)) continue;
     tried.add(keep);
-    const layout = solve(config, field, rng, props.slice(0, keep), keep === 0);
+    const layout = solve(config, field, rng, [...own, ...props.slice(0, keep)], keep === 0, compound);
     if (layout) return layout;
   }
   // Unreachable: the last attempt (no props) either returns a layout or throws its own, specific error.

@@ -23,11 +23,24 @@ export interface MissionStats {
   assistsUsed: boolean;
   /** The player was killed by the enemy snipers or a bombardment: the mission is failed (never complete). */
   failed: boolean;
+  /** Why a failed mission failed: the player was killed (the default, also when absent) or the HVT got away. */
+  failReason?: 'killed' | 'escaped';
+  /** What the mission asks (absent: clear the area). An `hvt` mission is complete when the HVT is down, whatever else stands. */
+  objective?: 'clear' | 'hvt';
+  /** `hvt` missions: the HVT is down, the range of the shot that killed him (m), and his bodyguards killed out of how many. */
+  hvtDown?: boolean;
+  hvtRangeM?: number;
+  guardsDown?: number;
+  guardsTotal?: number;
 }
 
-/** Fresh stats. The clock is stopped (`startMs` null) unless `nowMs` is given. */
-export function newStats(targetsTotal: number, nowMs: number | null = null): MissionStats {
+/**
+ * Fresh stats. The clock is stopped (`startMs` null) unless `nowMs` is given. `hvt` (an HVT mission): his bodyguards' count; the stats then carry
+ * the objective and the HVT's fields.
+ */
+export function newStats(targetsTotal: number, nowMs: number | null = null, hvt?: { guards: number }): MissionStats {
   return {
+    ...(hvt ? { objective: 'hvt' as const, hvtDown: false, hvtRangeM: 0, guardsDown: 0, guardsTotal: hvt.guards } : {}),
     shots: 0,
     hits: 0,
     headshots: 0,
@@ -57,10 +70,24 @@ export function markAssistsUsed(s: MissionStats): MissionStats {
   return s.assistsUsed ? s : { ...s, assistsUsed: true };
 }
 
-/** The player is dead: the mission is failed and its clock stops now (a mission already complete or failed is left alone). */
-export function recordFailure(s: MissionStats, nowMs: number): MissionStats {
+/**
+ * The player is dead (or, `reason` 'escaped', the HVT got away): the mission is failed and its clock stops now (a mission already complete
+ * or failed is left alone).
+ */
+export function recordFailure(s: MissionStats, nowMs: number, reason: 'killed' | 'escaped' = 'killed'): MissionStats {
   if (s.failed || isComplete(s)) return s;
-  return { ...s, failed: true, endMs: s.endMs ?? nowMs };
+  return { ...s, failed: true, endMs: s.endMs ?? nowMs, ...(reason === 'escaped' ? { failReason: reason } : {}) };
+}
+
+/** The HVT is down, killed by a shot from `rangeM` m: an `hvt` mission is complete, and its clock stops now. */
+export function recordHvtDown(s: MissionStats, rangeM: number, nowMs: number): MissionStats {
+  if (s.failed || s.hvtDown) return s;
+  return { ...s, hvtDown: true, hvtRangeM: rangeM, endMs: s.endMs ?? nowMs };
+}
+
+/** One of the HVT's bodyguards is down. */
+export function recordGuardDown(s: MissionStats): MissionStats {
+  return { ...s, guardsDown: Math.min(s.guardsTotal ?? Infinity, (s.guardsDown ?? 0) + 1) };
 }
 
 /** One more round fired. */
@@ -97,7 +124,12 @@ export function accuracy(s: MissionStats): number {
   return s.shots > 0 ? s.hits / s.shots : 0;
 }
 
-/** Every target is down, soldiers, vehicle targets and enemy snipers alike (a mission with no targets is never complete; a failed one neither). */
+/**
+ * Every target is down, soldiers, vehicle targets and enemy snipers alike (a mission with no targets is never complete; a failed one neither).
+ * An `hvt` mission: the HVT is down (the other targets need not be).
+ */
 export function isComplete(s: MissionStats): boolean {
-  return !s.failed && s.targetsTotal > 0 && s.targetsDown >= s.targetsTotal;
+  if (s.failed) return false;
+  if (s.objective === 'hvt') return s.hvtDown === true;
+  return s.targetsTotal > 0 && s.targetsDown >= s.targetsTotal;
 }
