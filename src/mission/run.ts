@@ -362,6 +362,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     bullets.fire(origin, velocity, rifle.bcG7);
     playShot(audio, config.rifle, config.suppressed);
     rifleModel.fire(shot.boltCycle);
+    view.kick(rifle.recoil); // the picture jumps: barely for a .308, the sight picture lost for a moment with a .50
     if (shot.boltCycle && rifle.action === 'bolt') playBoltCycle(audio, weapon.boltTimeS); // a semi-auto cycles inside the shot's own report
     hud.setResult('Shot away…');
   }
@@ -641,6 +642,7 @@ export async function runMission(config: MissionConfig, opts: { legacy: boolean;
     }
     frameNowMs = nowMs;
 
+    view.update(dt); // the recoil settles
     view.look(input.yaw, input.pitch);
 
     const events = bullets.update(dt);
