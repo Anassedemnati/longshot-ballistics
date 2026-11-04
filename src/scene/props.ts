@@ -1,9 +1,16 @@
 import * as THREE from 'three';
+import { isBaseKind } from '../mission/baseProps';
 import { propBoxes } from '../mission/props';
-import type { LocalBox, PropKind, PropPlacement } from '../mission/props';
+import type { LocalBox, SceneryKind, SceneryPlacement } from '../mission/props';
+import { baseParts } from './baseProps';
 import type { ThemeId } from '../mission/themes';
 import { PART_CLASSES, boxProjectUV, classTint, propMaterial } from './materials';
 import type { PartClass } from './materials';
+import { CHROME, DARK, DECOR_PROUD, FLAP, GLASS_COLOUR, INTERIOR, LAMP, Parts, RUBBER, TAIL, scaled } from './propKit';
+import type { Face, PropPart, Style, Vec } from './propKit';
+
+export { DECOR_PROUD } from './propKit';
+export type { PropPart } from './propKit';
 
 // Meshes for the scenery (houses, sheds, compound walls, parked trucks and jeeps) and for the vehicle
 // targets. Every mesh that stands for a collider is a box of `propBoxes(kind)` (src/mission/props.ts is THE
@@ -19,8 +26,6 @@ import type { PartClass } from './materials';
 // the vehicle target swaps its material when it is disabled). Geometry and materials are shared between all
 // instances of a kind, theme and shade.
 
-/** How far a decoration stands proud of the face it lies on, m (< 3 cm: visible geometry bullets would pass through). */
-export const DECOR_PROUD = 0.028;
 /** Foundation under houses, sheds and walls: they stand on any slope without floating corners, m. */
 const SKIRT_DEPTH = 0.6;
 
@@ -70,19 +75,6 @@ const VEHICLE_PALETTES: Record<ThemeId, VehiclePalette> = {
   valley: { paint: 0x5e6439, cab: 0x4a5430, tarp: 0x434b2f }, // olive and green
 };
 
-/** Trim of the buildings: frames, sills, doors, shutters, corner quoins, roof edges. */
-interface Style {
-  frame: number;
-  sill: number;
-  door: number;
-  shutter: number | null;
-  /** Corner quoins (a wall-class colour: a plaster or timber tone). */
-  quoin: number;
-  /** Fascia board along the roof slab's edge, or null (bare mud edge). */
-  fascia: number | null;
-  /** Rim along the roof's top edge. */
-  rim: number;
-}
 
 const STYLES: Record<ThemeId, Style> = {
   desert: { frame: 0x3b2d21, sill: 0xd9c9a4, door: 0x4a3626, shutter: null, quoin: 0xd6c498, fascia: null, rim: 0xb59a6e },
@@ -90,17 +82,14 @@ const STYLES: Record<ThemeId, Style> = {
   valley: { frame: 0xf0ece0, sill: 0xf4f0e6, door: 0x4b3224, shutter: 0x3e5a3a, quoin: 0x9a9482, fascia: 0xf0ece0, rim: 0xb04838 },
 };
 
-const DARK = 0x1b1c1d;
-const RUBBER = 0x1c1c1c;
-const CHROME = 0x7d8084;
-const LAMP = 0xe8e2c4;
-const TAIL = 0x9b1c16;
-const INTERIOR = 0x24231d;
-const FLAP = 0x3a3326;
-const GLASS_COLOUR = 0x3a4d5c;
 
 /** Instances of one kind differ a little in lightness (picked from the id, so it is deterministic). */
 const SHADES: readonly number[] = [0.92, 1, 1.07];
+
+/** The lightness shade index of a prop instance (from its id: deterministic). */
+export function propShade(id: string): number {
+  return hashId(id) % SHADES.length;
+}
 
 function hashId(id: string): number {
   let h = 2166136261;
@@ -111,182 +100,10 @@ function hashId(id: string): number {
   return h >>> 0;
 }
 
-/** A hex colour scaled in lightness (sRGB channels, clamped). */
-function scaled(hex: number, k: number): number {
-  const r = Math.min(255, Math.round(((hex >> 16) & 255) * k));
-  const g = Math.min(255, Math.round(((hex >> 8) & 255) * k));
-  const b = Math.min(255, Math.round((hex & 255) * k));
-  return (r << 16) | (g << 8) | b;
-}
 
 // ---------------------------------------------------------------------------------------------
 // Parts: boxes and prisms of a prop, in its local frame
 
-type Face = '+x' | '-x' | '+z' | '-z' | '+y';
-
-interface Vec {
-  x: number;
-  y: number;
-  z: number;
-}
-
-/** One box (or, `shape: 'cyl'`, a 12-sided prism along `axis` inside the same bounding box) of a prop. */
-export interface PropPart {
-  name: string;
-  cls: PartClass;
-  shape: 'box' | 'cyl';
-  axis: 'x' | 'y' | 'z';
-  /** Bounding box, local frame. */
-  center: Vec;
-  half: Vec;
-  /** The colour this part has on average (sRGB hex). */
-  color: number;
-  /** Index into `propBoxes(kind)` when the part IS a collider box; decorations have none. */
-  box?: number;
-  /** The vehicle's engine block (a mesh of its own). */
-  engine?: boolean;
-}
-
-class Parts {
-  readonly list: PropPart[] = [];
-
-  constructor(private readonly boxes: readonly LocalBox[]) {}
-
-  /** Collider box `i` itself; a wheel's box is drawn as the round tyre inside it (an axle along x), the bullets still meet the box. */
-  collider(i: number, cls: PartClass, color: number): void {
-    const b = this.boxes[i];
-    const wheel = b.part === 'wheel';
-    this.list.push({
-      name: b.part,
-      cls,
-      shape: wheel ? 'cyl' : 'box',
-      axis: wheel ? 'x' : 'y',
-      center: { ...b.center },
-      half: { ...b.halfSize },
-      color,
-      box: i,
-      engine: b.part === 'engine',
-    });
-  }
-
-  /** A box from its corners (local frame). */
-  box(name: string, cls: PartClass, color: number, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): void {
-    this.list.push({
-      name,
-      cls,
-      shape: 'box',
-      axis: 'y',
-      center: { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: (z0 + z1) / 2 },
-      half: { x: Math.abs(x1 - x0) / 2, y: Math.abs(y1 - y0) / 2, z: Math.abs(z1 - z0) / 2 },
-      color,
-    });
-  }
-
-  /**
-   * A thin plate on a face of collider box `on`, `proud` m out from it. Along the face: ±z faces run in x (a)
-   * and y (b); ±x faces in z (a) and y (b); the top face in x (a) and z (b). Absolute local coordinates.
-   */
-  plate(name: string, cls: PartClass, color: number, on: LocalBox, face: Face, a0: number, a1: number, b0: number, b1: number, proud = DECOR_PROUD): void {
-    const c = on.center;
-    const h = on.halfSize;
-    switch (face) {
-      case '+z':
-        this.box(name, cls, color, a0, a1, b0, b1, c.z + h.z, c.z + h.z + proud);
-        break;
-      case '-z':
-        this.box(name, cls, color, a0, a1, b0, b1, c.z - h.z - proud, c.z - h.z);
-        break;
-      case '+x':
-        this.box(name, cls, color, c.x + h.x, c.x + h.x + proud, b0, b1, a0, a1);
-        break;
-      case '-x':
-        this.box(name, cls, color, c.x - h.x - proud, c.x - h.x, b0, b1, a0, a1);
-        break;
-      case '+y':
-        this.box(name, cls, color, a0, a1, c.y + h.y, c.y + h.y + proud, b0, b1);
-        break;
-    }
-  }
-
-  /** A round disc (12-sided prism) of radius `r` on a face of `on`, centred at (a, b) along the face (as in `plate`). */
-  disc(name: string, cls: PartClass, color: number, on: LocalBox, face: Face, a: number, b: number, r: number, proud = DECOR_PROUD): void {
-    const c = on.center;
-    const h = on.halfSize;
-    const d = proud / 2;
-    let center: Vec;
-    let half: Vec;
-    let axis: 'x' | 'y' | 'z';
-    switch (face) {
-      case '+z':
-      case '-z':
-        center = { x: a, y: b, z: face === '+z' ? c.z + h.z + d : c.z - h.z - d };
-        half = { x: r, y: r, z: d };
-        axis = 'z';
-        break;
-      case '+x':
-      case '-x':
-        center = { x: face === '+x' ? c.x + h.x + d : c.x - h.x - d, y: b, z: a };
-        half = { x: d, y: r, z: r };
-        axis = 'x';
-        break;
-      case '+y':
-        center = { x: a, y: c.y + h.y + d, z: b };
-        half = { x: r, y: d, z: r };
-        axis = 'y';
-        break;
-    }
-    this.list.push({ name, cls, shape: 'cyl', axis, center, half, color });
-  }
-
-  /**
-   * A window: a glass pane, a frame of four bars around it, a sill under it and a lintel over it, optional
-   * mullions and shutters. `c`: centre along the face (x for ±z faces, z for ±x faces), `y0`: height of the pane's lower edge.
-   */
-  window(on: LocalBox, face: Face, c: number, y0: number, w: number, h: number, st: Style, opts: { mullions?: boolean; shutters?: boolean } = {}): void {
-    const bar = 0.1;
-    const a0 = c - w / 2;
-    const a1 = c + w / 2;
-    const y1 = y0 + h;
-    this.plate('window glass', 'glass', GLASS_COLOUR, on, face, a0, a1, y0, y1, 0.012);
-    this.plate('window frame left', 'trim', st.frame, on, face, a0 - bar, a0, y0 - bar, y1 + bar);
-    this.plate('window frame right', 'trim', st.frame, on, face, a1, a1 + bar, y0 - bar, y1 + bar);
-    this.plate('window frame top', 'trim', st.frame, on, face, a0, a1, y1, y1 + bar);
-    this.plate('window frame bottom', 'trim', st.frame, on, face, a0, a1, y0 - bar, y0);
-    this.plate('window sill', 'trim', st.sill, on, face, a0 - bar - 0.07, a1 + bar + 0.07, y0 - bar - 0.06, y0 - bar);
-    this.plate('window lintel', 'trim', st.sill, on, face, a0 - bar - 0.05, a1 + bar + 0.05, y1 + bar, y1 + bar + 0.08, 0.024);
-    if (opts.mullions) {
-      this.plate('window mullion', 'trim', st.frame, on, face, c - 0.025, c + 0.025, y0, y1, 0.02);
-      this.plate('window transom', 'trim', st.frame, on, face, a0, a1, y0 + h * 0.5 - 0.025, y0 + h * 0.5 + 0.025, 0.02);
-    }
-    if (opts.shutters && st.shutter !== null) {
-      const sw = w / 2;
-      this.plate('shutter left', 'trim', st.shutter, on, face, a0 - bar - sw, a0 - bar, y0 - bar, y1 + bar, 0.022);
-      this.plate('shutter right', 'trim', st.shutter, on, face, a1 + bar, a1 + bar + sw, y0 - bar, y1 + bar, 0.022);
-    }
-  }
-
-  /** A door: leaf with panels, frame, lintel, threshold and handle. `c`: centre along the face. */
-  door(on: LocalBox, face: Face, c: number, w: number, h: number, st: Style): void {
-    const bar = 0.1;
-    const a0 = c - w / 2;
-    const a1 = c + w / 2;
-    this.plate('door leaf', 'trim', st.door, on, face, a0, a1, 0, h, 0.018);
-    const panel = scaled(st.door, 0.78);
-    for (const [pa0, pa1] of [
-      [a0 + 0.1, c - 0.04],
-      [c + 0.04, a1 - 0.1],
-    ]) {
-      this.plate('door panel upper', 'trim', panel, on, face, pa0, pa1, h * 0.56, h - 0.12, 0.026);
-      this.plate('door panel lower', 'trim', panel, on, face, pa0, pa1, 0.12, h * 0.5, 0.026);
-    }
-    this.plate('door frame left', 'trim', st.frame, on, face, a0 - bar, a0, 0, h + bar);
-    this.plate('door frame right', 'trim', st.frame, on, face, a1, a1 + bar, 0, h + bar);
-    this.plate('door frame top', 'trim', st.frame, on, face, a0, a1, h, h + bar);
-    this.plate('door lintel', 'trim', st.sill, on, face, a0 - bar - 0.06, a1 + bar + 0.06, h + bar, h + bar + 0.09, 0.024);
-    this.plate('door threshold', 'trim', st.sill, on, face, a0 - bar, a1 + bar, 0, 0.05);
-    this.plate('door handle', 'plain', 0xb0a070, on, face, a1 - 0.2, a1 - 0.1, h * 0.46, h * 0.46 + 0.07);
-  }
-}
 
 // ---------------------------------------------------------------------------------------------
 // Buildings
@@ -613,10 +430,15 @@ const partsCache = new Map<string, readonly PropPart[]>();
  * Every part of a prop in its local frame: the collider boxes (with their `box` index) and the decorations.
  * Pure and cached; the meshes are baked from it, and the tests check it against the colliders.
  */
-export function propParts(kind: PropKind, theme: ThemeId): readonly PropPart[] {
+export function propParts(kind: SceneryKind, theme: ThemeId): readonly PropPart[] {
   const key = `${kind}|${theme}`;
   let parts = partsCache.get(key);
   if (!parts) {
+    if (isBaseKind(kind)) {
+      parts = baseParts(kind, theme);
+      partsCache.set(key, parts);
+      return parts;
+    }
     switch (kind) {
       case 'truck':
         parts = truckParts(theme).list;
@@ -635,7 +457,7 @@ export function propParts(kind: PropKind, theme: ThemeId): readonly PropPart[] {
 // ---------------------------------------------------------------------------------------------
 // Baking: one geometry per material class
 
-type MeshKey = PartClass | 'engine';
+export type MeshKey = PartClass | 'engine';
 
 interface Accumulator {
   pos: number[];
@@ -705,32 +527,32 @@ const WHEEL_SEGMENTS = 28;
 
 /** How many sides a prism gets. */
 function segmentsOf(part: PropPart): number {
+  if (part.sides) return part.sides;
   return /wheel|tyre|hub/.test(part.name) && part.name !== 'steering wheel' ? WHEEL_SEGMENTS : CYL_SEGMENTS;
 }
 
-/** A prism (12 sides, more for wheels) along `part.axis` filling the part's bounding box (the radii are the box's half sizes across the axis). */
-function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
-  const { center: m, half: h, axis } = part;
-  const n = segmentsOf(part);
-  // Axis frame: t along the axis, p and q across it (p x q = t).
-  const t: Vec = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
-  const p: Vec = axis === 'x' ? { x: 0, y: 1, z: 0 } : axis === 'y' ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const q: Vec = axis === 'x' ? { x: 0, y: 0, z: 1 } : axis === 'y' ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const ht = axis === 'x' ? h.x : axis === 'y' ? h.y : h.z;
-  const hp = axis === 'x' ? h.y : axis === 'y' ? h.z : h.x;
-  const hq = axis === 'x' ? h.z : axis === 'y' ? h.x : h.y;
+/**
+ * A prism: `n` sides round the axis `t` through `m` (half length `ht`), radii `hp` along `p` and `hq` along `q`
+ * (p x q = t), over the angles 0..`arc` from p toward q. A full turn closes the ring; a partial arc (the tent vault)
+ * leaves the chord open. Flat caps at both ends.
+ */
+function addPrism(acc: Accumulator, m: Vec, t: Vec, p: Vec, q: Vec, ht: number, hp: number, hq: number, n: number, c: THREE.Color, arc = Math.PI * 2): void {
+  const closed = arc >= Math.PI * 2 - 1e-9;
   const at = (s: number, ang: number): Vec => ({
     x: m.x + t.x * ht * s + p.x * Math.cos(ang) * hp + q.x * Math.sin(ang) * hq,
     y: m.y + t.y * ht * s + p.y * Math.cos(ang) * hp + q.y * Math.sin(ang) * hq,
     z: m.z + t.z * ht * s + p.z * Math.cos(ang) * hp + q.z * Math.sin(ang) * hq,
   });
-  // Sides: smooth radial normals.
+  // Sides: smooth normals, perpendicular to the (elliptic) outline.
   const side = acc.pos.length / 3;
   for (let i = 0; i <= n; i++) {
-    const ang = (i / n) * Math.PI * 2;
-    const nx = p.x * Math.cos(ang) + q.x * Math.sin(ang);
-    const ny = p.y * Math.cos(ang) + q.y * Math.sin(ang);
-    const nz = p.z * Math.cos(ang) + q.z * Math.sin(ang);
+    const ang = (i / n) * arc;
+    const cp = Math.cos(ang) / Math.max(hp, 1e-9);
+    const cq = Math.sin(ang) / Math.max(hq, 1e-9);
+    const k = 1 / Math.hypot(cp, cq);
+    const nx = (p.x * cp + q.x * cq) * k;
+    const ny = (p.y * cp + q.y * cq) * k;
+    const nz = (p.z * cp + q.z * cq) * k;
     for (const s of [-1, 1]) {
       const v = at(s, ang);
       pushVertex(acc, v.x, v.y, v.z, nx, ny, nz, c);
@@ -741,20 +563,252 @@ function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
     acc.idx.push(a, a + 3, a + 1, a, a + 2, a + 3);
   }
   // Caps.
+  const ringN = closed ? n : n + 1;
   for (const s of [-1, 1]) {
     const centre = pushVertex(acc, m.x + t.x * ht * s, m.y + t.y * ht * s, m.z + t.z * ht * s, t.x * s, t.y * s, t.z * s, c);
     const ring = acc.pos.length / 3;
-    for (let i = 0; i < n; i++) {
-      const v = at(s, (i / n) * Math.PI * 2);
+    for (let i = 0; i < ringN; i++) {
+      const v = at(s, (i / n) * arc);
       pushVertex(acc, v.x, v.y, v.z, t.x * s, t.y * s, t.z * s, c);
     }
     for (let i = 0; i < n; i++) {
       const a = ring + i;
-      const b = ring + ((i + 1) % n);
+      const b = ring + (closed ? (i + 1) % n : i + 1);
       if (s > 0) acc.idx.push(centre, a, b);
       else acc.idx.push(centre, b, a);
     }
   }
+}
+
+const AXES: Record<'x' | 'y' | 'z', { t: Vec; p: Vec; q: Vec }> = {
+  x: { t: { x: 1, y: 0, z: 0 }, p: { x: 0, y: 1, z: 0 }, q: { x: 0, y: 0, z: 1 } },
+  y: { t: { x: 0, y: 1, z: 0 }, p: { x: 0, y: 0, z: 1 }, q: { x: 1, y: 0, z: 0 } },
+  z: { t: { x: 0, y: 0, z: 1 }, p: { x: 1, y: 0, z: 0 }, q: { x: 0, y: 1, z: 0 } },
+};
+
+const sub = (a: Vec, b: Vec): Vec => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const cross = (a: Vec, b: Vec): Vec => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+const unit = (a: Vec): Vec => {
+  const l = Math.hypot(a.x, a.y, a.z);
+  return { x: a.x / l, y: a.y / l, z: a.z / l };
+};
+
+/** A prism (12 sides, more for wheels) along `part.axis` filling the part's bounding box (the radii are the box's half sizes across the axis). */
+function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const { center: m, half: h, axis } = part;
+  const { t, p, q } = AXES[axis];
+  const ht = axis === 'x' ? h.x : axis === 'y' ? h.y : h.z;
+  const hp = axis === 'x' ? h.y : axis === 'y' ? h.z : h.x;
+  const hq = axis === 'x' ? h.z : axis === 'y' ? h.x : h.y;
+  addPrism(acc, m, t, p, q, ht, hp, hq, segmentsOf(part), c);
+}
+
+/** A round tube between `part.tube.from` and `.to` (a tilted barrel segment, a tripod leg, a brace). */
+function addTube(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const tube = part.tube;
+  if (!tube) throw new Error(`tube part ${part.name} without its end points`);
+  const d = sub(tube.to, tube.from);
+  const len = Math.hypot(d.x, d.y, d.z);
+  const t = unit(d);
+  const ref = Math.abs(t.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  const p = unit(cross(ref, t)); // across the tube, horizontal when the tube is not near vertical
+  const q = cross(t, p); // p x q = t
+  const m = { x: (tube.from.x + tube.to.x) / 2, y: (tube.from.y + tube.to.y) / 2, z: (tube.from.z + tube.to.z) / 2 };
+  addPrism(acc, m, t, p, q, len / 2, tube.radius, tube.radius, part.sides ?? CYL_SEGMENTS, c);
+}
+
+/** A tent vault: a half-elliptic prism along z standing on the bounding box's floor, filling the box. */
+function addArch(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const { center: m, half: h } = part;
+  const { t, p, q } = AXES.z;
+  addPrism(acc, { x: m.x, y: m.y - h.y, z: m.z }, t, p, q, h.z, h.x, h.y * 2, part.sides ?? 16, c, Math.PI);
+}
+
+/** Nominal size of one sandbag: length along the wall, height of a course, m. */
+const BAG_LENGTH = 0.55;
+const BAG_COURSE = 0.17;
+/** Cross-section of a bag: 8 points round a squircle (corners pushed out so a bag reads as a filled sack, not a tube). */
+const BAG_SECTION: ReadonlyArray<readonly [number, number]> = Array.from({ length: 8 }, (_, i) => {
+  const a = (i / 8) * Math.PI * 2;
+  const k = i % 2 === 1 ? 0.86 / Math.SQRT1_2 : 1;
+  return [Math.cos(a) * k, Math.sin(a) * k] as const;
+});
+/** Along a bag: ring positions (fractions of its half length) and how much the section shrinks there (the tied, folded ends). */
+const BAG_RINGS: ReadonlyArray<readonly [number, number, number]> = [
+  [-1, 0.55, 0.8], // [position, height scale, depth scale]
+  [-0.62, 1, 1],
+  [0.62, 1, 1],
+  [1, 0.55, 0.8],
+];
+
+/** One rounded sandbag centred at `m`, along the unit axis `t` (x or z), half length `hl`, half height `hh`, half depth `hd`. */
+function addBag(acc: Accumulator, m: Vec, t: Vec, hl: number, hh: number, hd: number, c: THREE.Color): void {
+  const p: Vec = { x: 0, y: 1, z: 0 };
+  const q = cross(t, p);
+  const n = BAG_SECTION.length;
+  const base = acc.pos.length / 3;
+  for (const [s, ky, kd] of BAG_RINGS) {
+    const axial = s === -1 ? -0.75 : s === 1 ? 0.75 : 0;
+    for (let i = 0; i <= n; i++) {
+      const [cp, cq] = BAG_SECTION[i % n];
+      const x = m.x + t.x * hl * s + p.x * cp * hh * ky + q.x * cq * hd * kd;
+      const y = m.y + t.y * hl * s + p.y * cp * hh * ky + q.y * cq * hd * kd;
+      const z = m.z + t.z * hl * s + p.z * cp * hh * ky + q.z * cq * hd * kd;
+      const rp = cp / hh;
+      const rq = cq / hd;
+      const rl = Math.hypot(rp, rq);
+      let nx = (p.x * rp + q.x * rq) / rl + t.x * axial;
+      let ny = (p.y * rp + q.y * rq) / rl + t.y * axial;
+      let nz = (p.z * rp + q.z * rq) / rl + t.z * axial;
+      const l = Math.hypot(nx, ny, nz);
+      nx /= l;
+      ny /= l;
+      nz /= l;
+      pushVertex(acc, x, y, z, nx, ny, nz, c);
+    }
+  }
+  const row = n + 1;
+  for (let r = 0; r < BAG_RINGS.length - 1; r++) {
+    for (let i = 0; i < n; i++) {
+      const a = base + r * row + i;
+      const b = a + row;
+      acc.idx.push(a, b + 1, b, a, a + 1, b + 1);
+    }
+  }
+  // End caps (the folded ends).
+  for (const [ring, s] of [
+    [0, -1],
+    [BAG_RINGS.length - 1, 1],
+  ] as const) {
+    const [, ky, kd] = BAG_RINGS[ring];
+    const centre = pushVertex(acc, m.x + t.x * hl * s, m.y + t.y * hl * s, m.z + t.z * hl * s, t.x * s, t.y * s, t.z * s, c);
+    const first = acc.pos.length / 3;
+    for (let i = 0; i < n; i++) {
+      const [cp, cq] = BAG_SECTION[i];
+      pushVertex(
+        acc,
+        m.x + t.x * hl * s + p.x * cp * hh * ky + q.x * cq * hd * kd,
+        m.y + t.y * hl * s + p.y * cp * hh * ky + q.y * cq * hd * kd,
+        m.z + t.z * hl * s + p.z * cp * hh * ky + q.z * cq * hd * kd,
+        t.x * s,
+        t.y * s,
+        t.z * s,
+        c,
+      );
+    }
+    for (let i = 0; i < n; i++) {
+      const a = first + i;
+      const b = first + ((i + 1) % n);
+      if (s > 0) acc.idx.push(centre, a, b);
+      else acc.idx.push(centre, b, a);
+    }
+  }
+}
+
+/**
+ * Sandbags filling the part's box: courses of BAG_COURSE m, bags of about BAG_LENGTH m laid lengthwise along the
+ * box's longer horizontal side, every other course shifted half a bag (half bags at its ends), one or two bags deep.
+ * The outermost bags touch all six faces of the box. Each bag's tone varies a little (sun-bleached, damp, newer).
+ */
+function addBags(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const { center: m, half: h } = part;
+  const alongX = h.x >= h.z;
+  const t: Vec = alongX ? { x: 1, y: 0, z: 0 } : { x: 0, y: 0, z: 1 };
+  const L = 2 * (alongX ? h.x : h.z);
+  const D = 2 * (alongX ? h.z : h.x);
+  const courses = Math.max(1, Math.round((2 * h.y) / BAG_COURSE));
+  const hh = h.y / courses;
+  const deep = D > 0.55 ? 2 : 1;
+  const hd = D / deep / 2;
+  const count = Math.max(1, Math.round(L / BAG_LENGTH));
+  const bl = L / count;
+  const tone = new THREE.Color();
+  let k = 0;
+  for (let row = 0; row < courses; row++) {
+    const y = m.y - h.y + hh * (2 * row + 1);
+    // Bag ends along the wall, from -L/2: shifted courses start and end with half bags.
+    const ends: number[] = [-L / 2];
+    let u = -L / 2 + (row % 2 === 1 && count > 1 ? bl / 2 : bl);
+    while (u < L / 2 - 1e-6) {
+      ends.push(u);
+      u += bl;
+    }
+    ends.push(L / 2);
+    for (let i = 0; i + 1 < ends.length; i++) {
+      const u0 = ends[i];
+      const u1 = ends[i + 1];
+      for (let j = 0; j < deep; j++) {
+        const w = -D / 2 + hd * (2 * j + 1);
+        const mid = { x: m.x + (alongX ? (u0 + u1) / 2 : w), y, z: m.z + (alongX ? w : (u0 + u1) / 2) };
+        const shade = 0.9 + 0.2 * (((k++ * 2654435761) >>> 0) % 1000) / 1000;
+        tone.setRGB(c.r * shade, c.g * shade, c.b * shade);
+        addBag(acc, mid, t, (u1 - u0) / 2, hh, hd, tone);
+      }
+    }
+  }
+}
+
+/** A ladder filling the part's box: two rails at its x ends, rungs every 0.3 m. */
+function addLadder(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const { center: m, half: h } = part;
+  const rail = 0.035;
+  for (const sx of [-1, 1]) {
+    addBox(acc, { ...part, shape: 'box', center: { x: m.x + sx * (h.x - rail), y: m.y, z: m.z }, half: { x: rail, y: h.y, z: h.z } }, c);
+  }
+  for (let y = m.y - h.y + 0.3; y < m.y + h.y - 0.1; y += 0.3) {
+    addBox(acc, { ...part, shape: 'box', center: { x: m.x, y, z: m.z }, half: { x: h.x - 2 * rail, y: 0.02, z: h.z * 0.5 } }, c);
+  }
+}
+
+/** Turn the vertices from `start` on about +Y by `yaw` around (cx, cz) (the part's own rotation in the prop frame). */
+function turn(acc: Accumulator, start: number, yaw: number, cx: number, cz: number): void {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  for (let i = start; i < acc.pos.length / 3; i++) {
+    const x = acc.pos[i * 3] - cx;
+    const z = acc.pos[i * 3 + 2] - cz;
+    acc.pos[i * 3] = cx + c * x + s * z;
+    acc.pos[i * 3 + 2] = cz - s * x + c * z;
+    const nx = acc.nor[i * 3];
+    const nz = acc.nor[i * 3 + 2];
+    acc.nor[i * 3] = c * nx + s * nz;
+    acc.nor[i * 3 + 2] = -s * nx + c * nz;
+  }
+}
+
+/** Add one part's triangles to `acc` in its shape, turned by its own yaw. */
+function addPart(acc: Accumulator, part: PropPart, c: THREE.Color): void {
+  const start = acc.pos.length / 3;
+  switch (part.shape) {
+    case 'box':
+      addBox(acc, part, c);
+      break;
+    case 'cyl':
+      addCyl(acc, part, c);
+      break;
+    case 'tube':
+      addTube(acc, part, c);
+      break;
+    case 'arch':
+      addArch(acc, part, c);
+      break;
+    case 'bags':
+      addBags(acc, part, c);
+      break;
+    case 'ladder':
+      addLadder(acc, part, c);
+      break;
+  }
+  if (part.yaw) turn(acc, start, part.yaw, part.center.x, part.center.z);
+}
+
+/** The vertex positions of one part as the baker draws it (prop frame), for the tests that hold a mesh to its colliders. */
+export function partVertices(part: PropPart): Vec[] {
+  const acc = newAcc();
+  addPart(acc, part, new THREE.Color(1, 1, 1));
+  const out: Vec[] = [];
+  for (let i = 0; i < acc.pos.length; i += 3) out.push({ x: acc.pos[i], y: acc.pos[i + 1], z: acc.pos[i + 2] });
+  return out;
 }
 
 /** The vertex colour of a part: its colour relative to the class tint (tinted classes) or absolute, times the instance shade. */
@@ -769,7 +823,7 @@ function toneOf(theme: ThemeId, part: PropPart, shade: number): THREE.Color {
   return part.cls === 'glass' ? c : c.multiplyScalar(shade);
 }
 
-interface Baked {
+export interface Baked {
   geometry: THREE.BufferGeometry;
   /** Collider boxes this geometry holds. */
   boxes: number[];
@@ -777,7 +831,8 @@ interface Baked {
 
 const bakedCache = new Map<string, Map<MeshKey, Baked>>();
 
-function bake(kind: PropKind, theme: ThemeId, shadeIndex: number): Map<MeshKey, Baked> {
+/** The geometries of a kind, theme and lightness shade, one per material class (cached, shared by every instance). */
+export function bakeProp(kind: SceneryKind, theme: ThemeId, shadeIndex: number): Map<MeshKey, Baked> {
   const key = `${kind}|${theme}|${shadeIndex}`;
   let baked = bakedCache.get(key);
   if (!baked) {
@@ -792,8 +847,7 @@ function bake(kind: PropKind, theme: ThemeId, shadeIndex: number): Map<MeshKey, 
         boxes.set(k, []);
       }
       const c = toneOf(theme, part, SHADES[shadeIndex]);
-      if (part.shape === 'box') addBox(acc, part, c);
-      else addCyl(acc, part, c);
+      addPart(acc, part, c);
       if (part.box !== undefined) boxes.get(k)?.push(part.box);
     }
     baked = new Map();
@@ -824,14 +878,14 @@ const CASTS: ReadonlySet<MeshKey> = new Set<MeshKey>(['wall', 'roof', 'paint', '
  * collider boxes it holds in `userData.boxes`. The wall, roof, paint and engine meshes cast and receive sun
  * shadows; trim, plain parts (tyres, lamps) and glass only receive.
  */
-export function createPropMesh(p: PropPlacement, groundY: number, theme: ThemeId): THREE.Group {
+export function createPropMesh(p: SceneryPlacement, groundY: number, theme: ThemeId): THREE.Group {
   const group = new THREE.Group();
   group.name = `prop:${p.id}`;
   group.userData.kind = p.kind;
   group.position.set(p.x, groundY, p.z);
   group.rotation.y = p.yaw;
 
-  const baked = bake(p.kind, theme, hashId(p.id) % SHADES.length);
+  const baked = bakeProp(p.kind, theme, propShade(p.id));
   const order: MeshKey[] = [...PART_CLASSES, 'engine'];
   for (const key of order) {
     const b = baked.get(key);

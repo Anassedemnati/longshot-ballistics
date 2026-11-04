@@ -7,6 +7,14 @@ async function start(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
 
+  // Dev-only: `?basePreview=1` shows the military base and its props on flat ground (src/dev/basePreview.ts),
+  // loaded on demand so the game never fetches it.
+  if (new URLSearchParams(window.location.search).has('basePreview')) {
+    const { startBasePreview } = await import('./dev/basePreview');
+    startBasePreview(app);
+    return;
+  }
+
   const route = routeFromSearch(window.location.search);
   if (route.kind === 'menu') {
     // `?debug=1` on the menu exposes window.__menu and is carried into the mission the menu starts.

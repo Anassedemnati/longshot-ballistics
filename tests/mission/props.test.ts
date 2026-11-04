@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { segmentBox } from '../../src/game/hit';
 import type { Box } from '../../src/game/hit';
 import type { VehicleTargetPlacement } from '../../src/mission/layout';
+import { BASE_KINDS, NET_HEIGHT, TOWER_DECK } from '../../src/mission/baseProps';
+import type { BaseKind } from '../../src/mission/baseProps';
 import {
+  boxFootprintCorners,
   propBoxes,
   propColliders,
   propFootprintRadius,
+  propFootprintRect,
   toWorldBox,
   vehicleEngineObstacle,
   vehicleTargetBoxes,
@@ -204,6 +208,93 @@ describe('vehicle targets', () => {
       for (const o of body) {
         const box: Box = o.box;
         expect(segmentBox(eye, engineCenter, box)).toBeNull();
+      }
+    }
+  });
+});
+
+describe('military-base props', () => {
+  const footprintCorners = (b: LocalBox): Array<{ x: number; z: number }> => boxFootprintCorners(b);
+
+  it('every kind has boxes standing on the ground, none degenerate, and a footprint radius and rectangle enclosing every (turned) box corner', () => {
+    for (const kind of BASE_KINDS) {
+      const boxes = propBoxes(kind);
+      expect(boxes.length, kind).toBeGreaterThan(0);
+      const r = propFootprintRadius(kind);
+      const f = propFootprintRect(kind);
+      for (const b of boxes) {
+        expect(b.center.y - b.halfSize.y, `${kind} ${b.part}`).toBeGreaterThanOrEqual(-1e-9);
+        expect(Math.min(b.halfSize.x, b.halfSize.y, b.halfSize.z), `${kind} ${b.part}`).toBeGreaterThan(0);
+        for (const p of footprintCorners(b)) {
+          expect(Math.hypot(p.x, p.z)).toBeLessThanOrEqual(r + 1e-9);
+          expect(Math.abs(p.x - f.cx)).toBeLessThanOrEqual(f.hx + 1e-9);
+          expect(Math.abs(p.z - f.cz)).toBeLessThanOrEqual(f.hz + 1e-9);
+        }
+      }
+    }
+  });
+
+  it('sizes: a 10 m tank with a long gun, a howitzer raised 20-30 deg, a 14 m rotor of four thin blades, a 4 m tower deck', () => {
+    const tank = extent(propBoxes('tank'));
+    expect(tank.z).toBeGreaterThan(9.5);
+    expect(tank.x).toBeCloseTo(3.6, 6);
+    const tankGun = propBoxes('tank').filter((b) => b.part === 'gun' && b.look === 'roundZ');
+    expect(Math.max(...tankGun.map((b) => b.halfSize.z * 2))).toBeGreaterThan(4.5);
+
+    const barrel = propBoxes('artillery').filter((b) => b.look === 'tube' && b.tube);
+    expect(barrel.length).toBeGreaterThanOrEqual(8);
+    for (const b of barrel) {
+      const t = b.tube as NonNullable<LocalBox['tube']>;
+      const pitch = Math.atan2(t.to.y - t.from.y, Math.hypot(t.to.x - t.from.x, t.to.z - t.from.z));
+      expect(pitch).toBeGreaterThan((20 * Math.PI) / 180);
+      expect(pitch).toBeLessThan((30 * Math.PI) / 180);
+      // A segment's box is its tube's bounding box: short segments keep the empty corners small.
+      expect(Math.hypot(t.to.x - t.from.x, t.to.y - t.from.y, t.to.z - t.from.z)).toBeLessThanOrEqual(0.61);
+    }
+
+    const blades = propBoxes('helicopter').filter((b) => b.part === 'blade' && b.halfSize.y < 0.05);
+    expect(blades).toHaveLength(4);
+    for (const b of blades) expect(b.halfSize.y * 2).toBeLessThanOrEqual(0.05);
+    expect(extent(blades).x).toBeGreaterThan(14);
+
+    const deck = propBoxes('watchTower').find((b) => b.part === 'roof') as LocalBox;
+    expect(deck.center.y + deck.halfSize.y).toBeCloseTo(TOWER_DECK, 9);
+    expect(TOWER_DECK).toBeGreaterThan(3.5);
+  });
+
+  it('soft cover is "wall" (sandbags, barriers, crates, canvas, the pad); vehicles and guns are "metal"; a nest is bags and a metal gun', () => {
+    const materials = (kind: BaseKind): Set<string> => new Set(propColliders({ id: 'b', kind, x: 0, z: -200, yaw: 0.3 }, 0).map((o) => o.material));
+    for (const kind of ['sandbags', 'hesco', 'jersey', 'helipad', 'booth'] as const) expect(materials(kind), kind).toEqual(new Set(['wall']));
+    for (const b of propBoxes('tent')) expect(b.part === 'fabric' ? (b.material ?? 'wall') : b.material).toBe(b.part === 'fabric' ? 'wall' : 'metal'); // canvas, and its stove pipe
+    for (const kind of ['tank', 'cargoTruck', 'fuelTruck', 'helicopter', 'radar', 'generator', 'fuelDrums'] as const) expect(materials(kind), kind).toEqual(new Set(['metal']));
+    expect(materials('mgNest')).toEqual(new Set(['wall', 'metal']));
+    const nest = propBoxes('mgNest');
+    for (const b of nest) expect(b.material ?? 'wall').toBe(b.part === 'bags' ? 'wall' : 'metal');
+    expect(materials('aaGun')).toEqual(new Set(['wall', 'metal']));
+    expect(new Set(propColliders({ id: 'c', kind: 'ammoCrates', x: 0, z: 0, yaw: 0 }, 0).map((o) => o.material))).toEqual(new Set(['wall', 'metal']));
+  });
+
+  it('turned boxes (sandbag rings, howitzer trails) turn with the placement: the collider yaw is the sum', () => {
+    const boxes = propBoxes('mgNest');
+    const turned = boxes.findIndex((b) => (b.yaw ?? 0) !== 0);
+    expect(turned).toBeGreaterThanOrEqual(0);
+    const [c] = propColliders({ id: 'n', kind: 'mgNest', x: 5, z: -50, yaw: 0.4 }, 1).slice(turned, turned + 1);
+    expect(c.box.yaw).toBeCloseTo(0.4 + (boxes[turned].yaw ?? 0), 12);
+    // A sandbag segment of the ring stops a bullet fired at it from outside the ring.
+    const centre = c.box.center;
+    const hit = segmentBox({ x: centre.x + 10 * Math.sin(c.box.yaw), y: 0.5 + 1, z: centre.z + 10 * Math.cos(c.box.yaw) }, { x: centre.x, y: 0.5 + 1, z: centre.z }, c.box);
+    expect(hit).not.toBeNull();
+  });
+
+  it('a tank fits under the camouflage net; the tube boxes of the kit enclose their tubes', () => {
+    const tankTop = Math.max(...propBoxes('tank').map((b) => b.center.y + b.halfSize.y));
+    expect(tankTop).toBeLessThan(NET_HEIGHT);
+    for (const kind of BASE_KINDS) {
+      for (const b of propBoxes(kind)) {
+        if (b.look !== 'tube' || !b.tube) continue;
+        for (const end of [b.tube.from, b.tube.to]) {
+          for (const axis of ['x', 'y', 'z'] as const) expect(Math.abs(end[axis] - b.center[axis])).toBeLessThanOrEqual(b.halfSize[axis] + 1e-9);
+        }
       }
     }
   });

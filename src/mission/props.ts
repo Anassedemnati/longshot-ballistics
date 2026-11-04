@@ -1,6 +1,10 @@
 import type { Vec3 } from '../ballistics/types';
 import type { Box, Material, Obstacle } from '../game/hit';
 import type { VehicleTargetPlacement } from './layout';
+import { BASE_BOXES, BASE_MATERIAL, isBaseKind } from './baseProps';
+import type { BaseKind } from './baseProps';
+
+export type { BaseKind } from './baseProps';
 
 // Pure prop dimensions (no three.js). This file is THE dimension source: the meshes in scene/props.ts
 // and scene/vehicleTarget.ts are built from `propBoxes`, and the bullet colliders are built from the
@@ -24,14 +28,78 @@ export interface PropPlacement {
   yaw: number;
 }
 
-/** What a box is, so a mesh builder can tint and shape it (walls vs roofs vs glass vs tyres). */
-export type BoxPart = 'wall' | 'roof' | 'hull' | 'cab' | 'glass' | 'wheel' | 'engine';
+/**
+ * Every kind of static scenery: the village props of the layout (`PropKind`) and the military-base hardware
+ * (`BaseKind`, src/mission/baseProps.ts). `PropKind` stays the narrow union the layout's tables are keyed by;
+ * the dimension, collider and mesh functions take either.
+ */
+export type SceneryKind = PropKind | BaseKind;
 
-/** An axis-aligned box in the prop's local frame (yaw 0, ground at y = 0). */
+/** A placed prop of any kind (a `PropPlacement` is one). */
+export interface SceneryPlacement {
+  id: string;
+  kind: SceneryKind;
+  /** World position of the footprint centre, m. */
+  x: number;
+  z: number;
+  /** Rotation about +Y, rad. */
+  yaw: number;
+}
+
+/** What a box is, so a mesh builder can tint and shape it (walls vs roofs vs glass vs tyres). */
+export type BoxPart =
+  | 'wall'
+  | 'roof'
+  | 'hull'
+  | 'cab'
+  | 'glass'
+  | 'wheel'
+  | 'engine'
+  // Military hardware (baseProps.ts):
+  | 'track'
+  | 'turret'
+  | 'gun'
+  | 'hatch'
+  | 'antenna'
+  | 'frame'
+  | 'panel'
+  | 'post'
+  | 'deck'
+  | 'canopy'
+  | 'bags'
+  | 'crate'
+  | 'fabric'
+  | 'blade'
+  | 'tank'
+  | 'lamp'
+  | 'net';
+
+/**
+ * How the mesh draws a collider box (default `box`; a `wheel` box defaults to `roundX`). Whatever the look, the drawn
+ * shape fills the box: it touches all six faces, so a bullet meets the box within a few cm of the drawn surface.
+ *   roundX|Y|Z  a prism inscribed in the box, axis along local x / y / z (tyres, drums, masts, barrels)
+ *   tube        a prism from `tube.from` to `tube.to` (a tilted barrel segment; the box is its bounding box)
+ *   bags        staggered rows of rounded sandbags filling the box (lengthwise along its longer horizontal side)
+ *   arch        a half-elliptic vault along z standing on the box's floor (a tent roof)
+ *   ladder      two rails at the box's x ends and rungs between them
+ */
+export type BoxLook = 'box' | 'roundX' | 'roundY' | 'roundZ' | 'tube' | 'bags' | 'arch' | 'ladder';
+
+/** A box in the prop's local frame (ground at y = 0), axis-aligned unless `yaw` turns it about its own centre. */
 export interface LocalBox {
   center: Vec3;
   halfSize: Vec3;
   part: BoxPart;
+  /** Rotation of the box about +Y around its own centre, rad (same convention as a placement's yaw). Default 0. */
+  yaw?: number;
+  /** How the mesh draws it (see `BoxLook`). */
+  look?: BoxLook;
+  /** The `tube` look: axis end points (local frame, m) and radius, m. The box is the tube's bounding box. */
+  tube?: { from: Vec3; to: Vec3; radius: number };
+  /** Sides of a round look's prism (default: the mesh builder's choice). */
+  sides?: number;
+  /** Collider material of this box when it differs from the kind's (a machine gun behind sandbags). */
+  material?: Material;
 }
 
 const box = (part: BoxPart, cx: number, cy: number, cz: number, hx: number, hy: number, hz: number): LocalBox => ({
@@ -105,8 +173,31 @@ const MATERIAL: Record<PropKind, Material> = {
 };
 
 /** THE dimension source: every box of a prop in its local frame (vehicles: body boxes, then the engine block last). */
-export function propBoxes(kind: PropKind): readonly LocalBox[] {
-  return BOXES[kind];
+export function propBoxes(kind: SceneryKind): readonly LocalBox[] {
+  return isBaseKind(kind) ? BASE_BOXES[kind] : BOXES[kind];
+}
+
+/** The collider material of box `b` of a prop of `kind`. */
+function materialOf(kind: SceneryKind, b: LocalBox): Material {
+  return b.material ?? (isBaseKind(kind) ? BASE_MATERIAL[kind] : MATERIAL[kind]);
+}
+
+/** The four (x, z) corners of a box's footprint in the prop frame (its own yaw applied). */
+export function boxFootprintCorners(b: LocalBox): Array<{ x: number; z: number }> {
+  const c = Math.cos(b.yaw ?? 0);
+  const s = Math.sin(b.yaw ?? 0);
+  const out: Array<{ x: number; z: number }> = [];
+  for (const [sx, sz] of [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ]) {
+    const lx = sx * b.halfSize.x;
+    const lz = sz * b.halfSize.z;
+    out.push({ x: b.center.x + c * lx + s * lz, z: b.center.z - s * lx + c * lz });
+  }
+  return out;
 }
 
 /** Body boxes of a vehicle target (the engine block is excluded) and its engine block. */
@@ -114,21 +205,49 @@ export function vehicleTargetBoxes(kind: 'truck' | 'jeep'): { body: readonly Loc
   return VEHICLES[kind];
 }
 
-const radii = new Map<PropKind, number>();
+const radii = new Map<SceneryKind, number>();
 
 /** Radius of the circle around the footprint centre that encloses every box, m. */
-export function propFootprintRadius(kind: PropKind): number {
+export function propFootprintRadius(kind: SceneryKind): number {
   let r = radii.get(kind);
   if (r === undefined) {
     r = 0;
-    for (const b of BOXES[kind]) {
-      for (const sx of [-1, 1]) {
-        for (const sz of [-1, 1]) {
-          r = Math.max(r, Math.hypot(b.center.x + sx * b.halfSize.x, b.center.z + sz * b.halfSize.z));
-        }
-      }
+    for (const b of propBoxes(kind)) {
+      for (const p of boxFootprintCorners(b)) r = Math.max(r, Math.hypot(p.x, p.z));
     }
     radii.set(kind, r);
+  }
+  return r;
+}
+
+/** The footprint of a prop as a rectangle in its own frame: centre (`cx`, `cz`) and half sizes, m (the bounding rectangle of every box). */
+export interface FootprintRect {
+  cx: number;
+  cz: number;
+  hx: number;
+  hz: number;
+}
+
+const rects = new Map<SceneryKind, FootprintRect>();
+
+/** The bounding rectangle (prop frame) of every box of a prop, for oriented-rectangle overlap tests (long walls are poorly served by a circle). */
+export function propFootprintRect(kind: SceneryKind): FootprintRect {
+  let r = rects.get(kind);
+  if (!r) {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (const b of propBoxes(kind)) {
+      for (const p of boxFootprintCorners(b)) {
+        x0 = Math.min(x0, p.x);
+        x1 = Math.max(x1, p.x);
+        z0 = Math.min(z0, p.z);
+        z1 = Math.max(z1, p.z);
+      }
+    }
+    r = { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, hx: (x1 - x0) / 2, hz: (z1 - z0) / 2 };
+    rects.set(kind, r);
   }
   return r;
 }
@@ -150,8 +269,8 @@ export interface RoofSpot {
   halfZ: number;
 }
 
-export function rooftopSpot(kind: PropKind, reach: number): RoofSpot | null {
-  const roof = BOXES[kind].find((b) => b.part === 'roof');
+export function rooftopSpot(kind: SceneryKind, reach: number): RoofSpot | null {
+  const roof = propBoxes(kind).find((b) => b.part === 'roof');
   if (!roof) return null;
   const halfX = roof.halfSize.x - reach;
   const halfZ = roof.halfSize.z - reach;
@@ -171,16 +290,18 @@ export function toWorldBox(b: LocalBox, x: number, z: number, yaw: number, groun
       z: z - s * b.center.x + c * b.center.z,
     },
     halfSize: { x: b.halfSize.x, y: b.halfSize.y, z: b.halfSize.z },
-    yaw,
+    yaw: yaw + (b.yaw ?? 0),
   };
 }
 
-/** World colliders of a prop, one per local box: houses, sheds and walls are 'wall', vehicles 'metal'. */
-export function propColliders(p: PropPlacement, groundY: number): Obstacle[] {
-  const material = MATERIAL[p.kind];
-  return BOXES[p.kind].map((b, i) => ({
+/**
+ * World colliders of a prop, one per local box: houses, sheds and walls are 'wall', vehicles 'metal'; military
+ * hardware is 'metal' except sandbags, barriers, crates and canvas ('wall'), box by box where a kind mixes them.
+ */
+export function propColliders(p: SceneryPlacement, groundY: number): Obstacle[] {
+  return propBoxes(p.kind).map((b, i) => ({
     id: `${p.id}:${i}`,
-    material,
+    material: materialOf(p.kind, b),
     box: toWorldBox(b, p.x, p.z, p.yaw, groundY),
   }));
 }
