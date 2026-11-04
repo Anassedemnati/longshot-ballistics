@@ -1,6 +1,6 @@
 import type { Vec3 } from '../ballistics/types';
 import type { Obstacle } from '../game/hit';
-import { HvtParty } from '../game/hvt';
+import { HvtParty, escapeFloorS } from '../game/hvt';
 import type { AlarmCue, HvtStatus, PartyBody, PartyMap } from '../game/hvt';
 import type { TerrainField } from '../scene/terrainField';
 import { SoldierAnimator } from './soldierAnim';
@@ -71,6 +71,7 @@ export class HvtDirector {
       guards: world.guards.length,
       map: deps.map,
       seed: deps.seed ^ 0x4876,
+      escapeFloorS: escapeFloorS(Math.hypot(world.placement.x, world.placement.z)),
     });
     const make = (soldier: Soldier, body: PartyBody, i: number): Member => ({
       soldier,

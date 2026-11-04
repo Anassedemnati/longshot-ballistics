@@ -32,8 +32,15 @@ export const HVT = {
   /** A guard runs to his place at up to this, m/s, and walks when he is within `walkWithinM` of it. */
   guardRunMps: 4,
   walkWithinM: 1.2,
-  /** The escape window from the alarm, s: at least this (the car must be started, the door unbarred), at most the time the run itself takes. */
+  /**
+   * The escape window from the alarm, s: at least this (the car must be started, the door unbarred) for a compound 300 m away or nearer,
+   * growing by `escapePerM` s per metre beyond (a far shot needs more time to set up: 25 s at 700 m), up to `escapeFloorMaxS`; longer when
+   * the run itself takes longer.
+   */
   escapeMinS: 15,
+  escapeFromM: 300,
+  escapePerM: 0.025,
+  escapeFloorMaxS: 30,
   /** The most the window can be (a long run with a wounded man), s; documented, not enforced: a slower run takes what it takes. */
   escapeMaxS: 40,
   /** Time at the escape point to get in at the least, s: boarding the vehicle, getting the door open. */
@@ -49,6 +56,12 @@ export const HVT = {
 } as const;
 
 export type HvtStatus = 'idle' | 'alarmed' | 'fleeing' | 'escaped' | 'wounded' | 'down';
+
+/** The least escape window an alarm gives him when his compound is `rangeM` m from the shooter, s: 15 s up to 300 m, then 2.5 s more per 100 m, at most 30 s. */
+export function escapeFloorS(rangeM: number): number {
+  const extra = Math.max(0, (Number.isFinite(rangeM) ? rangeM : 0) - HVT.escapeFromM) * HVT.escapePerM;
+  return Math.min(HVT.escapeFloorMaxS, HVT.escapeMinS + extra);
+}
 
 /** One point of the walk: where, how long he stops there (0: walks through), and whether he is talking to a soldier there (he faces `faceX`, `faceZ`). */
 export interface RoutePoint {
@@ -101,6 +114,8 @@ export interface HvtPartyOptions {
   seed: number;
   /** Where he starts (default: the first point of the route), and which point he walks to first. */
   start?: { x: number; z: number; heading: number };
+  /** The least escape window, s (default `HVT.escapeMinS`; see `escapeFloorS`). */
+  escapeFloorS?: number;
 }
 
 const TURN_RATE = 5;
@@ -162,12 +177,14 @@ export class HvtParty {
   /** Game time the alarm came, and the time he will be gone if he is not stopped, s. */
   private alarmAt = 0;
   private deadline = Infinity;
+  private readonly floorS: number;
 
   constructor(opts: HvtPartyOptions) {
     if (opts.route.length === 0) throw new Error('HvtParty: the route is empty');
     this.route = opts.route;
     this.escapes = opts.escapes;
     this.map = opts.map;
+    this.floorS = opts.escapeFloorS ?? HVT.escapeMinS;
     this.rng = createRng(opts.seed);
     const s = opts.start ?? { x: opts.route[0].x, z: opts.route[0].z, heading: 0 };
     this.officer = newBody(s.x, s.z, s.heading);
@@ -402,7 +419,7 @@ export class HvtParty {
     if (!best) {
       // Nowhere to go: he crouches where he is behind his guards and is gone once the window is up.
       this.escape = null;
-      this.deadline = this.alarmAt + HVT.escapeMinS;
+      this.deadline = this.alarmAt + this.floorS;
       this.state = 'waiting';
       return;
     }
@@ -411,7 +428,7 @@ export class HvtParty {
     this.pathAt = 0;
     const run = best.length / (HVT.fleeMps * (this.wounded ? HVT.woundedFactor : 1));
     const getIn = best.e.kind === 'vehicle' ? HVT.boardS : HVT.doorS;
-    this.deadline = this.time + Math.max(HVT.escapeMinS - (this.time - this.alarmAt), run + getIn);
+    this.deadline = this.time + Math.max(this.floorS - (this.time - this.alarmAt), run + getIn);
   }
 
   private run(dt: number): void {

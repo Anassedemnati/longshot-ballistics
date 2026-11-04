@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HVT, HvtParty } from '../../src/game/hvt';
+import { HVT, HvtParty, escapeFloorS } from '../../src/game/hvt';
 import type { EscapePoint, HvtPartyOptions, RoutePoint } from '../../src/game/hvt';
 
 // The HVT's party (game/hvt.ts): his walk, his guards, the alarm, the run to the escape point and its window.
@@ -140,6 +140,18 @@ describe('the alarm', () => {
     expect(hurt.officer.speed).toBeLessThan(HVT.fleeMps * HVT.woundedFactor + 0.01);
     expect(hurt.escapeIn).toBeGreaterThan(healthy.escapeIn + 5);
     expect(hurt.escapeWindow).toBeLessThan(HVT.escapeMaxS * 1.6);
+  });
+
+  it('gives a farther compound a longer window: 15 s to 300 m, 25 s at 700 m, never more than 30 s as a floor', () => {
+    expect(escapeFloorS(150)).toBe(15);
+    expect(escapeFloorS(300)).toBe(15);
+    expect(escapeFloorS(700)).toBeCloseTo(25, 9);
+    expect(escapeFloorS(1500)).toBe(30);
+    const p = party({ escapeFloorS: escapeFloorS(700) });
+    run(p, 9);
+    p.alarm({ directional: false, shooterX: 0, shooterZ: 0 });
+    run(p, 1.2);
+    expect(p.escapeWindow).toBeCloseTo(25, 0);
   });
 
   it('is down for good once killed, and a dead guard stops guarding', () => {
