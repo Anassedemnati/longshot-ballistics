@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" width="1200" height="470" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<defs><marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/></marker><marker id="ao" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#eb6834"/></marker><marker id="aq" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1baf7a"/></marker><marker id="ak" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0b0b0b"/></marker><marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a8980"/></marker></defs>
+<rect width="1200" height="470" fill="#fcfcfb"/>
+<text x="40" y="36" font-size="21" font-weight="700" fill="#0b0b0b">The forces on a bullet in flight</text>
+<text x="40" y="60" font-size="14" fill="#52514e">Only two forces act: gravity, and air drag against the air flowing past the bullet. Wind is not a third force: it changes the air the drag acts against.</text>
+<text x="40" y="100" font-size="15" font-weight="600" fill="#0b0b0b">Side view</text>
+<path d="M560,174 C420,174 360,164 100,174" fill="none" stroke="#c9d6e3" stroke-width="1.5"/>
+<path d="M560,212 C420,212 360,202 100,212" fill="none" stroke="#c9d6e3" stroke-width="1.5"/>
+<path d="M560,250 C420,250 360,250 100,250" fill="none" stroke="#c9d6e3" stroke-width="1.5"/>
+<path d="M560,288 C420,288 360,298 100,288" fill="none" stroke="#c9d6e3" stroke-width="1.5"/>
+<path d="M560,326 C420,326 360,336 100,326" fill="none" stroke="#c9d6e3" stroke-width="1.5"/>
+<path d="M380,250 L260,130 M380,250 L260,370" stroke="#c2cad3" stroke-width="2" stroke-dasharray="5 5"/>
+<text x="170" y="122" font-size="12" fill="#52514e">shock cone (above Mach 1)</text>
+<path d="M230.0,236.0 L248.0,233.0 L310.0,233.0 L340.0,237.0 L362.0,244.0 L378.0,250.0 L362.0,256.0 L340.0,263.0 L310.0,267.0 L248.0,267.0 L230.0,264.0 Z" fill="#b87333" stroke="#6b4423" stroke-width="2"/><line x1="248.0" y1="233.0" x2="248.0" y2="267.0" stroke="#6b4423" stroke-width="1.5"/>
+<line x1="390" y1="250" x2="510" y2="250" stroke="#0b0b0b" stroke-width="3" marker-end="url(#ak)"/><text x="450" y="238" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">velocity v</text>
+<line x1="220" y1="250" x2="100" y2="250" stroke="#eb6834" stroke-width="4" marker-end="url(#ao)"/><text x="160" y="278" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">drag</text><text x="160" y="295" font-size="12" fill="#52514e" text-anchor="middle">against the airflow</text>
+<line x1="300" y1="274" x2="300" y2="370" stroke="#2a78d6" stroke-width="4" marker-end="url(#ab)"/><text x="314" y="388" font-size="13" font-weight="600" fill="#0b0b0b">gravity g = 9.81 m/s²</text>
+<text x="40" y="412" font-size="13" fill="#0b0b0b">Drag grows with the square of the airspeed and jumps near Mach 1:</text>
+<text x="40" y="434" font-size="14" fill="#0b0b0b" font-style="italic">a = −(ρ/ρ₀) · k · Cd(M) · |v − w| · (v − w),   k = π·ρ₀ / (8 · BC · 703.07)</text>
+<line x1="620" y1="90" x2="620" y2="390" stroke="#e4e3df"/>
+<text x="640" y="100" font-size="15" font-weight="600" fill="#0b0b0b">Seen from above, with a crosswind</text>
+<g transform="rotate(0 890 270)"><path d="M834.0,258.8 L848.4,256.4 L898.0,256.4 L922.0,259.6 L939.6,265.2 L952.4,270.0 L939.6,274.8 L922.0,280.4 L898.0,283.6 L848.4,283.6 L834.0,281.2 Z" fill="#b87333" stroke="#6b4423" stroke-width="2"/><line x1="848.4" y1="256.4" x2="848.4" y2="283.6" stroke="#6b4423" stroke-width="1.5"/></g>
+<line x1="960" y1="270" x2="1140" y2="270" stroke="#0b0b0b" stroke-width="3" marker-end="url(#ak)"/><text x="1140" y="292" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="end">bullet velocity v</text>
+<line x1="670" y1="130" x2="670" y2="168" stroke="#1baf7a" stroke-width="3" marker-end="url(#aq)"/>
+<line x1="765" y1="130" x2="765" y2="168" stroke="#1baf7a" stroke-width="3" marker-end="url(#aq)"/>
+<line x1="860" y1="130" x2="860" y2="168" stroke="#1baf7a" stroke-width="3" marker-end="url(#aq)"/>
+<line x1="955" y1="130" x2="955" y2="168" stroke="#1baf7a" stroke-width="3" marker-end="url(#aq)"/>
+<line x1="1050" y1="130" x2="1050" y2="168" stroke="#1baf7a" stroke-width="3" marker-end="url(#aq)"/>
+<text x="1140" y="150" font-size="13" font-weight="600" fill="#0d5c40" text-anchor="end">wind w</text>
+<line x1="960" y1="270" x2="1140" y2="225" stroke="#8a8980" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#ag)"/><text x="1140" y="214" font-size="13" fill="#0b0b0b" text-anchor="end">v − w: the bullet’s velocity through the air</text>
+<line x1="840" y1="270" x2="690" y2="308" stroke="#eb6834" stroke-width="4" marker-end="url(#ao)"/><text x="680" y="334" font-size="13" font-weight="600" fill="#0b0b0b">drag, along −(v − w)</text>
+<text x="680" y="352" font-size="12" fill="#52514e">its small sideways part carries the bullet downwind</text>
+<text x="640" y="412" font-size="13" fill="#0b0b0b">So the drift is the wind times the time drag costs the bullet (Didion's lag rule):</text>
+<text x="640" y="434" font-size="14" fill="#0b0b0b" font-style="italic">drift = w⊥ · (t_flight − range / v₀)</text>
+</svg>

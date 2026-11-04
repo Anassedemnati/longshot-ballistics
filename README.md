@@ -90,6 +90,149 @@ Guards stand at every post: on each tower deck, behind each machine gun, two at 
 
 Each rifle has its own model, report (the .50's is a deep boom with a long tail), bolt time, reload and recoil. The scope picture kicks with the shot, harder for the heavy calibres. Along with the original .308 and .338, the 12.7x55 mm subsonic is built round its suppressor: no crack, no flash, just a dull thump.
 
+## The physics: how a shot is simulated
+
+![A bullet's arc across a desert valley: it leaves almost straight, falls below the line of sight under gravity and drifts with the wind](docs/science/flight.jpg)
+
+**One shot on the game's own map.** This is the desert map from the ridge position: the terrain and the bullet path are the game's real data. A .308 is fired at a man 800 m away, with a 10 mph wind from the left.
+- **Seen from above:** the wind carries the bullet 1.89 m to the right, so you aim 2.4 mil left.
+- **Seen from the side:** the bullet falls 7.17 m below the straight line of sight, so you aim 9.0 mil high.
+- **Timing:** the bullet arrives after 1.43 s, still faster than sound. The man hears the shot 0.83 s after it has hit him.
+
+![The 800 m shot drawn on the real desert map: from above, the wind bends the bullet's line 1.89 m to the right of the aim point; from the side, the line curves 7.17 m below the line of sight down onto the target](docs/science/shot-map.svg)
+
+The game never draws a ray to the crosshair and calls it a hit. Every round is flown as a real projectile: from the muzzle, through the air of the map, under gravity and in the wind, one millisecond at a time, until it hits the ground, a wall, a vehicle or a man. Drop, drift, time of flight and the sound barrier all come out of the equations below. None of them is a lookup table or a tuned fudge. The code is in [`src/ballistics/`](src/ballistics/), pure TypeScript with no three.js, so all of it runs and is tested in Node.
+
+### 1. The model: a point mass in moving air
+
+![The forces on a bullet in flight: gravity pulls it down, drag acts against the air flowing past it, and a crosswind carries it sideways through that drag](docs/science/forces.svg)
+
+The bullet is a point mass with position $\vec x$ and velocity $\vec v$. The model has three degrees of freedom: the industry-standard model that ballistic calculators use. Two forces act on it: gravity, and air drag against the air **relative to the bullet**:
+
+$$\frac{d\vec x}{dt} = \vec v, \qquad \frac{d\vec v}{dt} = \vec g \;-\; \frac{\rho}{\rho_0}\,k\,C_d^{G7}(M)\,\lvert\vec v_r\rvert\,\vec v_r, \qquad \vec v_r = \vec v - \vec w$$
+
+| Symbol | Meaning | Value in the game |
+|---|---|---|
+| $\vec g$ | gravity | 9.80665 m/s², straight down |
+| $\vec w$ | wind velocity | set by the mission (speed and clock direction) |
+| $\rho / \rho_0$ | air density over the standard 1.225 kg/m³ | from the map's temperature and pressure (section 2) |
+| $M = \lvert\vec v_r\rvert / c$ | Mach number of the bullet through the air | $c$ = the map's speed of sound |
+| $C_d^{G7}(M)$ | drag coefficient of the G7 reference bullet | the G7 table (section 3) |
+| $k = \dfrac{\pi\,\rho_0}{8 \cdot BC \cdot 703.0696}$ | drag scale, 1/m | from the rifle's G7 ballistic coefficient $BC$ (lb/in²) |
+
+**Where $k$ comes from.** Drag on a body of frontal area $A = \pi d^2/4$ and mass $m$ is $a = \tfrac{1}{2}\rho v^2 C_d A / m$. The ballistic coefficient is $BC = m / (i\,d^2)$: mass over diameter squared, scaled by a form factor $i$ against the G7 reference shape. Substituting gives $a = \pi \rho\, C_d^{G7} v^2 / (8\, BC)$. The 703.0696 converts lb/in² to kg/m². That is exactly [`dragFactor()` in `drag.ts`](src/ballistics/drag.ts) and the acceleration in [`integrator.ts`](src/ballistics/integrator.ts).
+
+**How wind works.** Wind appears only inside $\vec v_r$. It does not "push" the bullet the way a hand would: the bullet is dragged sideways because the air it flies through is moving. Physics predicts this exactly for a point mass in a steady crosswind:
+
+$$\text{drift} = w_\perp \left(t_{\text{flight}} - \frac{x}{v_0}\right)$$
+
+This is Didion's lag rule: the crosswind times the time the bullet loses to drag. The game never uses this formula; it integrates the full equations. Its drift still agrees with the rule to the centimetre, which is a strong sign the wind is modelled right:
+
+| 10 mph crosswind | .308 at 600 m | .308 at 1,000 m | .338 at 1,000 m | .50 BMG at 1,500 m |
+|---|---|---|---|---|
+| Drift integrated by the game | 0.96 m | 3.26 m | 1.75 m | 2.63 m |
+| Lag rule $w_\perp(t - x/v_0)$ | 0.96 m | 3.26 m | 1.75 m | 2.63 m |
+
+### 2. The air of each map
+
+Each map has its own temperature and pressure. Density follows the ideal gas law, and the speed of sound depends on temperature alone:
+
+$$\rho = \frac{p}{R_d\,T}, \qquad c = \sqrt{\gamma R_d T} \approx 20.0467\sqrt{T}, \qquad R_d = 287.05\ \text{J/(kg·K)},\ \gamma = 1.4$$
+
+Denser air means more drag, so more drop and more drift. Colder air also lowers the speed of sound, so the bullet goes transonic sooner. The same .308 shot at 1,000 m in each map:
+
+| Map | Air | Density | Speed of sound | .308 drop at 1,000 m | Time of flight | Arrives at |
+|---|---|---|---|---|---|---|
+| Green valley | 18 °C, 900 hPa (high and thin) | 1.077 kg/m³ | 342 m/s | 12.87 m | 1.93 s | 341 m/s (Mach 1.00) |
+| Desert | 38 °C, 1013 hPa (hot) | 1.134 kg/m³ | 354 m/s | 13.63 m | 2.00 s | 331 m/s (Mach 0.94) |
+| Arctic | −15 °C, 1013 hPa (cold and dense) | 1.367 kg/m³ | 322 m/s | 15.73 m | 2.17 s | 292 m/s (Mach 0.91) |
+
+### 3. Drag: the G7 curve
+
+![The G7 drag coefficient against Mach number: flat below Mach 0.8, a steep rise through the sound barrier to a peak just past Mach 1, then a slow fall](docs/science/g7.svg)
+
+A bullet's drag is not constant: it jumps as the bullet nears the speed of sound, where shock waves form, then eases off. The G7 curve is the measured drag of a standard long boat-tail bullet, the shape of modern long-range match bullets.
+- The game uses the standard 84-point G7 table, copied from [js-ballistics](https://www.npmjs.com/package/js-ballistics) (ISC licence).
+- Between table points it uses a monotone cubic (PCHIP) interpolation, so the curve never overshoots around the Mach 1 hump.
+- Each rifle's own drag is that curve, scaled by its published (or estimated) G7 BC.
+
+### 4. Integration: classical Runge–Kutta, 1 ms steps
+
+The equations are integrated with fourth-order Runge–Kutta (RK4) at a fixed step of $\Delta t = 1$ ms. That is four drag evaluations per step, a local error of order $\Delta t^5$ and a global error of order $\Delta t^4$. A 2-second shot is 2,000 steps. The same `step()` function flies every bullet in the game, the training-aid trajectory arc and the validation tests, so what you see in the tests is what you get in the game.
+
+### 5. Zeroing and the hold
+
+The scope sits a few centimetres above the bore (4 cm on the .308). The rifle is zeroed at 100 m: the game bisects the bore's elevation until the bullet crosses the line of sight at 100 m to within 0.1 mm. For the .308 in desert air that angle is 1.226 mrad. Beyond 100 m the bullet falls below the line of sight, and you hold over in **mils**: 1 mil is 1 m at 1,000 m, so the hold is the drop in metres divided by the range in kilometres.
+
+![Height of the bullet against the line of sight for the .308, .338 and .50 BMG, with the .308's path in a vacuum for comparison](docs/science/trajectory.svg)
+
+The dashed line is the same .308 shot with no air: in a vacuum it would drop only 6.7 m at 1,000 m instead of 13.6 m. Drag doubles the drop, which is why a game that uses a simple parabola gets long range so wrong.
+
+| Desert air, zeroed at 100 m | 300 m | 600 m | 1,000 m | 1,500 m |
+|---|---|---|---|---|
+| .308 Win: drop / hold | 0.50 m / 1.7 mil | 3.28 m / 5.5 mil | 13.63 m / 13.6 mil | 46.69 m / 31.1 mil |
+| .338 Lapua: drop / hold | 0.34 m / 1.1 mil | 2.17 m / 3.6 mil | 8.17 m / 8.2 mil | 25.66 m / 17.1 mil |
+| .50 BMG: drop / hold | 0.32 m / 1.1 mil | 2.05 m / 3.4 mil | 7.30 m / 7.3 mil | 20.36 m / 13.6 mil |
+
+![Speed against range for the .308, .338 and .50 BMG, with the speed of sound marked: the .308 crosses it just past 900 m](docs/science/velocity.svg)
+
+| Speed (m/s) | muzzle | 300 m | 600 m | 1,000 m | 1,500 m |
+|---|---|---|---|---|---|
+| .308 Win | 790 | 625 | 480 | 331 (subsonic) | 278 |
+| .338 Lapua | 900 | 764 | 640 | 493 | 340 (subsonic) |
+| .50 BMG | 860 | 775 | 694 | 595 | 481 |
+
+![Wind drift against range in a 10 mph crosswind for the .308, .338 and .50 BMG](docs/science/wind.svg)
+
+| 10 mph crosswind, drift | 300 m | 600 m | 1,000 m | 1,500 m |
+|---|---|---|---|---|
+| .308 Win | 0.21 m | 0.96 m | 3.26 m | 7.86 m |
+| .338 Lapua | 0.13 m | 0.56 m | 1.75 m | 4.78 m |
+| .50 BMG | 0.08 m | 0.35 m | 1.06 m | 2.63 m |
+
+### 6. From equations to the map
+
+In the game, each frame advances every bullet in flight by the frame's time, in 1 ms RK4 substeps.
+- **Hit tests:** every substep is a short segment, 0.9 m long at 900 m/s, and that segment is swept against the scene.
+  - The ground is tested against the terrain's height field, so a bullet that dips into a ridge stops there.
+  - Cover and vehicles are oriented collider boxes.
+  - Bodies are spheres fitted to the soldier's animated bones, within 3 cm of the visible mesh.
+
+  Because the whole segment is tested, a fast bullet can never jump through a thin wall between two frames.
+- **Through a body:** a bullet that passes through a man leaves with the speed its momentum allows, and flies on to hit the ground, cover or the next man.
+- **Sound:** sound travels at the map's $c$ too. You hear a distant impact $d/c$ after it happens. The enemy hears your muzzle report $d/c$ after the shot, and the bullet's crack only where the bullet is still faster than sound (see *The bullet outruns its sound*).
+- **Frame time:** frame time is capped at 0.1 s, so a hidden tab or a stall never fast-forwards a bullet.
+
+### 7. The proof: checked against an independent solver
+
+![The .308's path in desert air with a 10 mph crosswind: the game's line runs through every js-ballistics point out to 1,500 m](docs/science/validation.svg)
+
+[js-ballistics](https://www.npmjs.com/package/js-ballistics) is a separate, established ballistic calculator. `npm run gen:reference` uses it to compute reference trajectories, saved in [`tests/fixtures/reference.json`](tests/fixtures/reference.json). On every `npm test`, [`tests/ballistics/validation.test.ts`](tests/ballistics/validation.test.ts) flies the same shots through the game's solver and compares them sample by sample.
+- **The cases:** 2 rifles × 2 airs (standard and desert) × 2 winds (calm and 10 mph). That is 8 cases, each sampled every 100 m from 100 to 1,500 m: 120 points.
+- **The tolerance:** 2 % or 1 cm on height and drift, and 1 % on time of flight and speed.
+- **The result:** the worst errors over all 120 points are far inside it.
+
+| Quantity | Worst difference from js-ballistics (any rifle, air, wind, range up to 1,500 m) |
+|---|---|
+| Height (drop) | 1.6 cm, at drops of tens of metres |
+| Wind drift | 0.4 cm |
+| Time of flight | 0.9 ms |
+| Speed | 0.22 m/s |
+
+You can check it yourself with `npx vitest run tests/ballistics/validation.test.ts`.
+
+### What is not modelled (yet)
+
+The model is the standard point-mass model, which is what most ballistic calculators use. Left out:
+- spin drift (a few tens of cm at 1,000 m);
+- the Coriolis effect;
+- aerodynamic jump;
+- humidity;
+- the change in air density with height along the path;
+- wind that varies along the path (the wind is uniform);
+- bullet yaw and precession;
+- muzzle-velocity spread from shot to shot.
+
 ## Features
 
 - **Real external ballistics**
@@ -224,7 +367,7 @@ Run `npm test` and `npm run smoke` before you open a PR.
 
 - **Textures, HDRI skies and 3D models:** [Poly Haven](https://polyhaven.com), CC0. See [`public/assets/CREDITS.md`](public/assets/CREDITS.md).
 - **Sounds:** the Free Firearm Sound Library and freesound.org contributors, all CC0. See [`public/sounds/CREDITS.md`](public/sounds/CREDITS.md).
-- **AI-generated images:** the menu artwork, the rifle reference sheet and the rifle art of the .300, .408, .50 and 12.7x108 (`public/references/rifle-<id>.webp`). Their prompts are stored next to the files. The 12.7x55's art is a render of the game's own model.
+- **AI-generated images:** the illustration at the top of the physics section (`docs/science/flight.jpg`), the menu artwork, the rifle reference sheet and the rifle art of the .300, .408, .50 and 12.7x108 (`public/references/rifle-<id>.webp`). Their prompts are stored next to the files. The 12.7x55's art is a render of the game's own model.
 - **Libraries:** [three.js](https://threejs.org), [Vite](https://vite.dev) and [Vitest](https://vitest.dev).
 
 ## License
