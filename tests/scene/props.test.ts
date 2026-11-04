@@ -39,6 +39,23 @@ function boxCorners(b: ReturnType<typeof toWorldBox>): Vec3[] {
   return out;
 }
 
+/**
+ * A wheel's box is drawn as the round tyre inscribed in it (axle along x): the points where the tyre touches the box, on both of its
+ * sides (front, back, top and bottom of each sidewall). Its corners stay empty: a bullet there meets the box a few cm past the rubber.
+ */
+function tyrePoints(b: ReturnType<typeof toWorldBox>): Vec3[] {
+  const c = Math.cos(b.yaw);
+  const s = Math.sin(b.yaw);
+  const out: Vec3[] = [];
+  for (const sx of [-1, 1]) {
+    for (const [ly, lz] of [[b.halfSize.y, 0], [-b.halfSize.y, 0], [0, b.halfSize.z], [0, -b.halfSize.z]]) {
+      const lx = sx * b.halfSize.x;
+      out.push({ x: b.center.x + c * lx + s * lz, y: b.center.y + ly, z: b.center.z - s * lx + c * lz });
+    }
+  }
+  return out;
+}
+
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 function meshesOf(group: THREE.Group): THREE.Mesh[] {
@@ -74,7 +91,7 @@ function insideAnyBox(p: Vec3, boxes: ReadonlyArray<{ center: Vec3; halfSize: Ve
 describe('prop meshes are built from the collider boxes', () => {
   for (const theme of THEMES) {
     for (const kind of KINDS) {
-      it(`${kind} (${theme}): every collider box is in exactly one mesh with its corners (1 mm); every other vertex stays within 3 cm of a collider or under the ground`, () => {
+      it(`${kind} (${theme}): every collider box is in exactly one mesh with its corners (a wheel: its round tyre touching the box) (1 mm); every other vertex stays within 3 cm of a collider or under the ground`, () => {
         const p: PropPlacement = { id: `p-${kind}`, kind, x: 37, z: -612, yaw: 0.7 };
         const groundY = 3.2;
         const group = createPropMesh(p, groundY, theme);
@@ -87,7 +104,8 @@ describe('prop meshes are built from the collider boxes', () => {
           const holders = meshes.filter((m) => (m.userData.boxes as number[]).includes(i));
           expect(holders, `${kind} box ${i}`).toHaveLength(1);
           const have = meshVertices(holders[0]);
-          for (const corner of boxCorners(expectedBoxes[i])) {
+          const points = boxes[i].part === 'wheel' ? tyrePoints(expectedBoxes[i]) : boxCorners(expectedBoxes[i]);
+          for (const corner of points) {
             expect(Math.min(...have.map((h) => dist(h, corner))), `${kind} box ${i} corner`).toBeLessThan(0.001);
           }
         });

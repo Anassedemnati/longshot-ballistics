@@ -152,14 +152,15 @@ class Parts {
 
   constructor(private readonly boxes: readonly LocalBox[]) {}
 
-  /** Collider box `i` itself. */
+  /** Collider box `i` itself; a wheel's box is drawn as the round tyre inside it (an axle along x), the bullets still meet the box. */
   collider(i: number, cls: PartClass, color: number): void {
     const b = this.boxes[i];
+    const wheel = b.part === 'wheel';
     this.list.push({
       name: b.part,
       cls,
-      shape: 'box',
-      axis: 'y',
+      shape: wheel ? 'cyl' : 'box',
+      axis: wheel ? 'x' : 'y',
       center: { ...b.center },
       half: { ...b.halfSize },
       color,
@@ -699,10 +700,18 @@ function addBox(acc: Accumulator, part: PropPart, c: THREE.Color): void {
 }
 
 const CYL_SEGMENTS = 12;
+/** Tyres, hubs and the spare are seen up close through the scope: a 12-gon reads as a polygon there, so they get more sides. */
+const WHEEL_SEGMENTS = 28;
 
-/** A 12-sided prism along `part.axis` filling the part's bounding box (the radii are the box's half sizes across the axis). */
+/** How many sides a prism gets. */
+function segmentsOf(part: PropPart): number {
+  return /wheel|tyre|hub/.test(part.name) && part.name !== 'steering wheel' ? WHEEL_SEGMENTS : CYL_SEGMENTS;
+}
+
+/** A prism (12 sides, more for wheels) along `part.axis` filling the part's bounding box (the radii are the box's half sizes across the axis). */
 function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
   const { center: m, half: h, axis } = part;
+  const n = segmentsOf(part);
   // Axis frame: t along the axis, p and q across it (p x q = t).
   const t: Vec = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
   const p: Vec = axis === 'x' ? { x: 0, y: 1, z: 0 } : axis === 'y' ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
@@ -717,8 +726,8 @@ function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
   });
   // Sides: smooth radial normals.
   const side = acc.pos.length / 3;
-  for (let i = 0; i <= CYL_SEGMENTS; i++) {
-    const ang = (i / CYL_SEGMENTS) * Math.PI * 2;
+  for (let i = 0; i <= n; i++) {
+    const ang = (i / n) * Math.PI * 2;
     const nx = p.x * Math.cos(ang) + q.x * Math.sin(ang);
     const ny = p.y * Math.cos(ang) + q.y * Math.sin(ang);
     const nz = p.z * Math.cos(ang) + q.z * Math.sin(ang);
@@ -727,7 +736,7 @@ function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
       pushVertex(acc, v.x, v.y, v.z, nx, ny, nz, c);
     }
   }
-  for (let i = 0; i < CYL_SEGMENTS; i++) {
+  for (let i = 0; i < n; i++) {
     const a = side + i * 2; // (angle i, -t), (angle i, +t), (angle i + 1, -t), (angle i + 1, +t)
     acc.idx.push(a, a + 3, a + 1, a, a + 2, a + 3);
   }
@@ -735,13 +744,13 @@ function addCyl(acc: Accumulator, part: PropPart, c: THREE.Color): void {
   for (const s of [-1, 1]) {
     const centre = pushVertex(acc, m.x + t.x * ht * s, m.y + t.y * ht * s, m.z + t.z * ht * s, t.x * s, t.y * s, t.z * s, c);
     const ring = acc.pos.length / 3;
-    for (let i = 0; i < CYL_SEGMENTS; i++) {
-      const v = at(s, (i / CYL_SEGMENTS) * Math.PI * 2);
+    for (let i = 0; i < n; i++) {
+      const v = at(s, (i / n) * Math.PI * 2);
       pushVertex(acc, v.x, v.y, v.z, t.x * s, t.y * s, t.z * s, c);
     }
-    for (let i = 0; i < CYL_SEGMENTS; i++) {
+    for (let i = 0; i < n; i++) {
       const a = ring + i;
-      const b = ring + ((i + 1) % CYL_SEGMENTS);
+      const b = ring + ((i + 1) % n);
       if (s > 0) acc.idx.push(centre, a, b);
       else acc.idx.push(centre, b, a);
     }
