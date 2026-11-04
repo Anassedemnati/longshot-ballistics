@@ -1,6 +1,6 @@
 import { RIFLES } from '../ballistics/rifles';
 import { MISSION_LIMITS, clampMission, encodeMission } from '../mission/config';
-import type { Density, FiringPosition, MissionConfig } from '../mission/config';
+import type { Density, FiringPosition, MissionConfig, Objective } from '../mission/config';
 import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 
@@ -86,6 +86,19 @@ export const GHILLIE_NOTE = 'Hard to spot until you fire.';
  * menu must still fit 1280x720), and it points at the slider that sets how many of them there are. What they do is in the README.
  */
 export const FIGHT_BACK_NOTE = 'Shoot back. Count: slider above.';
+/** The objective control's two options, and the one-line note under each (28 characters at most: one line of the panel). */
+export const OBJECTIVE_OPTIONS: ReadonlyArray<{ value: Objective; label: string }> = [
+  { value: 'clear', label: 'Clear the area' },
+  { value: 'hvt', label: 'High-value target' },
+];
+const OBJECTIVE_NOTE: Record<Objective, string> = {
+  clear: 'Take down every target.',
+  hvt: 'Officer flees when alarmed.',
+};
+export function objectiveNote(objective: Objective): string {
+  return OBJECTIVE_NOTE[objective];
+}
+
 /** Under the aim assists switch (spec B.5). */
 export const ASSISTS_NOTE = 'Trajectory, aim marker and spotter — training aid';
 

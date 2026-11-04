@@ -8,6 +8,7 @@ import {
   ASSISTS_NOTE,
   FIGHT_BACK_NOTE,
   GHILLIE_NOTE,
+  OBJECTIVE_OPTIONS,
   RANGE_STEP_M,
   RIFLE_ART,
   RIFLE_ART_IMAGE,
@@ -18,6 +19,7 @@ import {
   densityNote,
   linkRange,
   menuSearch,
+  objectiveNote,
   positionNote,
   rangeLabel,
   rifleArtStyle,
@@ -514,6 +516,9 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
   // --- Position panel: where the shooter lies, and the scenery around ---
   const place = el(columns, 'section', 'menu-panel');
   el(place, 'h2', 'menu-panel-title', 'Position and scenery');
+  // What the mission asks (it shares this panel: the targets panel is full at 1280x720).
+  const syncObjective = segmented(place, 'objective', 'Objective', OBJECTIVE_OPTIONS, (v) => apply({ objective: v }), objectiveNote);
+  syncers.push(() => syncObjective(cfg.objective));
   const syncPosition = segmented(
     place,
     'position',

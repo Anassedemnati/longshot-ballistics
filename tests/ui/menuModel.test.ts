@@ -346,3 +346,15 @@ describe('rifle concept art crop', () => {
     }
   });
 });
+
+describe('the objective control', () => {
+  it('offers both objectives with a one-line note each', async () => {
+    const { OBJECTIVE_OPTIONS, objectiveNote } = await import('../../src/ui/menuModel');
+    expect(OBJECTIVE_OPTIONS.map((o) => o.value)).toEqual(['clear', 'hvt']);
+    expect(OBJECTIVE_OPTIONS.map((o) => o.label)).toEqual(['Clear the area', 'High-value target']);
+    for (const o of OBJECTIVE_OPTIONS) {
+      expect(objectiveNote(o.value).length).toBeGreaterThan(10);
+      expect(objectiveNote(o.value).length).toBeLessThanOrEqual(28); // one line in the panel
+    }
+  });
+});
