@@ -7,6 +7,7 @@ import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 import {
   ASSISTS_NOTE,
+  BASE_OPTIONS,
   FIGHT_BACK_NOTE,
   GHILLIE_NOTE,
   OBJECTIVE_OPTIONS,
@@ -21,6 +22,7 @@ import {
   SNIPERS_NOTE,
   SUPPRESSOR_NOTE,
   WIND_STEP_MPS,
+  baseNote,
   clockPoint,
   densityNote,
   linkRange,
@@ -560,12 +562,17 @@ export function showMenu(app: HTMLElement, opts: { last: MissionConfig | null; d
     positionNote,
     2,
   );
-  const syncBuildings = segmented(place, 'buildings', 'Buildings', DENSITY_OPTIONS, (v) => apply({ buildings: v }), (v) => densityNote('buildings', v));
-  const syncVehicles = segmented(place, 'vehicles', 'Scenery vehicles', DENSITY_OPTIONS, (v) => apply({ vehicles: v }), (v) => densityNote('vehicles', v));
+  // Buildings and scenery vehicles share a row: three short options each fit half the panel, and the military base below
+  // would otherwise push the menu past 720 px.
+  const scenery = el(place, 'div', 'menu-pair');
+  const syncBuildings = segmented(scenery, 'buildings', 'Buildings', DENSITY_OPTIONS, (v) => apply({ buildings: v }), (v) => densityNote('buildings', v));
+  const syncVehicles = segmented(scenery, 'vehicles', 'Vehicles', DENSITY_OPTIONS, (v) => apply({ vehicles: v }), (v) => densityNote('vehicles', v));
+  const syncBase = segmented(place, 'base', 'Military base', BASE_OPTIONS, (v) => apply({ base: v }), baseNote);
   syncers.push(
     () => syncPosition(cfg.position),
     () => syncBuildings(cfg.buildings),
     () => syncVehicles(cfg.vehicles),
+    () => syncBase(cfg.base),
   );
 
   // --- Buttons ---

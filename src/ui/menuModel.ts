@@ -1,6 +1,6 @@
 import { RIFLES } from '../ballistics/rifles';
 import { MISSION_LIMITS, clampMission, encodeMission } from '../mission/config';
-import type { Density, FiringPosition, MissionConfig, Objective } from '../mission/config';
+import type { BaseOption, Density, FiringPosition, MissionConfig, Objective } from '../mission/config';
 import { THEMES } from '../mission/themes';
 import type { ThemeId } from '../mission/themes';
 
@@ -126,6 +126,21 @@ const OBJECTIVE_NOTE: Record<Objective, string> = {
 };
 export function objectiveNote(objective: Objective): string {
   return OBJECTIVE_NOTE[objective];
+}
+
+/** The military base control's three options, and the one-line note under each (28 characters at most: one line of the panel). */
+export const BASE_OPTIONS: ReadonlyArray<{ value: BaseOption; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'outpost', label: 'Outpost' },
+  { value: 'base', label: 'Base' },
+];
+const BASE_NOTE: Record<BaseOption, string> = {
+  none: 'No base in the area.',
+  outpost: 'Small outpost, 7 guards.',
+  base: 'Full base, 13 guards.',
+};
+export function baseNote(base: BaseOption): string {
+  return BASE_NOTE[base];
 }
 
 /** Under the aim assists switch (spec B.5). */

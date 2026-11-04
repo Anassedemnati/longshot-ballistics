@@ -209,6 +209,9 @@
 .menu-sr:focus-visible + .menu-seg-text { outline: 2px solid #fff; outline-offset: -4px; }
 .menu-seg-note { white-space: pre-line; } /* a two-line note (the rifle's) breaks where its text says */
 /* Many short options (the seven rifles): a grid of compact buttons, four to a row, that never widens its panel's column. */
+/* Two short segmented controls side by side (buildings and scenery vehicles), each half the panel. */
+.menu-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.menu-pair .menu-seg-text { padding: 7px 1px; font-size: 12px; letter-spacing: 0.02em; }
 .menu-seg-compact { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .menu-seg-compact .menu-seg-option { min-width: 0; border-left: 1px solid var(--line); border-top: 1px solid var(--line); margin: -1px 0 0 -1px; }
 .menu-seg-compact .menu-seg-text { padding: 4px 1px; font-size: 11px; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; }

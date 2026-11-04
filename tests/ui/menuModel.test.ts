@@ -196,7 +196,7 @@ describe('starting a mission', () => {
 
   it('startSearch gives a ?m= URL the router reads back as that mission with the new seed', () => {
     const search = startSearch({ ...DEFAULT_MISSION, theme: 'arctic', soldiers: 7 }, 424242, false);
-    expect(search.startsWith('?m=v5.')).toBe(true);
+    expect(search.startsWith('?m=v6.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('mission');
@@ -239,7 +239,7 @@ describe('starting a mission', () => {
   it('menuSearch gives a ?last= URL the router reads back as the menu holding that mission', () => {
     const cfg = { ...DEFAULT_MISSION, theme: 'valley' as const, soldiers: 8, rangeMin: 250, rangeMax: 250, seed: 777 };
     const search = menuSearch(cfg, false);
-    expect(search.startsWith('?last=v5.')).toBe(true);
+    expect(search.startsWith('?last=v6.')).toBe(true);
     expect(search).not.toContain('debug');
     const route = routeFromSearch(search);
     expect(route.kind).toBe('menu');
@@ -393,6 +393,18 @@ describe('the objective control', () => {
     for (const o of OBJECTIVE_OPTIONS) {
       expect(objectiveNote(o.value).length).toBeGreaterThan(10);
       expect(objectiveNote(o.value).length).toBeLessThanOrEqual(28); // one line in the panel
+    }
+  });
+});
+
+describe('the military base control', () => {
+  it('offers none, outpost and base with a one-line note each', async () => {
+    const { BASE_OPTIONS, baseNote } = await import('../../src/ui/menuModel');
+    expect(BASE_OPTIONS.map((o) => o.value)).toEqual(['none', 'outpost', 'base']);
+    expect(BASE_OPTIONS.map((o) => o.label)).toEqual(['None', 'Outpost', 'Base']);
+    for (const o of BASE_OPTIONS) {
+      expect(baseNote(o.value).length).toBeGreaterThan(10);
+      expect(baseNote(o.value).length).toBeLessThanOrEqual(28); // one line in the panel
     }
   });
 });

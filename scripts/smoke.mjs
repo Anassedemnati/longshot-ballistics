@@ -48,21 +48,21 @@ function holdFor(range) {
   return h0 + ((h1 - h0) * (range - r0)) / (r1 - r0);
 }
 /**
- * Missions of the smoke. The URL codec (src/mission/config.ts) writes v5.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>.<camo>.<fight back>.<objective>;
+ * Missions of the smoke. The URL codec (src/mission/config.ts) writes v6.<theme>.<min>.<max>.<soldiers>.<vehicle targets>.<wind x10>.<clock>.<rifle>.<buildings>.<vehicles>.<seed>.<position>.<suppressed>.<snipers>.<assists>.<camo>.<fight back>.<objective>.<base>;
  * the hand-written missions below stay in the older v1 form (the first eleven fields) or the v2 one (fifteen, no ghillie suit), which must keep
  * working: v1 decodes to ridge, unsuppressed, 0 enemy snipers, no assists, no ghillie suit, v2 to no ghillie suit, and every code the game
- * writes back is v5 (V1_TAIL below).
+ * writes back is v6 (V1_TAIL below). The HVT mission stays a v5 link (no base), which must keep working too.
  */
 const MISSION_OPEN = 'v1.d.300.300.3.0.0.9.308.n.n.1'; // 3 soldiers at 300 m, calm, no cover
 const MISSION_SINGLE = 'v1.d.300.300.1.0.0.9.308.n.n.1'; // one soldier, no cover (placed like any mission: within 10 degrees of straight ahead)
 const MISSION_MENU_LINK = 'v1.d.300.300.2.0.20.6.308.n.n.7'; // 2 soldiers at 300 m, 2 m/s from behind: settings that differ from the defaults
 const MISSION_COVER = 'v1.d.300.300.3.2.0.12.308.m.m.5'; // 3 soldiers + 2 vehicle targets, many buildings and vehicles
 const MISSION_ASSISTS = 'v2.d.300.300.1.0.45.9.308.n.n.1.r.0.0.1'; // one soldier at 300 m, 4.5 m/s from 9 o'clock, no enemy snipers, aim assists ON
-/** What the game writes for a v1 mission: the same fields, in v5 form, with the new options off (objective: clear the area) (the soldiers of an old link stand still). */
-const V1_TAIL = '.r.0.0.0.0.0.c';
-const asV3 = (v1Code) => v1Code.replace(/^v1\./, 'v5.') + V1_TAIL;
+/** What the game writes for a v1 mission: the same fields, in v6 form, with the new options off (objective: clear the area, no base) (the soldiers of an old link stand still). */
+const V1_TAIL = '.r.0.0.0.0.0.c.n';
+const asV3 = (v1Code) => v1Code.replace(/^v1\./, 'v6.') + V1_TAIL;
 /** The menu's defaults (DEFAULT_MISSION) as a mission code: the menu starts them with a fresh seed, so any seed matches. */
-const MISSION_DEFAULT_RE = /^v5\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+\.r\.0\.1\.0\.0\.1\.c$/; // ridge, no suppressor, 1 enemy sniper, no assists, no ghillie suit, the soldiers fight back, clear the area
+const MISSION_DEFAULT_RE = /^v6\.d\.600\.1000\.3\.0\.45\.9\.308\.f\.f\.\d+\.r\.0\.1\.0\.0\.1\.c\.n$/; // ridge, no suppressor, 1 enemy sniper, no assists, no ghillie suit, the soldiers fight back, clear the area, no base
 /** The order Tab visits the menu's controls in. */
 const MENU_TAB_ORDER = [
   'radio:theme',
@@ -82,6 +82,7 @@ const MENU_TAB_ORDER = [
   'radio:position',
   'radio:buildings',
   'radio:vehicles',
+  'radio:base',
   'menu-button menu-fullscreen',
   'menu-button menu-random',
   'menu-button menu-start',
@@ -432,7 +433,7 @@ const missionCode = (page) => new URL(page.url()).searchParams.get('m');
  * the URL, so the debug hook comes up and we wait for it.
  */
 async function clickStart(page, { debug }) {
-  const url = debug ? /\?m=v5\.[^&]+&debug=1$/ : /\?m=v5\.[^&]+$/;
+  const url = debug ? /\?m=v6\.[^&]+&debug=1$/ : /\?m=v6\.[^&]+$/;
   await Promise.all([page.waitForURL(url), page.locator('.menu-start').click()]);
   if (debug) await page.waitForFunction(() => Boolean(window.__game), undefined, { timeout: 15_000 });
   else await page.waitForSelector('.hud');
@@ -588,7 +589,7 @@ async function run() {
     check((await plain.evaluate(() => window.__game)) === undefined, 'window.__game is undefined without ?debug=1');
     // The practice range's HUD Menu link goes to the menu holding the legacy-derived settings; no debug=1 to carry.
     check(
-      (await plain.locator('.hud-menu').getAttribute('href')) === '/?last=v5.d.800.800.1.0.45.9.308.n.n.1.r.0.0.0.0.0.c',
+      (await plain.locator('.hud-menu').getAttribute('href')) === '/?last=v6.d.800.800.1.0.45.9.308.n.n.1.r.0.0.0.0.0.c.n',
       'the practice range\'s HUD Menu link points at the menu with its settings (no debug=1)',
     );
     await plain.close();
@@ -810,7 +811,7 @@ async function run() {
     check((await mission.evaluate(() => document.pointerLockElement)) === null, 'the pointer is not locked on the results screen');
     await mission.screenshot({ path: join(OUT_DIR, 'mission-results.png') });
     await mission.waitForLoadState('networkidle'); // leaving while the sound files load would abort them
-    await Promise.all([mission.waitForURL(/\?last=v5\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1\.r\.0\.0\.0\.0\.0\.c&debug=1$/), mission.locator('.results-menu').click()]);
+    await Promise.all([mission.waitForURL(/\?last=v6\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.1\.r\.0\.0\.0\.0\.0\.c\.n&debug=1$/), mission.locator('.results-menu').click()]);
     await mission.waitForSelector('.menu-start');
     await imagesLoaded(mission);
     check((await mission.locator('.menu-start').count()) === 1, 'Menu returns to the start menu with the mission in ?last= (and debug=1 kept)');
@@ -830,8 +831,8 @@ async function run() {
 
     // Start from the pre-filled menu: the same mission with a new seed (debug=1 is carried along, so the hook is up).
     await clickStart(mission, { debug: true });
-    check(/^v5\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.\d+\.r\.0\.0\.0\.0\.0\.c$/.test(missionCode(mission) ?? ''), `Start runs the pre-filled mission (${missionCode(mission)})`);
-    check(missionCode(mission) !== 'v5.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0.c', 'Start rolls a fresh seed');
+    check(/^v6\.d\.300\.300\.3\.0\.0\.9\.308\.n\.n\.\d+\.r\.0\.0\.0\.0\.0\.c\.n$/.test(missionCode(mission) ?? ''), `Start runs the pre-filled mission (${missionCode(mission)})`);
+    check(missionCode(mission) !== 'v6.d.300.300.3.0.0.9.308.n.n.1.r.0.0.0.0.0.c.n', 'Start rolls a fresh seed');
     const restartedFrames = await animationFrames(mission, 3);
     check(restartedFrames.frames >= 3, 'the mission started from the menu runs');
     check((await mission.locator('.hud-line', { hasText: 'Targets 3/3' }).count()) === 1, 'menu start: HUD says "Targets 3/3"');
@@ -1184,7 +1185,7 @@ async function run() {
 
     // Keyboard only: Enter on the focused Start button starts the default mission (no debug hook without ?debug=1).
     await plainMenu.locator('.menu-start').focus();
-    await Promise.all([plainMenu.waitForURL(/\?m=v5\.[^&]+$/), plainMenu.keyboard.press('Enter')]);
+    await Promise.all([plainMenu.waitForURL(/\?m=v6\.[^&]+$/), plainMenu.keyboard.press('Enter')]);
     await plainMenu.waitForSelector('.hud');
     check(MISSION_DEFAULT_RE.test(missionCode(plainMenu) ?? ''), `Enter on Start runs the default mission (${missionCode(plainMenu)})`);
     const enterFrames = await animationFrames(plainMenu, 3);
@@ -1274,7 +1275,7 @@ async function run() {
     await controls.close();
 
     // The new controls, each by real input: the firing position, the enemy snipers slider, the suppressor and aim assists switches
-    // and the rifle (whose concept art follows it). `__menu.get()` reflects every one, and Start carries them in the v5 mission code.
+    // and the rifle (whose concept art follows it). `__menu.get()` reflects every one, and Start carries them in the v6 mission code.
     const added = await openPage();
     await added.goto(`${preview.url}?debug=1`, { waitUntil: 'load' });
     await added.waitForSelector('.menu-start');
@@ -1344,12 +1345,12 @@ async function run() {
     await added.evaluate(() => window.__menu.set({ windClock: 9, enemySnipers: 2 }));
     await added.waitForTimeout(450);
     await added.screenshot({ path: join(OUT_DIR, 'menu-new-controls.png') });
-    // Start: the mission URL's v5 code carries valley, suppressed, 2 snipers, assists, ghillie suit and fight back (fields 12..17 after the version).
+    // Start: the mission URL's v6 code carries valley, suppressed, 2 snipers, assists, ghillie suit and fight back (fields 12..17 after the version).
     await clickStart(added, { debug: true });
     const addedCode = (missionCode(added) ?? '').split('.');
     check(
-      addedCode[0] === 'v5' && addedCode[17] === '1' && addedCode[8] === '338' && addedCode[12] === 'v' && addedCode[13] === '1' && addedCode[14] === '2' && addedCode[15] === '1' && addedCode[16] === '1',
-      `Start puts the new controls in the v5 mission code (${addedCode.join('.')})`,
+      addedCode[0] === 'v6' && addedCode[17] === '1' && addedCode[8] === '338' && addedCode[12] === 'v' && addedCode[13] === '1' && addedCode[14] === '2' && addedCode[15] === '1' && addedCode[16] === '1',
+      `Start puts the new controls in the v6 mission code (${addedCode.join('.')})`,
     );
     await animationFrames(added, 3);
     check((await gameState(added)).targetsLeft >= 1, 'the mission started from the new controls runs');
@@ -1474,7 +1475,7 @@ async function run() {
     await backPage.goBack({ waitUntil: 'load' });
     await backPage.waitForSelector('.menu-start');
     await imagesLoaded(backPage);
-    check(/\?last=v5\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+\.r\.0\.0\.0\.0\.1\.c&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
+    check(/\?last=v6\.a\.400\.800\.4\.1\.75\.3\.338\.m\.n\.\d+\.r\.0\.0\.0\.0\.1\.c\.n&debug=1$/.test(backPage.url()), `Back from the mission lands on ?last= with the settings (${new URL(backPage.url()).search})`);
     const { seed: _s2, ...setAfter } = await menuConfig(backPage);
     check(JSON.stringify(setAfter) === JSON.stringify(setBefore), 'Back from the mission: the menu is pre-filled with the settings it started with');
     const afterDom = await menuDom(backPage);
@@ -1493,7 +1494,7 @@ async function run() {
     await backPlain.goBack({ waitUntil: 'load' });
     await backPlain.waitForSelector('.menu-start');
     await imagesLoaded(backPlain);
-    check(/\?last=v5\.v\.[^&]+$/.test(backPlain.url()), `Back (no debug): ?last= with the valley mission, no debug=1 (${new URL(backPlain.url()).search})`);
+    check(/\?last=v6\.v\.[^&]+$/.test(backPlain.url()), `Back (no debug): ?last= with the valley mission, no debug=1 (${new URL(backPlain.url()).search})`);
     check((await menuDom(backPlain)).theme === 'valley', 'Back (no debug): the menu shows the valley theme the player had picked');
     await backPlain.close();
 
